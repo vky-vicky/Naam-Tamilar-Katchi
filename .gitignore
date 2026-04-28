@@ -1,4 +1,17 @@
 # Keep node_modules out of version control
 node_modules
 
+# Prisma generated client
 /generated/prisma
+
+# Build artifacts
+*.js
+*.js.map
+*.d.ts
+*.d.ts.map
+dist/
+
+# Environment files
+.env
+.env.local
+.env.*.local

@@ -101,6 +101,8 @@ export const typeDefs = gql`
     campaigns: [Campaign!]!
     campaign(id: Int!): Campaign
     dashboardStats: DashboardStats!
+    totalLocations(type: LocationType!): Int!
+    searchLocations(type: LocationType!, search: String): [Location!]!
   }
 
   type Mutation {

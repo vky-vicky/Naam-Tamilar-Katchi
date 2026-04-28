@@ -72,9 +72,27 @@ export const resolvers = {
 
       return { totalMembers, totalUsers, totalCampaigns, activeCampaigns };
     },
+
+    totalLocations: async (_: any, { type }: any) => {
+      return prisma.location.count({ where: { type } });
+    },
+
+    searchLocations: async (_: any, { type, search }: any) => {
+      return prisma.location.findMany({
+        where: {
+          type,
+          ...(search && { name: { contains: search, mode: 'insensitive' } }),
+        },
+        orderBy: { name: 'asc' },
+      });
+    },
   },
 
   Location: {
+    parent: async (parent: any) => {
+      if (!parent.parentId) return null;
+      return prisma.location.findUnique({ where: { id: parent.parentId } });
+    },
     children: (parent: any) => {
       return prisma.location.findMany({ where: { parentId: parent.id } });
     },
