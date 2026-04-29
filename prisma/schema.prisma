@@ -6,117 +6,89 @@ datasource db {
   provider = "postgresql"
 }
 
-enum LocationType {
-  STATE
-  DISTRICT
-  TALUK
-  AREA
-  STREET
-}
-
-enum UserRole {
-  SUPER_ADMIN // Leader
-  CANDIDATE   // Constituency level
-  CAPTAIN     // Area/Street level
-  MEMBER      // Basic user
-}
-
-enum CampaignStatus {
-  DRAFT
-  SENT
-  FAILED
-}
-
-enum MessageStatus {
-  PENDING
-  SENT
-  DELIVERED
-  FAILED
-}
-
 model Location {
-  id        Int          @id @default(autoincrement())
+  id        Int              @id @default(autoincrement())
   name      String
   type      LocationType
   parentId  Int?
-  parent    Location?    @relation("LocationHierarchy", fields: [parentId], references: [id])
-  children  Location[]   @relation("LocationHierarchy")
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+  targets   CampaignTarget[]
+  parent    Location?        @relation("LocationHierarchy", fields: [parentId], references: [id])
+  children  Location[]       @relation("LocationHierarchy")
   members   Member[]
   users     User[]
-  targets   CampaignTarget[]
-  createdAt DateTime     @default(now())
-  updatedAt DateTime     @updatedAt
 
   @@index([parentId])
   @@index([type])
 }
 
 model Member {
-  id          Int       @id @default(autoincrement())
+  id          Int          @id @default(autoincrement())
   name        String
-  phone       String    @unique
-  profession  String?   // Farmer, Lawyer, etc.
+  phone       String       @unique
+  profession  String?
   locationId  Int
-  location    Location  @relation(fields: [locationId], references: [id])
-  consent     Boolean   @default(true)
-  isActive    Boolean   @default(true)
+  consent     Boolean      @default(true)
+  isActive    Boolean      @default(true)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  location    Location     @relation(fields: [locationId], references: [id])
   messageLogs MessageLog[]
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
 
   @@index([locationId])
 }
 
 model User {
-  id          Int      @id @default(autoincrement())
-  name        String
-  phone       String   @unique
-  password    String   // password_hash
-  role        UserRole @default(MEMBER)
-  locationId  Int?     // scope restriction (District/Taluk/etc.)
-  location    Location? @relation(fields: [locationId], references: [id])
-  isActive    Boolean  @default(true)
-  campaigns   Campaign[]
-  auditLogs   AuditLog[]
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id         Int        @id @default(autoincrement())
+  name       String
+  phone      String     @unique
+  password   String
+  role       UserRole   @default(MEMBER)
+  locationId Int?
+  isActive   Boolean    @default(true)
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+  auditLogs  AuditLog[]
+  campaigns  Campaign[]
+  location   Location?  @relation(fields: [locationId], references: [id])
 
   @@index([role])
 }
 
 model Campaign {
-  id          Int            @id @default(autoincrement())
+  id          Int              @id @default(autoincrement())
   title       String
   message     String
   createdById Int
-  createdBy   User           @relation(fields: [createdById], references: [id])
-  status      CampaignStatus @default(DRAFT)
+  status      CampaignStatus   @default(DRAFT)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  createdBy   User             @relation(fields: [createdById], references: [id])
   targets     CampaignTarget[]
   messageLogs MessageLog[]
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
 }
 
 model CampaignTarget {
-  id          Int      @id @default(autoincrement())
-  campaignId  Int
-  campaign    Campaign @relation(fields: [campaignId], references: [id])
-  locationId  Int
-  location    Location @relation(fields: [locationId], references: [id])
+  id         Int      @id @default(autoincrement())
+  campaignId Int
+  locationId Int
+  campaign   Campaign @relation(fields: [campaignId], references: [id])
+  location   Location @relation(fields: [locationId], references: [id])
 }
 
 model MessageLog {
   id                Int           @id @default(autoincrement())
   campaignId        Int
-  campaign          Campaign      @relation(fields: [campaignId], references: [id])
   memberId          Int
-  member            Member        @relation(fields: [memberId], references: [id])
   phone             String
   status            MessageStatus @default(PENDING)
   providerMessageId String?
   errorMessage      String?
   sentAt            DateTime?
   createdAt         DateTime      @default(now())
+  campaign          Campaign      @relation(fields: [campaignId], references: [id])
+  member            Member        @relation(fields: [memberId], references: [id])
 }
 
 model OTP {
@@ -133,10 +105,36 @@ model OTP {
 model AuditLog {
   id        Int      @id @default(autoincrement())
   userId    Int
-  user      User     @relation(fields: [userId], references: [id])
   action    String
-  details   String?  // JSON string
+  details   String?
   createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id])
 }
 
+enum LocationType {
+  STATE
+  DISTRICT
+  TALUK
+  AREA
+  STREET
+}
 
+enum UserRole {
+  SUPER_ADMIN
+  CANDIDATE
+  CAPTAIN
+  MEMBER
+}
+
+enum CampaignStatus {
+  DRAFT
+  SENT
+  FAILED
+}
+
+enum MessageStatus {
+  PENDING
+  SENT
+  DELIVERED
+  FAILED
+}
