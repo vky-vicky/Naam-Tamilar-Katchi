@@ -33,11 +33,19 @@ export const resolvers = {
       return prisma.location.findUnique({ where: { id } });
     },
 
-    members: async (_: any, { locationId, profession, limit = 50, offset = 0 }: any, context: any) => {
+    members: async (_: any, { locationId, professionId, bloodGroup, search, limit = 50, offset = 0 }: any, context: any) => {
       // RBAC Check: Candidate/Captain can only see members in their location scope
       let filter: any = { isActive: true };
       
-      if (profession) filter.profession = profession;
+      if (professionId) filter.professionId = professionId;
+      if (bloodGroup) filter.bloodGroup = bloodGroup;
+      
+      if (search) {
+        filter.OR = [
+          { name: { contains: search, mode: 'insensitive' } },
+          { phone: { contains: search } },
+        ];
+      }
 
       if (locationId) {
         const allLocationIds = [locationId, ...(await getChildLocationIds(locationId))];
@@ -62,15 +70,29 @@ export const resolvers = {
       });
     },
 
-    dashboardStats: async () => {
-      const [totalMembers, totalUsers, totalCampaigns, activeCampaigns] = await Promise.all([
-        prisma.member.count(),
+    dashboardStats: async (_: any, { locationId }: any) => {
+      let filter: any = {};
+      let locationFilter: any = {};
+      
+      if (locationId) {
+        const allLocationIds = [locationId, ...(await getChildLocationIds(locationId))];
+        filter.locationId = { in: allLocationIds };
+        locationFilter.id = { in: allLocationIds };
+      }
+
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      const [totalMembers, totalUsers, totalCampaigns, activeCampaigns, newToday, totalStreets] = await Promise.all([
+        prisma.member.count({ where: filter }),
         prisma.user.count(),
         prisma.campaign.count(),
         prisma.campaign.count({ where: { status: 'SENT' } }),
+        prisma.member.count({ where: { ...filter, createdAt: { gte: today } } }),
+        prisma.location.count({ where: { ...locationFilter, type: 'STREET' } }),
       ]);
 
-      return { totalMembers, totalUsers, totalCampaigns, activeCampaigns };
+      return { totalMembers, totalUsers, totalCampaigns, activeCampaigns, newToday, totalStreets };
     },
 
     totalLocations: async (_: any, { type }: any) => {
@@ -86,6 +108,17 @@ export const resolvers = {
         orderBy: { name: 'asc' },
       });
     },
+
+    professions: async () => {
+      return prisma.profession.findMany({ orderBy: { name: 'asc' } });
+    },
+  },
+
+  Member: {
+    profession: async (parent: any) => {
+      if (!parent.professionId) return null;
+      return prisma.profession.findUnique({ where: { id: parent.professionId } });
+    },
   },
 
   Location: {
@@ -99,6 +132,9 @@ export const resolvers = {
     memberCount: async (parent: any) => {
       const allLocationIds = [parent.id, ...(await getChildLocationIds(parent.id))];
       return prisma.member.count({ where: { locationId: { in: allLocationIds } } });
+    },
+    childCount: (parent: any) => {
+      return prisma.location.count({ where: { parentId: parent.id } });
     },
   },
 
@@ -142,8 +178,33 @@ export const resolvers = {
       return { token: "dummy-jwt-token", user };
     },
 
+    loginWithPassword: async (_: any, { phone, password }: any) => {
+      const user = await prisma.user.findUnique({ where: { phone } });
+      if (!user) return { error: 'User not found' };
+      
+      // Simple password check (In production, use bcrypt.compare)
+      if (user.password !== password) return { error: 'Invalid password' };
+      
+      return { token: "dummy-jwt-token", user };
+    },
+
     addMember: async (_: any, args: any) => {
       return prisma.member.create({ data: args });
+    },
+
+    updateMember: async (_: any, { id, ...data }: any) => {
+      return prisma.member.update({
+        where: { id },
+        data,
+      });
+    },
+
+    addProfession: async (_: any, { name }: { name: string }) => {
+      return prisma.profession.create({ data: { name } });
+    },
+
+    createUser: async (_: any, args: any) => {
+      return prisma.user.create({ data: args });
     },
 
     createCampaign: async (_: any, { title, message, targetLocationIds }: any, context: any) => {

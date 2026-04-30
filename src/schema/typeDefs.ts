@@ -37,13 +37,22 @@ export const typeDefs = gql`
     parent: Location
     children: [Location!]!
     memberCount: Int!
+    childCount: Int!
+  }
+
+  type Profession {
+    id: Int!
+    name: String!
+    createdAt: String!
   }
 
   type Member {
     id: Int!
     name: String!
     phone: String # Redacted for restricted roles
-    profession: String
+    bloodGroup: String
+    professionId: Int
+    profession: Profession
     location: Location!
     isActive: Boolean!
     createdAt: String!
@@ -90,29 +99,39 @@ export const typeDefs = gql`
     totalUsers: Int!
     totalCampaigns: Int!
     activeCampaigns: Int!
+    newToday: Int!
+    totalStreets: Int!
   }
 
   type Query {
     me: User
     locations(parentId: Int, type: LocationType): [Location!]!
     location(id: Int!): Location
-    members(locationId: Int, profession: String, limit: Int, offset: Int): [Member!]!
+    members(locationId: Int, professionId: Int, bloodGroup: String, search: String, limit: Int, offset: Int): [Member!]!
     member(id: Int!): Member
     campaigns: [Campaign!]!
     campaign(id: Int!): Campaign
-    dashboardStats: DashboardStats!
+    dashboardStats(locationId: Int): DashboardStats!
     totalLocations(type: LocationType!): Int!
     searchLocations(type: LocationType!, search: String): [Location!]!
+    professions: [Profession!]!
   }
 
   type Mutation {
     # Auth
     requestOTP(phone: String!): Boolean!
     verifyOTP(phone: String!, otp: String!): AuthResponse!
+    loginWithPassword(phone: String!, password: String!): AuthResponse!
 
     # Members
-    addMember(name: String!, phone: String!, locationId: Int!, profession: String): Member!
-    updateMember(id: Int!, isActive: Boolean, locationId: Int): Member!
+    addMember(name: String!, phone: String!, locationId: Int!, professionId: Int, bloodGroup: String): Member!
+    updateMember(id: Int!, isActive: Boolean, locationId: Int, professionId: Int, bloodGroup: String): Member!
+
+    # Admin/Captain Management
+    createUser(name: String!, phone: String!, password: String!, role: UserRole!, locationId: Int!): User!
+
+    # Professions
+    addProfession(name: String!): Profession!
 
     # Campaigns
     createCampaign(title: String!, message: String!, targetLocationIds: [Int!]!): Campaign!

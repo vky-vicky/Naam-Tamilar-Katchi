@@ -24,19 +24,30 @@ model Location {
 }
 
 model Member {
-  id          Int          @id @default(autoincrement())
-  name        String
-  phone       String       @unique
-  profession  String?
-  locationId  Int
-  consent     Boolean      @default(true)
-  isActive    Boolean      @default(true)
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
-  location    Location     @relation(fields: [locationId], references: [id])
-  messageLogs MessageLog[]
+  id           Int        @id @default(autoincrement())
+  name         String
+  phone        String     @unique
+  bloodGroup   String?
+  professionId Int?
+  profession   Profession? @relation(fields: [professionId], references: [id])
+  locationId   Int
+  location     Location   @relation(fields: [locationId], references: [id])
+  consent      Boolean    @default(true)
+  isActive     Boolean    @default(true)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  messageLogs  MessageLog[]
 
   @@index([locationId])
+  @@index([professionId])
+}
+
+model Profession {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  members   Member[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model User {
