@@ -9,8 +9,11 @@ async function main() {
   await prisma.campaignTarget.deleteMany();
   await prisma.campaign.deleteMany();
   await prisma.oTP.deleteMany();
-  await prisma.member.deleteMany();
+  await prisma.eventResponse.deleteMany();
+  await prisma.event.deleteMany();
+  await prisma.emergencyRequest.deleteMany();
   await prisma.user.deleteMany();
+  await prisma.member.deleteMany();
   await prisma.profession.deleteMany();
   await prisma.location.deleteMany();
 
@@ -47,8 +50,8 @@ async function main() {
         data: {
           name: `Member ${i + 1} of ${sName}`,
           phone: `9${Math.floor(100000000 + Math.random() * 900000000)}`,
-          bloodGroup: bloodGroups[Math.floor(Math.random() * bloodGroups.length)],
-          professionId: professions[Math.floor(Math.random() * professions.length)].id,
+          bloodGroup: bloodGroups[Math.floor(Math.random() * bloodGroups.length)] || null,
+          professionId: (professions[Math.floor(Math.random() * professions.length)] as any).id,
           locationId: street.id,
         }
       });
@@ -56,8 +59,7 @@ async function main() {
   }
 
   // 4. Create Users (Roles)
-  // Super Admin (Seeman)
-  await prisma.user.create({
+  const seeman = await prisma.user.create({
     data: {
       name: 'Thalaivar Seeman',
       phone: '9000000001',
@@ -66,8 +68,7 @@ async function main() {
     }
   });
 
-  // Admin (Constituency Leader - Vedaranyam)
-  await prisma.user.create({
+  const vedaAdmin = await prisma.user.create({
     data: {
       name: 'Vedaranyam Admin',
       phone: '9000000002',
@@ -77,18 +78,34 @@ async function main() {
     }
   });
 
-  // Captain (Area Leader - Pushpavanam)
-  await prisma.user.create({
+  // 5. Create Events
+  await prisma.event.create({
     data: {
-      name: 'Pushpavanam Captain',
-      phone: '9000000003',
-      password: 'captain123',
-      role: 'CAPTAIN',
+      title: 'Clean-up Drive',
+      description: 'Monthly village clean-up activity',
+      date: new Date(),
       locationId: pushpa.id,
+      status: 'ACTIVE',
+      createdById: seeman.id
     }
   });
 
-  console.log('✅ CRM Seeding completed with Captain Flow!');
+  // 6. Create Emergency Requests
+  const someMember = await prisma.member.findFirst({ where: { locationId: { in: streetNodes.map(s => s.id) } } });
+  
+  await prisma.emergencyRequest.create({
+    data: {
+      title: 'Urgent A+ Blood',
+      description: 'Medical emergency at local hospital',
+      type: 'EMERGENCY',
+      locationId: pushpa.id,
+      memberId: someMember?.id || null,
+      createdById: vedaAdmin.id,
+      status: 'PENDING',
+    }
+  });
+
+  console.log('✅ CRM Seeding completed with Captain Flow and Dashboard 2.0!');
 }
 
 main()

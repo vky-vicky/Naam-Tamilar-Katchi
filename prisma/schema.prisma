@@ -11,6 +11,7 @@ model Location {
   name      String
   type      LocationType
   parentId  Int?
+  password  String?
   createdAt DateTime         @default(now())
   updatedAt DateTime         @updatedAt
   targets   CampaignTarget[]
@@ -18,6 +19,8 @@ model Location {
   children  Location[]       @relation("LocationHierarchy")
   members   Member[]
   users     User[]
+  events    Event[]
+  requests  EmergencyRequest[]
 
   @@index([parentId])
   @@index([type])
@@ -36,7 +39,9 @@ model Member {
   isActive     Boolean    @default(true)
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
-  messageLogs  MessageLog[]
+  messageLogs MessageLog[]
+  requests    EmergencyRequest[]
+  eventResponses EventResponse[]
 
   @@index([locationId])
   @@index([professionId])
@@ -62,6 +67,8 @@ model User {
   updatedAt  DateTime   @updatedAt
   auditLogs  AuditLog[]
   campaigns  Campaign[]
+  createdEvents   Event[]
+  createdRequests EmergencyRequest[]
   location   Location?  @relation(fields: [locationId], references: [id])
 
   @@index([role])
@@ -122,12 +129,80 @@ model AuditLog {
   user      User     @relation(fields: [userId], references: [id])
 }
 
+model Event {
+  id          Int             @id @default(autoincrement())
+  title       String
+  description String?
+  date        DateTime
+  locationId  Int
+  location    Location        @relation(fields: [locationId], references: [id])
+  status      EventStatus     @default(ACTIVE)
+  createdById Int
+  createdBy   User            @relation(fields: [createdById], references: [id])
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  responses   EventResponse[]
+}
+
+model EventResponse {
+  id        Int          @id @default(autoincrement())
+  eventId   Int
+  event     Event        @relation(fields: [eventId], references: [id])
+  memberId  Int
+  member    Member       @relation(fields: [memberId], references: [id])
+  status    RSVPStatus
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  @@unique([eventId, memberId])
+}
+
+model EmergencyRequest {
+  id          Int           @id @default(autoincrement())
+  title       String
+  description String?
+  type        RequestType   @default(EMERGENCY)
+  status      RequestStatus @default(PENDING)
+  locationId  Int
+  location    Location      @relation(fields: [locationId], references: [id])
+  memberId    Int?
+  member      Member?       @relation(fields: [memberId], references: [id])
+  createdById Int?
+  createdBy   User?         @relation(fields: [createdById], references: [id])
+  audience    String? // Ex: "ALL_CAPTAINS", "STREET_MEMBERS"
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+}
+
 enum LocationType {
   STATE
   DISTRICT
   TALUK
   AREA
   STREET
+}
+
+enum EventStatus {
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+enum RequestType {
+  EMERGENCY
+  NORMAL
+}
+
+enum RequestStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum RSVPStatus {
+  GOING
+  MAYBE
+  NOT_GOING
 }
 
 enum UserRole {
