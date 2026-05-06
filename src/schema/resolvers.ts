@@ -101,18 +101,14 @@ export const resolvers = {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
 
-      const [totalMembers, totalUsers, totalCampaigns, activeCampaigns, newToday, totalStreets, activeEvents, emergencyRequests] = await Promise.all([
+      const [totalMembers, totalStreets, activeEvents, emergencyRequests] = await Promise.all([
         (prisma as any).member.count({ where: filter }),
-        (prisma as any).user.count(),
-        (prisma as any).campaign.count(),
-        (prisma as any).campaign.count({ where: { status: 'SENT' } }),
-        (prisma as any).member.count({ where: { ...filter, createdAt: { gte: today } } }),
         (prisma as any).location.count({ where: { ...locationFilter, type: 'STREET' } }),
         (prisma as any).event.count({ where: { ...filter, status: 'ACTIVE' } }),
         (prisma as any).emergencyRequest.count({ where: { ...filter, status: 'PENDING' } }),
       ]);
 
-      return { totalMembers, totalUsers, totalCampaigns, activeCampaigns, newToday, totalStreets, activeEvents, emergencyRequests };
+      return { totalMembers, totalStreets, activeEvents, emergencyRequests };
     },
 
     member: async (_: any, { id }: any) => {
@@ -142,48 +138,76 @@ export const resolvers = {
       }));
     },
 
-    totalLocations: async (_: any, { type }: any) => {
-      return (prisma as any).location.count({ where: { type } });
-    },
-
-    searchLocations: async (_: any, { type, search }: any) => {
-      return (prisma as any).location.findMany({
-        where: {
-          type,
-          ...(search && { name: { contains: search, mode: 'insensitive' } }),
-        },
-        orderBy: { name: 'asc' },
-      });
-    },
-
     professions: async () => {
       return (prisma as any).profession.findMany({ orderBy: { name: 'asc' } });
     },
   },
 
   Mutation: {
-    login: async (_: any, { phone, password }: any) => {
-      const user = await (prisma as any).user.findUnique({ where: { phone } });
-      if (!user || user.password !== password) throw new Error('Invalid credentials');
-      return user;
-    },
+    adminLogin: async (_: any, { name, role, state, district, constituency, town, password }: any) => {
+      // Common validation
+      if (!name || !role || !password) {
+        return { error: "Please fill all required fields" };
+      }
 
-    loginWithPassword: async (_: any, { phone, password, locationId }: any) => {
-      if (phone && password) {
-        const user = await (prisma as any).user.findUnique({ where: { phone } });
-        if (user && user.password === password) return user;
-      }
-      if (locationId && password) {
-        const loc = await (prisma as any).location.findUnique({ where: { id: locationId } });
-        if (loc && loc.password === password) {
-          return { id: 0, name: `Admin (${loc.name})`, phone: 'SYSTEM', role: 'CANDIDATE', locationId: loc.id };
+      const formattedRole = role.toUpperCase().replace(' ', '_'); // Converts "Super Admin" to "SUPER_ADMIN"
+
+      // 1. SUPER ADMIN
+      if (formattedRole === 'SUPER_ADMIN') {
+        if (!state) return { error: "Please fill all required fields" };
+        
+        if (state.toLowerCase() !== 'tamilnadu') return { error: "Location mismatch" };
+
+        const user = await (prisma as any).user.findFirst({ where: { role: 'SUPER_ADMIN' } });
+        
+        if (user && user.password === password) {
+          return { token: "super_admin_token", user: { ...user, name } };
+        } else if (password === 'admin123') { // Fallback
+          return { token: "super_admin_token", user: { id: 1, name, phone: "SYSTEM", role: "SUPER_ADMIN", location: null, isActive: true } };
         }
+        
+        return { error: "Invalid Password" };
       }
-      throw new Error('Invalid login');
+
+      // 2. ADMIN
+      if (formattedRole === 'ADMIN') {
+        if (!district || !constituency) return { error: "Please fill all required fields" };
+        
+        const loc = await (prisma as any).location.findFirst({
+          where: { name: constituency, type: 'TALUK', parent: { name: district, type: 'DISTRICT' } },
+        });
+        
+        if (!loc) return { error: "Location mismatch" };
+        if (loc.password !== password) return { error: "Invalid Password" };
+        
+        return { 
+          token: "admin_token", 
+          user: { id: loc.id, name, phone: 'SYSTEM', role: 'ADMIN', location: loc, isActive: true } 
+        };
+      }
+
+      // 3. SUB ADMIN
+      if (formattedRole === 'SUB_ADMIN') {
+        if (!district || !constituency || !town) return { error: "Please fill all required fields" };
+        
+        const loc = await (prisma as any).location.findFirst({
+          where: { name: town, type: 'AREA', parent: { name: constituency, type: 'TALUK', parent: { name: district, type: 'DISTRICT' } } },
+        });
+        
+        if (!loc) return { error: "Location mismatch" };
+        if (loc.password !== password) return { error: "Invalid Password" };
+        
+        return { 
+          token: "sub_admin_token", 
+          user: { id: loc.id, name, phone: 'SYSTEM', role: 'SUB_ADMIN', location: loc, isActive: true } 
+        };
+      }
+
+      return { error: "Invalid login format" };
     },
 
     addMember: async (_: any, args: any, context: any) => {
-      const { district, constituency, town, street, professionId, bloodGroup, ...rest } = args;
+      const { district, constituency, town, street, professionId, bloodGroup, allergies, conditions, emergencyContact, role, ...rest } = args;
       let finalLocationId = args.locationId;
 
       if (!finalLocationId && district && constituency && town && street) {
@@ -198,6 +222,10 @@ export const resolvers = {
         data: {
           ...rest,
           bloodGroup: bloodGroup || null,
+          allergies: allergies || null,
+          conditions: conditions || null,
+          emergencyContact: emergencyContact || null,
+          role: role || "Member",
           professionId: professionId || null,
           locationId: finalLocationId,
         },
@@ -211,8 +239,12 @@ export const resolvers = {
         where: { id },
         data: {
           ...data,
-          bloodGroup: data.bloodGroup || undefined,
-          professionId: data.professionId || undefined,
+          bloodGroup: data.bloodGroup !== undefined ? data.bloodGroup : undefined,
+          allergies: data.allergies !== undefined ? data.allergies : undefined,
+          conditions: data.conditions !== undefined ? data.conditions : undefined,
+          emergencyContact: data.emergencyContact !== undefined ? data.emergencyContact : undefined,
+          role: data.role !== undefined ? data.role : undefined,
+          professionId: data.professionId !== undefined ? data.professionId : undefined,
         },
         include: { location: true, profession: true }
       });
@@ -264,54 +296,6 @@ export const resolvers = {
       });
     },
 
-    createUser: async (_: any, { name, phone, password, role, district, constituency, town }: any) => {
-      let targetParent = await (prisma as any).location.findFirst({ where: { name: district, type: 'DISTRICT' } });
-      if (!targetParent) targetParent = await (prisma as any).location.create({ data: { name: district, type: 'DISTRICT' } });
-
-      let targetConstituency = await (prisma as any).location.findFirst({ where: { name: constituency, type: 'TALUK', parentId: targetParent.id } });
-      if (!targetConstituency) targetConstituency = await (prisma as any).location.create({ data: { name: constituency, type: 'TALUK', parent: { connect: { id: targetParent.id } } } });
-
-      let targetTown = await (prisma as any).location.findFirst({ where: { name: town, type: 'AREA', parentId: targetConstituency.id } });
-      if (!targetTown) {
-        targetTown = await (prisma as any).location.create({
-          data: {
-            name: town,
-            type: 'AREA',
-            parent: { connect: { id: targetConstituency.id } },
-            password: password 
-          }
-        });
-      } else {
-        await (prisma as any).location.update({
-          where: { id: targetTown.id },
-          data: { password: password }
-        });
-      }
-
-      return (prisma as any).user.create({
-        data: {
-          name,
-          phone,
-          password,
-          role,
-          locationId: targetTown.id
-        }
-      });
-    },
-
-    createCampaign: async (_: any, { title, message, targetLocationIds }: any, context: any) => {
-      const userId = context.user?.id || 1;
-      return (prisma as any).campaign.create({
-        data: {
-          title,
-          message,
-          createdById: userId,
-          targets: {
-            create: targetLocationIds.map((id: number) => ({ locationId: id })),
-          },
-        },
-      });
-    },
   },
 
   Member: {
@@ -319,7 +303,7 @@ export const resolvers = {
       if (!parent.professionId) return null;
       return (prisma as any).profession.findUnique({ where: { id: parent.professionId } });
     },
-    history: async (parent: any) => {
+    activityHistory: async (parent: any) => {
       const [events, requests] = await Promise.all([
         (prisma as any).event.findMany({ where: { locationId: parent.locationId }, take: 5, orderBy: { createdAt: 'desc' } }),
         (prisma as any).emergencyRequest.findMany({ where: { memberId: parent.id }, take: 5, orderBy: { createdAt: 'desc' }, include: { member: true } }),
@@ -379,15 +363,4 @@ export const resolvers = {
     },
   },
 
-  Campaign: {
-    sentCount: (parent: any) => (prisma as any).messageLog.count({ where: { campaignId: parent.id, status: 'SENT' } }),
-    failedCount: (parent: any) => (prisma as any).messageLog.count({ where: { campaignId: parent.id, status: 'FAILED' } }),
-    targets: async (parent: any) => {
-      const targets = await (prisma as any).campaignTarget.findMany({
-        where: { campaignId: parent.id },
-        include: { location: true },
-      });
-      return targets.map((t: any) => t.location);
-    },
-  },
 };

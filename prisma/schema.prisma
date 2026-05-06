@@ -30,9 +30,13 @@ model Member {
   id           Int        @id @default(autoincrement())
   name         String
   phone        String     @unique
-  bloodGroup   String?
-  professionId Int?
-  profession   Profession? @relation(fields: [professionId], references: [id])
+  bloodGroup            String?
+  allergies             String?
+  conditions            String?
+  emergencyContact      String?
+  role                  String    @default("Member")
+  professionId          Int?
+  profession            Profession? @relation(fields: [professionId], references: [id])
   locationId   Int
   location     Location   @relation(fields: [locationId], references: [id])
   consent      Boolean    @default(true)
