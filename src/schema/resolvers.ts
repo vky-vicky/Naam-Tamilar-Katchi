@@ -37,11 +37,12 @@ export const resolvers = {
     me: (_: any, __: any, context: any) => context.user,
     
     locations: async (_: any, { parentId, type }: any) => {
+      const where: any = {};
+      if (parentId !== undefined) where.parentId = parentId;
+      if (type) where.type = type;
+      
       return (prisma as any).location.findMany({
-        where: {
-          parentId: parentId || null,
-          ...(type && { type }),
-        },
+        where,
         orderBy: { name: 'asc' },
       });
     },
