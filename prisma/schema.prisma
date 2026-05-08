@@ -21,6 +21,8 @@ model Location {
   users     User[]
   events    Event[]
   requests  EmergencyRequest[]
+  posts     Post[]
+  notifications Notification[]
 
   @@index([parentId])
   @@index([type])
@@ -176,6 +178,29 @@ model EmergencyRequest {
   audience    String? // Ex: "ALL_CAPTAINS", "STREET_MEMBERS"
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
+}
+
+model Post {
+  id         Int      @id @default(autoincrement())
+  content    String
+  image      String?
+  authorName String
+  authorRole String?
+  likes      Int      @default(0)
+  locationId Int
+  location   Location @relation(fields: [locationId], references: [id])
+  createdAt  DateTime @default(now())
+}
+
+model Notification {
+  id         Int      @id @default(autoincrement())
+  title      String
+  message    String
+  type       String   // "EVENT", "REQUEST", "ALERT"
+  time       String?  // e.g. "2h ago"
+  locationId Int
+  location   Location @relation(fields: [locationId], references: [id])
+  createdAt  DateTime @default(now())
 }
 
 enum LocationType {

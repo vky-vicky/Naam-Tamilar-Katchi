@@ -34,8 +34,15 @@ async function main() {
 
   // 3. Create Locations (Nagapattinam Flow)
   const naga = await prisma.location.create({ data: { name: 'Nagapattinam', type: 'DISTRICT', parentId: state.id } });
-  const veda = await prisma.location.create({ data: { name: 'Vedaranyam', type: 'TALUK', parentId: naga.id } });
-  const pushpa = await prisma.location.create({ data: { name: 'Pushpavanam', type: 'AREA', parentId: veda.id } });
+  const veda = await prisma.location.create({ data: { name: 'Vedaranyam', type: 'TALUK', parentId: naga.id, password: 'admin123' } });
+  const pushpa = await prisma.location.create({ data: { name: 'Pushpavanam', type: 'AREA', parentId: veda.id, password: 'admin123' } });
+  
+  // 3.1 Create Chennai District
+  const chennai = await prisma.location.create({ data: { name: 'Chennai', type: 'DISTRICT', parentId: state.id } });
+  const marylapore = await prisma.location.create({ data: { name: 'Mylapore', type: 'TALUK', parentId: chennai.id, password: 'admin123' } });
+  await prisma.location.create({ data: { name: 'Egmore', type: 'TALUK', parentId: chennai.id, password: 'admin123' } });
+  await prisma.location.create({ data: { name: 'Velachery', type: 'TALUK', parentId: chennai.id, password: 'admin123' } });
+  await prisma.location.create({ data: { name: 'T. Nagar', type: 'TALUK', parentId: chennai.id, password: 'admin123' } });
   
   const streets = ['Kanjamalai street', 'Main Road', 'Gandhi Street'];
   const streetNodes = [];
@@ -102,6 +109,58 @@ async function main() {
       memberId: someMember?.id || null,
       createdById: vedaAdmin.id,
       status: 'PENDING',
+    }
+  });
+
+  // 7. Create Sample Community Posts
+  await prisma.post.create({
+    data: {
+      content: "Exciting progress on our Green Spaces project! We've secured the initial permits for the community garden.",
+      authorName: "Sarah Mitchell",
+      authorRole: "Urban Initiative Committee",
+      locationId: pushpa.id,
+      likes: 24
+    }
+  });
+
+  await prisma.post.create({
+    data: {
+      content: "I've just uploaded the draft for the new community bylaws to the Requests portal. Please take a look.",
+      authorName: "Dr. James Chen",
+      authorRole: "Policy Development Group",
+      locationId: pushpa.id,
+      likes: 12
+    }
+  });
+
+  // 8. Create Sample Notifications
+  await prisma.notification.create({
+    data: {
+      title: "Town Hall Meeting Tomorrow",
+      message: "Don't forget the monthly meeting at 6:00 PM. We'll be discussing the new park initiative.",
+      type: "EVENT",
+      time: "2h ago",
+      locationId: pushpa.id
+    }
+  });
+
+  await prisma.notification.create({
+    data: {
+      title: "New Member Request",
+      message: "Sarah Jenkins requested to join the District 4 Planning Committee.",
+      type: "REQUEST",
+      time: "4h ago",
+      locationId: pushpa.id
+    }
+  });
+
+  await prisma.notification.create({
+    data: {
+      title: "Security Alert",
+      message: "New login detected from a Safari browser on macOS.",
+      type: "ALERT",
+      time: "12h ago",
+      locationId: pushpa.id
     }
   });
 

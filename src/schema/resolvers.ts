@@ -99,9 +99,6 @@ export const resolvers = {
         locationFilter.id = { in: allLocationIds };
       }
 
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-
       const [totalMembers, totalStreets, activeEvents, emergencyRequests] = await Promise.all([
         (prisma as any).member.count({ where: filter }),
         (prisma as any).location.count({ where: { ...locationFilter, type: 'STREET' } }),
@@ -141,6 +138,30 @@ export const resolvers = {
 
     professions: async () => {
       return (prisma as any).profession.findMany({ orderBy: { name: 'asc' } });
+    },
+
+    communityFeed: async (_: any, { locationId }: any) => {
+      const where: any = {};
+      if (locationId) {
+        const allLocationIds = [locationId, ...(await getChildLocationIds(locationId))];
+        where.locationId = { in: allLocationIds };
+      }
+      return (prisma as any).post.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+      });
+    },
+
+    notifications: async (_: any, { locationId }: any) => {
+      const where: any = {};
+      if (locationId) {
+        const allLocationIds = [locationId, ...(await getChildLocationIds(locationId))];
+        where.locationId = { in: allLocationIds };
+      }
+      return (prisma as any).notification.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+      });
     },
   },
 
@@ -315,6 +336,29 @@ export const resolvers = {
       });
     },
 
+    createPost: async (_: any, args: any) => {
+      return (prisma as any).post.create({
+        data: {
+          content: args.content,
+          image: args.image,
+          authorName: args.authorName,
+          authorRole: args.authorRole,
+          locationId: args.locationId
+        }
+      });
+    },
+
+    createNotification: async (_: any, args: any) => {
+      return (prisma as any).notification.create({
+        data: {
+          title: args.title,
+          message: args.message,
+          type: args.type,
+          time: args.time,
+          locationId: args.locationId
+        }
+      });
+    },
   },
 
   Member: {
@@ -381,5 +425,4 @@ export const resolvers = {
       return 'Event';
     },
   },
-
 };

@@ -140,6 +140,25 @@ export const typeDefs = gql`
     createdAt: String!
   }
 
+  type Post {
+    id: Int!
+    content: String!
+    image: String
+    authorName: String!
+    authorRole: String
+    likes: Int!
+    createdAt: String!
+  }
+
+  type Notification {
+    id: Int!
+    title: String!
+    message: String!
+    type: String!
+    time: String
+    createdAt: String!
+  }
+
   union Activity = Event | EmergencyRequest
 
   type Query {
@@ -151,6 +170,8 @@ export const typeDefs = gql`
     dashboardStats(locationId: Int): DashboardStats!
     recentActivity(locationId: Int, limit: Int): [Activity!]!
     professions: [Profession!]!
+    communityFeed(locationId: Int): [Post!]!
+    notifications(locationId: Int): [Notification!]!
   }
 
   type Mutation {
@@ -202,6 +223,10 @@ export const typeDefs = gql`
     
     createEmergencyRequest(title: String!, description: String, type: RequestType!, locationId: Int!, audience: String): EmergencyRequest!
     updateRequestStatus(id: Int!, status: RequestStatus!): EmergencyRequest!
+
+    # Community & Notifications
+    createPost(content: String!, image: String, authorName: String!, authorRole: String, locationId: Int!): Post!
+    createNotification(title: String!, message: String!, type: String!, time: String, locationId: Int!): Notification!
 
 
   }
