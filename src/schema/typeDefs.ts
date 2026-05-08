@@ -95,6 +95,7 @@ export const typeDefs = gql`
   }
 
   type DashboardStats {
+    locationName: String!
     totalMembers: Int!
     totalStreets: Int!
     activeEvents: Int!

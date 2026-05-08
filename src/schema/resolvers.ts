@@ -52,7 +52,7 @@ export const resolvers = {
     },
 
     members: async (_: any, { locationId, professionId, bloodGroup, search, limit = 50, offset = 0 }: any, context: any) => {
-      let filter: any = { isActive: true };
+      let filter: any = {}; // Removed isActive constraint for testing
       
       if (professionId) filter.professionId = professionId;
       if (bloodGroup) filter.bloodGroup = bloodGroup;
@@ -67,21 +67,18 @@ export const resolvers = {
       if (locationId) {
         const allLocationIds = [locationId, ...(await getChildLocationIds(locationId))];
         filter.locationId = { in: allLocationIds };
-      } else if (context.user?.locationId) {
-        const allLocationIds = [context.user.locationId, ...(await getChildLocationIds(context.user.locationId))];
-        filter.locationId = { in: allLocationIds };
       }
 
       const members = await (prisma as any).member.findMany({
         where: filter,
         take: limit,
         skip: offset,
-        include: { location: true },
+        include: { location: true, profession: true },
         orderBy: { createdAt: 'desc' },
       });
 
       return members.map((m: any) => {
-        const canSeePhone = context.user?.role === 'SUPER_ADMIN' || (context.user?.role === 'CANDIDATE' && context.user.locationId === m.locationId);
+        const canSeePhone = context?.user?.role === 'SUPER_ADMIN' || (context?.user?.role === 'CANDIDATE' && context?.user?.locationId === m.locationId);
         return {
           ...m,
           phone: canSeePhone ? m.phone : null,
@@ -92,8 +89,12 @@ export const resolvers = {
     dashboardStats: async (_: any, { locationId }: any) => {
       let filter: any = {};
       let locationFilter: any = {};
-      
+      let locationName = "Tamil Nadu";
+
       if (locationId) {
+        const loc = await (prisma as any).location.findUnique({ where: { id: locationId }, select: { name: true } });
+        if (loc) locationName = loc.name;
+
         const allLocationIds = [locationId, ...(await getChildLocationIds(locationId))];
         filter.locationId = { in: allLocationIds };
         locationFilter.id = { in: allLocationIds };
@@ -106,7 +107,7 @@ export const resolvers = {
         (prisma as any).emergencyRequest.count({ where: { ...filter, status: 'PENDING' } }),
       ]);
 
-      return { totalMembers, totalStreets, activeEvents, emergencyRequests };
+      return { locationName, totalMembers, totalStreets, activeEvents, emergencyRequests };
     },
 
     member: async (_: any, { id }: any) => {
