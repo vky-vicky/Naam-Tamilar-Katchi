@@ -36,9 +36,14 @@ export const typeDefs = gql`
     SUPER_ADMIN
     ADMIN
     SUB_ADMIN
-    CANDIDATE
-    CAPTAIN
     MEMBER
+  }
+
+  enum ApprovalStatus {
+    PENDING
+    APPROVED
+    REJECTED
+    SUSPENDED
   }
 
 
@@ -74,6 +79,7 @@ export const typeDefs = gql`
     profession: Profession
     location: Location!
     isActive: Boolean!
+    approvalStatus: ApprovalStatus!
     createdAt: String!
     activityHistory: [Activity!]!
   }
@@ -82,7 +88,9 @@ export const typeDefs = gql`
     id: Int!
     name: String!
     phone: String!
+    username: String
     role: UserRole!
+    approvalStatus: ApprovalStatus!
     location: Location
     isActive: Boolean!
   }
@@ -96,7 +104,10 @@ export const typeDefs = gql`
 
   type DashboardStats {
     locationName: String!
+    totalAdmins: Int!
+    totalSubAdmins: Int!
     totalMembers: Int!
+    pendingApprovals: Int!
     totalStreets: Int!
     activeEvents: Int!
     emergencyRequests: Int!

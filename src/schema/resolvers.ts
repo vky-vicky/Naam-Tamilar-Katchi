@@ -8,8 +8,8 @@ async function getChildLocationIds(locationId: number): Promise<number[]> {
   });
 
   let ids = children.map((c: any) => c.id);
-  for (const child of children) {
-    const childIds = await getChildLocationIds(child.id);
+  for (const id of ids) {
+    const childIds = await getChildLocationIds(id);
     ids = [...ids, ...childIds];
   }
   return ids;
@@ -51,9 +51,10 @@ export const resolvers = {
       return (prisma as any).location.findUnique({ where: { id } });
     },
 
-    members: async (_: any, { locationId, professionId, bloodGroup, search, limit = 50, offset = 0 }: any, context: any) => {
-      let filter: any = {}; // Removed isActive constraint for testing
+    members: async (_: any, { locationId, professionId, bloodGroup, search, limit = 50, offset = 0, approvalStatus }: any, context: any) => {
+      let filter: any = {};
       
+      if (approvalStatus) filter.approvalStatus = approvalStatus;
       if (professionId) filter.professionId = professionId;
       if (bloodGroup) filter.bloodGroup = bloodGroup;
       
@@ -78,7 +79,7 @@ export const resolvers = {
       });
 
       return members.map((m: any) => {
-        const canSeePhone = context?.user?.role === 'SUPER_ADMIN' || (context?.user?.role === 'CANDIDATE' && context?.user?.locationId === m.locationId);
+        const canSeePhone = context?.user?.role === 'SUPER_ADMIN' || (context?.user?.role === 'ADMIN' && context?.user?.locationId === m.locationId);
         return {
           ...m,
           phone: canSeePhone ? m.phone : null,
@@ -89,6 +90,7 @@ export const resolvers = {
     dashboardStats: async (_: any, { locationId }: any) => {
       let filter: any = {};
       let locationFilter: any = {};
+      let userFilter: any = { approvalStatus: 'APPROVED' };
       let locationName = "Tamil Nadu";
 
       if (locationId) {
@@ -98,16 +100,37 @@ export const resolvers = {
         const allLocationIds = [locationId, ...(await getChildLocationIds(locationId))];
         filter.locationId = { in: allLocationIds };
         locationFilter.id = { in: allLocationIds };
+        userFilter.locationId = { in: allLocationIds };
       }
 
-      const [totalMembers, totalStreets, activeEvents, emergencyRequests] = await Promise.all([
-        (prisma as any).member.count({ where: filter }),
+      const [
+        totalAdmins, 
+        totalSubAdmins, 
+        totalMembers, 
+        pendingApprovals, 
+        totalStreets, 
+        activeEvents, 
+        emergencyRequests
+      ] = await Promise.all([
+        (prisma as any).user.count({ where: { ...userFilter, role: 'ADMIN' } }),
+        (prisma as any).user.count({ where: { ...userFilter, role: 'SUB_ADMIN' } }),
+        (prisma as any).member.count({ where: { ...filter, approvalStatus: 'APPROVED' } }),
+        (prisma as any).member.count({ where: { ...filter, approvalStatus: 'PENDING' } }),
         (prisma as any).location.count({ where: { ...locationFilter, type: 'STREET' } }),
         (prisma as any).event.count({ where: { ...filter, status: 'ACTIVE' } }),
         (prisma as any).emergencyRequest.count({ where: { ...filter, status: 'PENDING' } }),
       ]);
 
-      return { locationName, totalMembers, totalStreets, activeEvents, emergencyRequests };
+      return { 
+        locationName, 
+        totalAdmins, 
+        totalSubAdmins, 
+        totalMembers, 
+        pendingApprovals, 
+        totalStreets, 
+        activeEvents, 
+        emergencyRequests 
+      };
     },
 
     member: async (_: any, { id }: any) => {
@@ -168,109 +191,86 @@ export const resolvers = {
 
   Mutation: {
     adminLogin: async (_: any, { name, role, state, district, constituency, town, password }: any) => {
-      // Common validation
-      if (!name || !role || !password) {
-        return { error: "Please fill all required fields" };
-      }
+      if (!name || !role || !password) return { error: "Please fill all required fields" };
 
-      const formattedRole = role.toUpperCase().replace(' ', '_'); // Converts "Super Admin" to "SUPER_ADMIN"
+      const formattedRole = role.toUpperCase().replace(' ', '_');
 
       // 1. SUPER ADMIN
       if (formattedRole === 'SUPER_ADMIN') {
-        if (!state) return { error: "Please fill all required fields" };
-        
-        if (state.toLowerCase() !== 'tamilnadu') return { error: "Location mismatch" };
-
-        const user = await (prisma as any).user.findFirst({ where: { role: 'SUPER_ADMIN' } });
-        
-        if (user && user.password === password) {
-          return { token: "super_admin_token", user: { ...user, name } };
-        } else if (password === 'admin123') { // Fallback
-          return { token: "super_admin_token", user: { id: 1, name, phone: "SYSTEM", role: "SUPER_ADMIN", location: null, isActive: true } };
+        const user = await (prisma as any).user.findFirst({ where: { role: 'SUPER_ADMIN', name: name } });
+        if (user && (user.password === password || password === 'admin123')) {
+          return { token: "super_admin_token", user };
         }
-        
-        return { error: "Invalid Password" };
+        return { error: "Invalid Credentials" };
       }
 
-      // 2. ADMIN
-      if (formattedRole === 'ADMIN') {
-        if (!district || !constituency) return { error: "Please fill all required fields" };
-        
-        const loc = await (prisma as any).location.findFirst({
-          where: { 
-            name: { equals: constituency.trim(), mode: 'insensitive' }, 
-            type: 'TALUK', 
-            parent: { 
-              name: { equals: district.trim(), mode: 'insensitive' }, 
-              type: 'DISTRICT' 
-            } 
-          },
+      // 2. ADMIN & SUB ADMIN (Location Based)
+      const locationType = formattedRole === 'ADMIN' ? 'TALUK' : 'AREA';
+      const searchName = formattedRole === 'ADMIN' ? constituency : town;
+
+      const loc = await (prisma as any).location.findFirst({
+        where: { 
+          name: { equals: searchName.trim(), mode: 'insensitive' }, 
+          type: locationType
+        },
+      });
+
+      if (!loc) return { error: "Location mismatch" };
+      if (loc.password !== password && password !== 'admin123') return { error: "Invalid Password" };
+
+      // Find or Create the Administrative User for this location
+      let user = await (prisma as any).user.findFirst({ where: { locationId: loc.id, role: formattedRole } });
+      if (!user) {
+        user = await (prisma as any).user.create({
+          data: {
+            name,
+            phone: `SYSTEM_${loc.id}`,
+            password: password,
+            role: formattedRole,
+            locationId: loc.id,
+            approvalStatus: 'APPROVED'
+          }
         });
-        
-        if (!loc) return { error: "Location mismatch" };
-        if (loc.password !== password && password !== 'admin123') return { error: "Invalid Password" };
-        
-        return { 
-          token: "admin_token", 
-          user: { id: loc.id, name, phone: 'SYSTEM', role: 'ADMIN', location: loc, isActive: true } 
-        };
       }
 
-      // 3. SUB ADMIN
-      if (formattedRole === 'SUB_ADMIN') {
-        if (!district || !constituency || !town) return { error: "Please fill all required fields" };
-        
-        const loc = await (prisma as any).location.findFirst({
-          where: { 
-            name: { equals: town.trim(), mode: 'insensitive' }, 
-            type: 'AREA', 
-            parent: { 
-              name: { equals: constituency.trim(), mode: 'insensitive' }, 
-              type: 'TALUK', 
-              parent: { 
-                name: { equals: district.trim(), mode: 'insensitive' }, 
-                type: 'DISTRICT' 
-              } 
-            } 
-          },
-        });
-        
-        if (!loc) return { error: "Location mismatch" };
-        if (loc.password !== password && password !== 'admin123') return { error: "Invalid Password" };
-        
-        return { 
-          token: "sub_admin_token", 
-          user: { id: loc.id, name, phone: 'SYSTEM', role: 'SUB_ADMIN', location: loc, isActive: true } 
-        };
-      }
-
-      return { error: "Invalid login format" };
+      return { 
+        token: `${formattedRole.toLowerCase()}_token`, 
+        user 
+      };
     },
 
     addMember: async (_: any, args: any, context: any) => {
-      const { district, constituency, town, street, professionId, bloodGroup, allergies, conditions, emergencyContact, role, ...rest } = args;
+      const { district, constituency, town, street, professionId, ...rest } = args;
       let finalLocationId = args.locationId;
 
       if (!finalLocationId && district && constituency && town && street) {
         finalLocationId = await resolveLocationId(district, constituency, town, street);
-      } else if (!finalLocationId && context.user?.locationId) {
-        finalLocationId = context.user.locationId;
       }
 
       if (!finalLocationId) throw new Error('Location is required');
 
-      return (prisma as any).member.create({
+      const member = await (prisma as any).member.create({
         data: {
           ...rest,
-          bloodGroup: bloodGroup || null,
-          allergies: allergies || null,
-          conditions: conditions || null,
-          emergencyContact: emergencyContact || null,
-          role: role || "Member",
+          approvalStatus: 'PENDING', // All new members are pending
           professionId: professionId || null,
           locationId: finalLocationId,
+          createdById: context?.user?.id || null
         },
         include: { location: true, profession: true },
+      });
+
+      return member;
+    },
+
+    updateMemberStatus: async (_: any, { id, status }: any, context: any) => {
+      // Permission Check (Only Admins/SuperAdmins can approve)
+      if (context?.user?.role === 'MEMBER') throw new Error("Unauthorized");
+
+      return (prisma as any).member.update({
+        where: { id },
+        data: { approvalStatus: status },
+        include: { location: true }
       });
     },
 
@@ -278,15 +278,7 @@ export const resolvers = {
       const { id, ...data } = args;
       return (prisma as any).member.update({
         where: { id },
-        data: {
-          ...data,
-          bloodGroup: data.bloodGroup !== undefined ? data.bloodGroup : undefined,
-          allergies: data.allergies !== undefined ? data.allergies : undefined,
-          conditions: data.conditions !== undefined ? data.conditions : undefined,
-          emergencyContact: data.emergencyContact !== undefined ? data.emergencyContact : undefined,
-          role: data.role !== undefined ? data.role : undefined,
-          professionId: data.professionId !== undefined ? data.professionId : undefined,
-        },
+        data,
         include: { location: true, profession: true }
       });
     },

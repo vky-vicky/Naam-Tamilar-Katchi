@@ -39,12 +39,15 @@ model Member {
   role                  String    @default("Member")
   professionId          Int?
   profession            Profession? @relation(fields: [professionId], references: [id])
-  locationId   Int
-  location     Location   @relation(fields: [locationId], references: [id])
-  consent      Boolean    @default(true)
-  isActive     Boolean    @default(true)
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
+  locationId     Int
+  location       Location   @relation(fields: [locationId], references: [id])
+  approvalStatus ApprovalStatus @default(PENDING)
+  consent        Boolean    @default(true)
+  isActive       Boolean    @default(true)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+  createdById    Int?
+  createdBy      User?      @relation("MemberCreator", fields: [createdById], references: [id])
   messageLogs MessageLog[]
   requests    EmergencyRequest[]
   eventResponses EventResponse[]
@@ -62,22 +65,29 @@ model Profession {
 }
 
 model User {
-  id         Int        @id @default(autoincrement())
-  name       String
-  phone      String     @unique
-  password   String
-  role       UserRole   @default(MEMBER)
-  locationId Int?
-  isActive   Boolean    @default(true)
-  createdAt  DateTime   @default(now())
-  updatedAt  DateTime   @updatedAt
-  auditLogs  AuditLog[]
-  campaigns  Campaign[]
+  id              Int            @id @default(autoincrement())
+  name            String
+  phone           String         @unique
+  username        String?        @unique
+  password        String
+  role            UserRole       @default(MEMBER)
+  approvalStatus  ApprovalStatus @default(PENDING)
+  locationId      Int?
+  parentId        Int?
+  parent          User?          @relation("Hierarchy", fields: [parentId], references: [id])
+  children        User[]         @relation("Hierarchy")
+  isActive        Boolean        @default(true)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  auditLogs       AuditLog[]
+  campaigns       Campaign[]
   createdEvents   Event[]
   createdRequests EmergencyRequest[]
-  location   Location?  @relation(fields: [locationId], references: [id])
+  createdMembers  Member[]       @relation("MemberCreator")
+  location        Location?      @relation(fields: [locationId], references: [id])
 
   @@index([role])
+  @@index([approvalStatus])
 }
 
 model Campaign {
@@ -236,9 +246,16 @@ enum RSVPStatus {
 
 enum UserRole {
   SUPER_ADMIN
-  CANDIDATE
-  CAPTAIN
+  ADMIN
+  SUB_ADMIN
   MEMBER
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  SUSPENDED
 }
 
 enum CampaignStatus {

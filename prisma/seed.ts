@@ -1,7 +1,7 @@
 import prisma from '../src/db.js';
 
 async function main() {
-  console.log('🌱 Seeding CRM database with Persistent Data...');
+  console.log('🌱 Seeding CRM with Professional Hierarchy (Super Admin > Admin > Sub Admin)...');
 
   // 1. Ensure State exists
   let state = await prisma.location.findFirst({ where: { name: 'Tamil Nadu', type: 'STATE' } });
@@ -20,9 +20,7 @@ async function main() {
     professions.push(prof);
   }
 
-  const bloodGroups = ['A+', 'A-', 'B+', 'B-', 'O+', 'O-', 'AB+', 'AB-'];
-
-  // 3. Ensure Locations exist (Nagapattinam Flow)
+  // 3. Create Hierarchy Locations
   let naga = await prisma.location.findFirst({ where: { name: 'Nagapattinam', type: 'DISTRICT' } });
   if (!naga) {
     naga = await prisma.location.create({ data: { name: 'Nagapattinam', type: 'DISTRICT', parentId: state.id } });
@@ -37,15 +35,53 @@ async function main() {
   if (!pushpa) {
     pushpa = await prisma.location.create({ data: { name: 'Pushpavanam', type: 'AREA', parentId: veda.id, password: 'admin123' } });
   }
-  
-  // 3.1 Ensure Chennai District exists
-  let chennai = await prisma.location.findFirst({ where: { name: 'Chennai', type: 'DISTRICT' } });
-  if (!chennai) {
-    chennai = await prisma.location.create({ data: { name: 'Chennai', type: 'DISTRICT', parentId: state.id } });
-  }
 
-  // 4. Ensure Streets and Members
-  const streets = ['Kanjamalai street', 'Main Road', 'Gandhi Street'];
+  // 4. Create Users (Roles)
+  // Super Admin (Created Manually via Seed)
+  const superAdmin = await prisma.user.upsert({
+    where: { phone: '9000000001' },
+    update: { approvalStatus: 'APPROVED' },
+    create: { 
+      name: 'Thalaivar Seeman', 
+      phone: '9000000001', 
+      password: 'admin123', 
+      role: 'SUPER_ADMIN',
+      approvalStatus: 'APPROVED'
+    }
+  });
+
+  // District Admin
+  const admin = await prisma.user.upsert({
+    where: { phone: '9000000002' },
+    update: { locationId: veda.id, approvalStatus: 'APPROVED' },
+    create: { 
+      name: 'Vedaranyam Admin', 
+      phone: '9000000002', 
+      password: 'admin123', 
+      role: 'ADMIN',
+      locationId: veda.id,
+      approvalStatus: 'APPROVED',
+      parentId: superAdmin.id
+    }
+  });
+
+  // Area Sub Admin
+  const subAdmin = await prisma.user.upsert({
+    where: { phone: '9000000003' },
+    update: { locationId: pushpa.id, approvalStatus: 'APPROVED' },
+    create: { 
+      name: 'Pushpavanam Sub-Admin', 
+      phone: '9000000003', 
+      password: 'admin123', 
+      role: 'SUB_ADMIN',
+      locationId: pushpa.id,
+      approvalStatus: 'APPROVED',
+      parentId: admin.id
+    }
+  });
+
+  // 5. Create Members with mixed Approval Status
+  const streets = ['Kanjamalai street', 'Main Road'];
   const realisticNames = ["Arulmozhi", "Senthamizhan", "Vetrivel", "Anbazhagan", "Kayalvizhi", "Tamilarasan", "Ezhil", "Iniyan", "Thamizhisai", "Karkivel"];
 
   for (const sName of streets) {
@@ -54,7 +90,6 @@ async function main() {
       street = await prisma.location.create({ data: { name: sName, type: 'STREET', parentId: pushpa.id } });
     }
 
-    // Check if members already exist for this street
     const existingCount = await prisma.member.count({ where: { locationId: street.id } });
     if (existingCount === 0) {
       for (let i = 0; i < 10; i++) {
@@ -62,31 +97,20 @@ async function main() {
           data: {
             name: `${realisticNames[i]} - ${sName}`,
             phone: `9${Math.floor(100000000 + Math.random() * 900000000)}`,
-            bloodGroup: bloodGroups[Math.floor(Math.random() * bloodGroups.length)] || null,
+            bloodGroup: ['A+', 'O+', 'B+'][Math.floor(Math.random() * 3)],
             professionId: professions[Math.floor(Math.random() * professions.length)].id,
             locationId: street.id,
             role: 'Member',
-            isActive: true
+            approvalStatus: i < 5 ? 'APPROVED' : 'PENDING', // 5 approved, 5 pending
+            isActive: true,
+            createdById: subAdmin.id
           }
         });
       }
     }
   }
 
-  // 5. Ensure Users
-  await prisma.user.upsert({
-    where: { phone: '9000000001' },
-    update: { password: 'admin123' },
-    create: { name: 'Thalaivar Seeman', phone: '9000000001', password: 'admin123', role: 'SUPER_ADMIN' }
-  });
-
-  await prisma.user.upsert({
-    where: { phone: '9000000002' },
-    update: { password: 'admin123', locationId: veda.id },
-    create: { name: 'Vedaranyam Admin', phone: '9000000002', password: 'admin123', role: 'ADMIN', locationId: veda.id }
-  });
-
-  console.log('✅ CRM Seeding completed with Persistent Data Flow!');
+  console.log('✅ Hierarchy Seeding completed! Use phones 9000000001, 9000000002, 9000000003 for testing.');
 }
 
 main()
