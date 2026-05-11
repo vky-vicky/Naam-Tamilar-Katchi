@@ -199,7 +199,10 @@ export const resolvers = {
       if (formattedRole === 'SUPER_ADMIN') {
         const user = await (prisma as any).user.findFirst({ where: { role: 'SUPER_ADMIN', name: name } });
         if (user && (user.password === password || password === 'admin123')) {
-          return { token: "super_admin_token", user };
+          return { 
+            token: "super_admin_token", 
+            user: { ...user, approvalStatus: user.approvalStatus || 'APPROVED' } 
+          };
         }
         return { error: "Invalid Credentials" };
       }
@@ -239,22 +242,31 @@ export const resolvers = {
       };
     },
 
+    createUser: async (_: any, args: any, context: any) => {
+      // Permission check: Super Admin can create Admin/Sub Admin. Admin can create Sub Admin.
+      const currentRole = context?.user?.role;
+      if (currentRole === 'MEMBER') throw new Error("Unauthorized");
+      if (currentRole === 'ADMIN' && args.role === 'ADMIN') throw new Error("Admins cannot create other Admins");
+
+      return (prisma as any).user.create({
+        data: {
+          ...args,
+          approvalStatus: 'APPROVED',
+          parentId: context?.user?.id || null
+        }
+      });
+    },
+
     addMember: async (_: any, args: any, context: any) => {
-      const { district, constituency, town, street, professionId, ...rest } = args;
-      let finalLocationId = args.locationId;
-
-      if (!finalLocationId && district && constituency && town && street) {
-        finalLocationId = await resolveLocationId(district, constituency, town, street);
-      }
-
-      if (!finalLocationId) throw new Error('Location is required');
+      const { professionId, username, password, ...rest } = args;
 
       const member = await (prisma as any).member.create({
         data: {
           ...rest,
-          approvalStatus: 'PENDING', // All new members are pending
+          username: username,
+          password: password,
+          approvalStatus: 'PENDING',
           professionId: professionId || null,
-          locationId: finalLocationId,
           createdById: context?.user?.id || null
         },
         include: { location: true, profession: true },

@@ -177,7 +177,7 @@ export const typeDefs = gql`
     me: User
     locations(parentId: Int, type: LocationType): [Location!]!
     location(id: Int!): Location
-    members(locationId: Int, professionId: Int, bloodGroup: String, search: String, limit: Int, offset: Int): [Member!]!
+    members(locationId: Int, professionId: Int, bloodGroup: String, search: String, limit: Int, offset: Int, approvalStatus: ApprovalStatus): [Member!]!
     member(id: Int!): Member
     dashboardStats(locationId: Int): DashboardStats!
     recentActivity(locationId: Int, limit: Int): [Activity!]!
@@ -199,21 +199,24 @@ export const typeDefs = gql`
     ): AuthResponse!
 
 
-    # Members
+    # User & Member Creation (Figma Flow)
+    createUser(
+      name: String!
+      phone: String!
+      username: String!
+      password: String!
+      role: UserRole!
+      locationId: Int!     # This will be District ID for Admin, Area ID for Sub Admin
+    ): User!
+
     addMember(
-      name: String!, 
-      phone: String!, 
-      locationId: Int, 
-      district: String, 
-      constituency: String, 
-      town: String, 
-      street: String, 
-      professionId: Int, 
-      bloodGroup: String,
-      allergies: String,
-      conditions: String,
-      emergencyContact: String,
-      role: String
+      name: String!
+      phone: String!
+      username: String!    # Mandatory for login
+      password: String!    # Mandatory for login
+      bloodGroup: String
+      professionId: Int
+      locationId: Int!     # This will be the Area ID (Select Area)
     ): Member!
     
     updateMember(
@@ -228,6 +231,8 @@ export const typeDefs = gql`
       professionId: Int, 
       locationId: Int
     ): Member!
+    
+    updateMemberStatus(id: Int!, status: ApprovalStatus!): Member!
     
     # Events & Requests
     createEvent(title: String!, description: String, date: String!, locationId: Int!): Event!
