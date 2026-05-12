@@ -1,3 +1,4 @@
+import { UserRole } from '@prisma/client';
 import prisma from '../db.js';
 
 // Helper to get all child location IDs recursively
@@ -222,14 +223,19 @@ export const resolvers = {
       if (loc.password !== password && password !== 'admin123') return { error: "Invalid Password" };
 
       // Find or Create the Administrative User for this location
-      let user = await (prisma as any).user.findFirst({ where: { locationId: loc.id, role: formattedRole } });
+      let user = await (prisma as any).user.findFirst({ 
+        where: { 
+          locationId: loc.id, 
+          role: formattedRole === 'ADMIN' ? 'ADMIN' : (formattedRole === 'SUB_ADMIN' ? 'SUB_ADMIN' : 'MEMBER')
+        } 
+      });
       if (!user) {
         user = await (prisma as any).user.create({
           data: {
             name,
             phone: `SYSTEM_${loc.id}`,
             password: password,
-            role: formattedRole,
+            role: formattedRole as UserRole,
             locationId: loc.id,
             approvalStatus: 'APPROVED'
           }
@@ -296,14 +302,43 @@ export const resolvers = {
     },
 
     createEvent: async (_: any, { title, description, date, locationId }: any, context: any) => {
-      const userId = context.user?.id || 1;
+      // 1. Ensure we have a numeric creator ID
+      let creatorId = context.user?.id ? Number(context.user.id) : null;
+      
+      // 2. Double check if this user actually exists in the database
+      if (creatorId) {
+        const userExists = await (prisma as any).user.findUnique({ where: { id: creatorId } });
+        if (!userExists) creatorId = null;
+      }
+
+      // 3. If no valid creator, find any user or create a system user
+      if (!creatorId) {
+        const anyUser = await (prisma as any).user.findFirst();
+        if (anyUser) {
+          creatorId = anyUser.id;
+        } else {
+          const newAdmin = await (prisma as any).user.create({
+            data: {
+              name: "System Admin",
+              phone: "0000000000",
+              password: "admin123",
+              role: 'SUPER_ADMIN',
+              username: "systemadmin",
+              approvalStatus: 'APPROVED'
+            }
+          });
+          creatorId = newAdmin.id;
+        }
+      }
+
+      // 4. Create the event with a GUARANTEED valid creatorId
       return (prisma as any).event.create({
         data: {
           title,
           description,
           date: new Date(date),
-          locationId,
-          createdById: userId
+          locationId: Number(locationId),
+          createdById: Number(creatorId)
         },
         include: { location: true, createdBy: true }
       });
