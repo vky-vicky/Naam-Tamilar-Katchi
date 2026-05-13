@@ -187,14 +187,9 @@ export const typeDefs = gql`
   }
 
   type Mutation {
-    # Auth & Login (Figma Flow)
+    # Unified Login for everyone (Super Admin, Admin, Member)
     adminLogin(
-      name: String!
-      role: String!           # "Super Admin", "Admin", or "Sub Admin"
-      state: String           # For Super Admin (Thalaivar)
-      district: String        # For Admin & Sub Admin
-      constituency: String    # For Admin & Sub Admin
-      town: String            # For Sub Admin (Ooru Thalaivar)
+      phone: String!
       password: String!
     ): AuthResponse!
 

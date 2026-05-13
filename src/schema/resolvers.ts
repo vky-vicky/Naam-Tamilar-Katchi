@@ -191,60 +191,39 @@ export const resolvers = {
   },
 
   Mutation: {
-    adminLogin: async (_: any, { name, role, state, district, constituency, town, password }: any) => {
-      if (!name || !role || !password) return { error: "Please fill all required fields" };
+    adminLogin: async (_: any, { phone, password }: any) => {
+      if (!phone || !password) return { error: "Please provide phone and password" };
 
-      const formattedRole = role.toUpperCase().replace(' ', '_');
-
-      // 1. SUPER ADMIN
-      if (formattedRole === 'SUPER_ADMIN') {
-        const user = await (prisma as any).user.findFirst({ where: { role: 'SUPER_ADMIN', name: name } });
-        if (user && (user.password === password || password === 'admin123')) {
-          return { 
-            token: "super_admin_token", 
-            user: { ...user, approvalStatus: user.approvalStatus || 'APPROVED' } 
-          };
-        }
-        return { error: "Invalid Credentials" };
-      }
-
-      // 2. ADMIN & SUB ADMIN (Location Based)
-      const locationType = formattedRole === 'ADMIN' ? 'TALUK' : 'AREA';
-      const searchName = formattedRole === 'ADMIN' ? constituency : town;
-
-      const loc = await (prisma as any).location.findFirst({
-        where: { 
-          name: { equals: searchName.trim(), mode: 'insensitive' }, 
-          type: locationType
-        },
+      // 1. Check in User table (Super Admin, Admin, Sub Admin)
+      let user = await (prisma as any).user.findFirst({
+        where: { phone }
       });
 
-      if (!loc) return { error: "Location mismatch" };
-      if (loc.password !== password && password !== 'admin123') return { error: "Invalid Password" };
-
-      // Find or Create the Administrative User for this location
-      let user = await (prisma as any).user.findFirst({ 
-        where: { 
-          locationId: loc.id, 
-          role: formattedRole === 'ADMIN' ? 'ADMIN' : (formattedRole === 'SUB_ADMIN' ? 'SUB_ADMIN' : 'MEMBER')
-        } 
-      });
+      // 2. If not found in User, check in Member table
+      let member = null;
       if (!user) {
-        user = await (prisma as any).user.create({
-          data: {
-            name,
-            phone: `SYSTEM_${loc.id}`,
-            password: password,
-            role: formattedRole as UserRole,
-            locationId: loc.id,
-            approvalStatus: 'APPROVED'
-          }
+        member = await (prisma as any).member.findFirst({
+          where: { phone }
         });
       }
 
-      return { 
-        token: `${formattedRole.toLowerCase()}_token`, 
-        user 
+      const finalUser = user || member;
+      if (!finalUser) return { error: "User not found" };
+
+      // 3. Verify Password
+      if (finalUser.password !== password && password !== 'admin123') {
+        return { error: "Invalid password" };
+      }
+
+      // 4. Unified response (Using tokens based on role)
+      const role = (finalUser as any).role || 'MEMBER';
+      return {
+        token: `${role.toLowerCase()}_token`,
+        user: {
+          ...finalUser,
+          role: role,
+          approvalStatus: (finalUser as any).approvalStatus || 'APPROVED'
+        }
       };
     },
 
