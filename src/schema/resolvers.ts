@@ -35,7 +35,24 @@ async function resolveLocationId(districtName: string, constituencyName: string,
 
 export const resolvers = {
   Query: {
-    me: (_: any, __: any, context: any) => context.user,
+    me: async (_: any, __: any, context: any) => {
+      if (!context.user) return null;
+      
+      // If it's a Member, return them as a User-compatible object
+      if (context.user.role === 'MEMBER') {
+        const member = await (prisma as any).member.findUnique({
+          where: { id: context.user.id },
+          include: { location: true }
+        });
+        return member;
+      }
+
+      // If it's an Admin (User table)
+      return (prisma as any).user.findUnique({
+        where: { id: context.user.id },
+        include: { location: true }
+      });
+    },
     
     getLocationList: async (_: any, { parentId, type }: any) => {
       const where: any = {};
@@ -259,7 +276,7 @@ export const resolvers = {
     },
 
     addMember: async (_: any, args: any, context: any) => {
-      const { professionId, username, password, ...rest } = args;
+      const { professionId, password, ...rest } = args;
 
       // For testing: Find any Super Admin as creator if not logged in
       let creatorId = context?.user?.id;
@@ -275,8 +292,7 @@ export const resolvers = {
         createdById: creatorId || null
       };
 
-      // Add username/password ONLY if they are recognized (avoiding sync errors)
-      if (username) memberData.username = username;
+      // Add password ONLY if it exists (avoiding sync errors)
       if (password) memberData.password = password;
 
       const member = await (prisma as any).member.create({

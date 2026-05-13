@@ -32,7 +32,6 @@ model Member {
   id           Int        @id @default(autoincrement())
   name         String
   phone        String     @unique
-  username     String?    @unique
   password     String?
   bloodGroup            String?
   allergies             String?
@@ -70,7 +69,6 @@ model User {
   id              Int            @id @default(autoincrement())
   name            String
   phone           String         @unique
-  username        String?        @unique
   password        String
   role            UserRole       @default(MEMBER)
   approvalStatus  ApprovalStatus @default(PENDING)

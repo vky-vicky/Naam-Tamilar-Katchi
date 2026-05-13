@@ -88,7 +88,6 @@ export const typeDefs = gql`
     id: Int!
     name: String!
     phone: String!
-    username: String
     role: UserRole!
     approvalStatus: ApprovalStatus!
     location: Location
@@ -199,7 +198,6 @@ export const typeDefs = gql`
     createUser(
       name: String!
       phone: String!
-      username: String!
       password: String!
       role: UserRole!
       locationId: Int!     # This will be District ID for Admin, Area ID for Sub Admin
@@ -208,7 +206,6 @@ export const typeDefs = gql`
     addMember(
       name: String!
       phone: String!
-      username: String!    # Mandatory for login
       password: String!    # Mandatory for login
       bloodGroup: String
       professionId: Int
