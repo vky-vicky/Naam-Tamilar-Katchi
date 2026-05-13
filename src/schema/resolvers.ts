@@ -276,9 +276,20 @@ export const resolvers = {
     },
 
     addMember: async (_: any, args: any, context: any) => {
-      const { professionId, password, ...rest } = args;
+      const { professionName, password, ...rest } = args;
 
-      // For testing: Find any Super Admin as creator if not logged in
+      // 1. Handle Profession (Find or Create)
+      let professionId = null;
+      if (professionName) {
+        const profession = await (prisma as any).profession.upsert({
+          where: { name: professionName },
+          update: {},
+          create: { name: professionName }
+        });
+        professionId = profession.id;
+      }
+
+      // 2. Creator Fallback for testing
       let creatorId = context?.user?.id;
       if (!creatorId) {
         const fallback = await (prisma as any).user.findFirst({ where: { role: 'SUPER_ADMIN' } });
@@ -288,11 +299,10 @@ export const resolvers = {
       const memberData: any = {
         ...rest,
         approvalStatus: 'PENDING',
-        professionId: professionId || null,
+        professionId: professionId,
         createdById: creatorId || null
       };
 
-      // Add password ONLY if it exists (avoiding sync errors)
       if (password) memberData.password = password;
 
       const member = await (prisma as any).member.create({

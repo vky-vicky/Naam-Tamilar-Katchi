@@ -206,10 +206,10 @@ export const typeDefs = gql`
     addMember(
       name: String!
       phone: String!
-      password: String!    # Mandatory for login
+      password: String!
+      locationId: Int!
       bloodGroup: String
-      professionId: Int
-      locationId: Int!     # This will be the Area ID (Select Area)
+      professionName: String   # User can type their profession directly
     ): Member!
     
     updateMember(
