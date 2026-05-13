@@ -71,9 +71,6 @@ export const typeDefs = gql`
     name: String!
     phone: String # Redacted for restricted roles
     bloodGroup: String
-    allergies: String
-    conditions: String
-    emergencyContact: String
     role: String!
     professionId: Int
     profession: Profession
@@ -217,11 +214,8 @@ export const typeDefs = gql`
       name: String, 
       phone: String, 
       bloodGroup: String, 
-      allergies: String,
-      conditions: String,
-      emergencyContact: String,
       role: String,
-      professionId: Int, 
+      professionName: String, 
       locationId: Int
     ): Member!
     

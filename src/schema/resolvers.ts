@@ -325,10 +325,23 @@ export const resolvers = {
     },
 
     updateMember: async (_: any, args: any) => {
-      const { id, ...data } = args;
+      const { id, professionName, ...data } = args;
+      
+      let updateData: any = { ...data };
+
+      // Handle Profession update if name provided
+      if (professionName) {
+        const profession = await (prisma as any).profession.upsert({
+          where: { name: professionName },
+          update: {},
+          create: { name: professionName }
+        });
+        updateData.professionId = profession.id;
+      }
+
       return (prisma as any).member.update({
         where: { id },
-        data,
+        data: updateData,
         include: { location: true, profession: true }
       });
     },
