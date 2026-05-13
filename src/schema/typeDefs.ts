@@ -72,7 +72,6 @@ export const typeDefs = gql`
     phone: String # Redacted for restricted roles
     bloodGroup: String
     role: String!
-    role: String!
     profession: String
     location: Location!
     isActive: Boolean!

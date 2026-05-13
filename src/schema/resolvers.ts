@@ -69,7 +69,7 @@ export const resolvers = {
       return (prisma as any).location.findUnique({ where: { id } });
     },
 
-    members: async (_: any, { locationId, professionId, bloodGroup, search, limit = 50, offset = 0, approvalStatus }: any, context: any) => {
+    members: async (_: any, { locationId, professionName, bloodGroup, search, limit = 50, offset = 0, approvalStatus }: any, context: any) => {
       let filter: any = {};
       
       if (approvalStatus) filter.approvalStatus = approvalStatus;
