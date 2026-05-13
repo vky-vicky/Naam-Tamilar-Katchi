@@ -73,7 +73,9 @@ export const resolvers = {
       let filter: any = {};
       
       if (approvalStatus) filter.approvalStatus = approvalStatus;
-      if (professionId) filter.professionId = professionId;
+      if (professionName) {
+        filter.profession = { name: professionName };
+      }
       if (bloodGroup) filter.bloodGroup = bloodGroup;
       
       if (search) {
@@ -449,7 +451,8 @@ export const resolvers = {
   Member: {
     profession: async (parent: any) => {
       if (!parent.professionId) return null;
-      return (prisma as any).profession.findUnique({ where: { id: parent.professionId } });
+      const prof = await (prisma as any).profession.findUnique({ where: { id: parent.professionId } });
+      return prof?.name || null;
     },
     activityHistory: async (parent: any) => {
       const [events, requests] = await Promise.all([

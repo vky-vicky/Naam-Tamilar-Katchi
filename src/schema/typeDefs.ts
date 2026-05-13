@@ -72,8 +72,8 @@ export const typeDefs = gql`
     phone: String # Redacted for restricted roles
     bloodGroup: String
     role: String!
-    professionId: Int
-    profession: Profession
+    role: String!
+    profession: String
     location: Location!
     isActive: Boolean!
     approvalStatus: ApprovalStatus!
@@ -173,7 +173,7 @@ export const typeDefs = gql`
     me: User
     getLocationList(parentId: Int, type: LocationType): [Location!]!
     getLocationDetails(id: Int!): Location
-    members(locationId: Int, professionId: Int, bloodGroup: String, search: String, limit: Int, offset: Int, approvalStatus: ApprovalStatus): [Member!]!
+    members(locationId: Int, professionName: String, bloodGroup: String, search: String, limit: Int, offset: Int, approvalStatus: ApprovalStatus): [Member!]!
     member(id: Int!): Member
     dashboardStats(locationId: Int): DashboardStats!
     recentActivity(locationId: Int, limit: Int): [Activity!]!
