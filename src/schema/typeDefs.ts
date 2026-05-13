@@ -175,8 +175,8 @@ export const typeDefs = gql`
 
   type Query {
     me: User
-    locations(parentId: Int, type: LocationType): [Location!]!
-    location(id: Int!): Location
+    getLocationList(parentId: Int, type: LocationType): [Location!]!
+    getLocationDetails(id: Int!): Location
     members(locationId: Int, professionId: Int, bloodGroup: String, search: String, limit: Int, offset: Int, approvalStatus: ApprovalStatus): [Member!]!
     member(id: Int!): Member
     dashboardStats(locationId: Int): DashboardStats!
