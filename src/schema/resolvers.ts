@@ -191,37 +191,39 @@ export const resolvers = {
   },
 
   Mutation: {
-    adminLogin: async (_: any, { phone, password }: any) => {
+    adminLogin: async (_: any, { phone, password, role }: any) => {
       if (!phone || !password) return { error: "Please provide phone and password" };
 
-      // 1. Check in User table (Super Admin, Admin, Sub Admin)
-      let user = await (prisma as any).user.findFirst({
-        where: { phone }
-      });
-
-      // 2. If not found in User, check in Member table
+      // 1. Find User or Member
+      let user = await (prisma as any).user.findFirst({ where: { phone } });
       let member = null;
       if (!user) {
-        member = await (prisma as any).member.findFirst({
-          where: { phone }
-        });
+        member = await (prisma as any).member.findFirst({ where: { phone } });
       }
 
       const finalUser = user || member;
       if (!finalUser) return { error: "User not found" };
 
-      // 3. Verify Password
+      // 2. Verify Password
       if (finalUser.password !== password && password !== 'admin123') {
         return { error: "Invalid password" };
       }
 
-      // 4. Unified response (Using tokens based on role)
-      const role = (finalUser as any).role || 'MEMBER';
+      // 3. Role Validation (Match with Figma Buttons)
+      const dbRole = (finalUser as any).role || 'MEMBER';
+      if (role) {
+        const formattedInputRole = role.toUpperCase().replace(' ', '_');
+        if (dbRole !== formattedInputRole) {
+          return { error: `You are not registered as a ${role}` };
+        }
+      }
+
+      // 4. Success Response
       return {
-        token: `${role.toLowerCase()}_token`,
+        token: `${dbRole.toLowerCase()}_token`,
         user: {
           ...finalUser,
-          role: role,
+          role: dbRole,
           approvalStatus: (finalUser as any).approvalStatus || 'APPROVED'
         }
       };

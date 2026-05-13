@@ -187,10 +187,11 @@ export const typeDefs = gql`
   }
 
   type Mutation {
-    # Unified Login for everyone (Super Admin, Admin, Member)
+    # Unified Login with Role Selection (Figma Flow)
     adminLogin(
       phone: String!
       password: String!
+      role: String           # "Super Admin", "Admin", "Sub Admin", or "Member"
     ): AuthResponse!
 
 
