@@ -216,6 +216,30 @@ export const resolvers = {
         orderBy: { name: 'asc' }
       });
     },
+
+    getEventList: async (_: any, { locationId, status }: any) => {
+      const where: any = {};
+      if (locationId) where.locationId = locationId;
+      if (status) where.status = status;
+      
+      return (prisma as any).event.findMany({
+        where,
+        include: { location: true, createdBy: true },
+        orderBy: { date: 'desc' }
+      });
+    },
+
+    getEmergencyRequestList: async (_: any, { locationId, status }: any) => {
+      const where: any = {};
+      if (locationId) where.locationId = locationId;
+      if (status) where.status = status;
+      
+      return (prisma as any).emergencyRequest.findMany({
+        where,
+        include: { location: true, member: true, createdBy: true },
+        orderBy: { createdAt: 'desc' }
+      });
+    },
   },
 
   Mutation: {

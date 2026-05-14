@@ -180,6 +180,8 @@ export const typeDefs = gql`
     communityFeed(locationId: Int): [Post!]!
     notifications(locationId: Int): [Notification!]!
     getUserList(locationId: Int, role: UserRole): [User!]!
+    getEventList(locationId: Int, status: EventStatus): [Event!]!
+    getEmergencyRequestList(locationId: Int, status: RequestStatus): [EmergencyRequest!]!
   }
 
   type Mutation {
