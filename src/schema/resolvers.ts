@@ -282,31 +282,34 @@ export const resolvers = {
     },
 
     createUser: async (_: any, args: any, context: any) => {
+      const { professionName, ...rest } = args;
+
+      // 1. Handle Profession
+      let professionId = null;
+      if (professionName) {
+        const profession = await (prisma as any).profession.upsert({
+          where: { name: professionName },
+          update: {},
+          create: { name: professionName }
+        });
+        professionId = profession.id;
+      }
+
+      // 2. Creator Hierarchy logic
       let creatorId = context?.user?.id;
-      
       if (!creatorId) {
-        // Find or Create a System Admin to satisfy the foreign key
-        let systemAdmin = await (prisma as any).user.findFirst({ where: { role: 'SUPER_ADMIN' } });
-        if (!systemAdmin) {
-          systemAdmin = await (prisma as any).user.create({
-            data: {
-              name: "System Admin",
-              phone: "0000000000",
-              password: "admin123",
-              role: "SUPER_ADMIN",
-              approvalStatus: "APPROVED"
-            }
-          });
-        }
-        creatorId = systemAdmin.id;
+        const systemAdmin = await (prisma as any).user.findFirst({ where: { role: 'SUPER_ADMIN' } });
+        creatorId = systemAdmin?.id;
       }
 
       return (prisma as any).user.create({
         data: {
-          ...args,
-          approvalStatus: 'APPROVED',
-          parentId: Number(creatorId)
-        }
+          ...rest,
+          professionId,
+          parentId: creatorId,
+          approvalStatus: 'APPROVED'
+        },
+        include: { location: true }
       });
     },
 

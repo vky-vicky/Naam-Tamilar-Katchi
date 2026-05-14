@@ -199,7 +199,9 @@ export const typeDefs = gql`
       phone: String!
       password: String!
       role: UserRole!
-      locationId: Int!     # This will be District ID for Admin, Area ID for Sub Admin
+      locationId: Int!
+      bloodGroup: String
+      professionName: String
     ): User!
 
     addMember(
