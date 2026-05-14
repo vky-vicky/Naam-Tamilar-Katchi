@@ -352,10 +352,17 @@ export const resolvers = {
       // Permission Check (Only Admins/SuperAdmins can approve)
       if (context?.user?.role === 'MEMBER') throw new Error("Unauthorized");
 
+      const data: any = { approvalStatus: status };
+      
+      // Track who approved the member
+      if (status === 'APPROVED' && context?.user?.id) {
+        data.approvedById = context.user.id;
+      }
+
       return (prisma as any).member.update({
         where: { id },
-        data: { approvalStatus: status },
-        include: { location: true }
+        data: data,
+        include: { location: true, approvedBy: true }
       });
     },
 

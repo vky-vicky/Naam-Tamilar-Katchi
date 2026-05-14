@@ -49,6 +49,8 @@ model Member {
   updatedAt      DateTime   @updatedAt
   createdById    Int?
   createdBy      User?      @relation("MemberCreator", fields: [createdById], references: [id])
+  approvedById   Int?
+  approvedBy     User?      @relation("MemberApprover", fields: [approvedById], references: [id])
   messageLogs MessageLog[]
   requests    EmergencyRequest[]
   eventResponses EventResponse[]
@@ -84,6 +86,7 @@ model User {
   createdEvents   Event[]
   createdRequests EmergencyRequest[]
   createdMembers  Member[]       @relation("MemberCreator")
+  approvedMembers Member[]       @relation("MemberApprover")
   location        Location?      @relation(fields: [locationId], references: [id])
 
   @@index([role])
