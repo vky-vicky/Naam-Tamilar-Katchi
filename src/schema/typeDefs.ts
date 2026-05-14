@@ -179,6 +179,7 @@ export const typeDefs = gql`
     professions: [Profession!]!
     communityFeed(locationId: Int): [Post!]!
     notifications(locationId: Int): [Notification!]!
+    getUserList(locationId: Int, role: UserRole): [User!]!
   }
 
   type Mutation {

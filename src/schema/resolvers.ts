@@ -198,13 +198,22 @@ export const resolvers = {
 
     notifications: async (_: any, { locationId }: any) => {
       const where: any = {};
-      if (locationId) {
-        const allLocationIds = [locationId, ...(await getChildLocationIds(locationId))];
-        where.locationId = { in: allLocationIds };
-      }
+      if (locationId) where.locationId = locationId;
       return (prisma as any).notification.findMany({
         where,
-        orderBy: { createdAt: 'desc' },
+        orderBy: { createdAt: 'desc' }
+      });
+    },
+
+    getUserList: async (_: any, { locationId, role }: any) => {
+      const where: any = {};
+      if (locationId) where.locationId = locationId;
+      if (role) where.role = role;
+      
+      return (prisma as any).user.findMany({
+        where,
+        include: { location: true },
+        orderBy: { name: 'asc' }
       });
     },
   },
