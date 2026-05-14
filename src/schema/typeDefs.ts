@@ -172,8 +172,8 @@ export const typeDefs = gql`
     me: User
     getLocationList(parentId: Int, type: LocationType): [Location!]!
     getLocationDetails(id: Int!): Location
-    members(locationId: Int, professionName: String, bloodGroup: String, search: String, limit: Int, offset: Int, approvalStatus: ApprovalStatus): [Member!]!
-    member(id: Int!): Member
+    getMemberList(locationId: Int, professionName: String, bloodGroup: String, search: String, limit: Int, offset: Int, approvalStatus: ApprovalStatus): [Member!]!
+    getMemberDetails(id: Int!): Member
     dashboardStats(locationId: Int): DashboardStats!
     recentActivity(locationId: Int, limit: Int): [Activity!]!
     professions: [Profession!]!

@@ -69,7 +69,7 @@ export const resolvers = {
       return (prisma as any).location.findUnique({ where: { id } });
     },
 
-    members: async (_: any, { locationId, professionName, bloodGroup, search, limit = 50, offset = 0, approvalStatus }: any, context: any) => {
+    getMemberList: async (_: any, { locationId, professionName, bloodGroup, search, limit = 50, offset = 0, approvalStatus }: any, context: any) => {
       let filter: any = {};
       
       if (approvalStatus) filter.approvalStatus = approvalStatus;
@@ -153,7 +153,7 @@ export const resolvers = {
       };
     },
 
-    member: async (_: any, { id }: any) => {
+    getMemberDetails: async (_: any, { id }: any) => {
       return (prisma as any).member.findUnique({
         where: { id },
         include: { location: true, profession: true }
