@@ -332,6 +332,7 @@ export const resolvers = {
         password: rest.password,
         role: rest.role,
         bloodGroup: rest.bloodGroup,
+        professionName: professionName, // Save as simple string
         approvalStatus: 'APPROVED'
       };
 
@@ -341,10 +342,6 @@ export const resolvers = {
 
       if (finalLocationId) {
         userData.location = { connect: { id: finalLocationId } };
-      }
-
-      if (professionId) {
-        userData.profession = { connect: { id: professionId } };
       }
 
       return (prisma as any).user.create({
