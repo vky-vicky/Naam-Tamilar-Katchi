@@ -256,6 +256,24 @@ export const resolvers = {
         orderBy: { createdAt: 'desc' }
       });
     },
+
+    getLocationList: async (_: any, { parentId, type }: any) => {
+      const where: any = {};
+      if (parentId) where.parentId = parentId;
+      if (type) where.type = type;
+
+      return (prisma as any).location.findMany({
+        where,
+        orderBy: { name: 'asc' }
+      });
+    },
+
+    getLocationDetails: async (_: any, { id }: any) => {
+      return (prisma as any).location.findUnique({
+        where: { id },
+        include: { parent: true, children: true }
+      });
+    },
   },
 
   Mutation: {
