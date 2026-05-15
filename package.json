@@ -36,6 +36,7 @@
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^4.22.1",
+    "firebase-admin": "^13.10.0",
     "graphql": "^16.13.2",
     "graphql-tag": "^2.12.6",
     "pg": "^8.20.0"

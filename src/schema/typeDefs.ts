@@ -250,6 +250,7 @@ export const typeDefs = gql`
     # Community & Notifications
     createPost(content: String!, image: String, authorName: String!, authorRole: String, locationId: Int!): Post!
     createNotification(title: String!, message: String!, type: String!, time: String, locationId: Int!): Notification!
+    updateFcmToken(token: String!): Boolean!
 
 
   }

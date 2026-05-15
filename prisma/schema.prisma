@@ -51,6 +51,7 @@ model Member {
   createdBy      User?      @relation("MemberCreator", fields: [createdById], references: [id])
   approvedById   Int?
   approvedBy     User?      @relation("MemberApprover", fields: [approvedById], references: [id])
+  fcmToken       String?
   messageLogs MessageLog[]
   requests    EmergencyRequest[]
   eventResponses EventResponse[]
@@ -87,6 +88,7 @@ model User {
   createdRequests EmergencyRequest[]
   createdMembers  Member[]       @relation("MemberCreator")
   approvedMembers Member[]       @relation("MemberApprover")
+  fcmToken        String?
   location        Location?      @relation(fields: [locationId], references: [id])
 
   @@index([role])

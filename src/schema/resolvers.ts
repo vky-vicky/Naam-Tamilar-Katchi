@@ -521,14 +521,28 @@ export const resolvers = {
 
     createNotification: async (_: any, args: any) => {
       return (prisma as any).notification.create({
-        data: {
-          title: args.title,
-          message: args.message,
-          type: args.type,
-          time: args.time,
-          locationId: args.locationId
-        }
+        data: args
       });
+    },
+
+    updateFcmToken: async (_: any, { token }: any, context: any) => {
+      if (!context.user) throw new Error("Unauthorized");
+      
+      const id = Number(context.user.id);
+      
+      if (context.user.role === 'MEMBER') {
+        await (prisma as any).member.update({
+          where: { id },
+          data: { fcmToken: token }
+        });
+      } else {
+        await (prisma as any).user.update({
+          where: { id },
+          data: { fcmToken: token }
+        });
+      }
+      
+      return true;
     },
   },
 
