@@ -302,13 +302,29 @@ export const resolvers = {
         creatorId = systemAdmin?.id;
       }
 
+      const userData: any = {
+        name: rest.name,
+        phone: rest.phone,
+        password: rest.password,
+        role: rest.role,
+        bloodGroup: rest.bloodGroup,
+        approvalStatus: 'APPROVED'
+      };
+
+      if (creatorId) {
+        userData.parent = { connect: { id: creatorId } };
+      }
+
+      if (rest.locationId) {
+        userData.location = { connect: { id: rest.locationId } };
+      }
+
+      if (professionId) {
+        userData.profession = { connect: { id: professionId } };
+      }
+
       return (prisma as any).user.create({
-        data: {
-          ...rest,
-          professionId,
-          parentId: creatorId,
-          approvalStatus: 'APPROVED'
-        },
+        data: userData,
         include: { location: true }
       });
     },
