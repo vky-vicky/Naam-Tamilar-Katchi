@@ -206,7 +206,11 @@ export const typeDefs = gql`
       phone: String!
       password: String!
       role: UserRole!
-      locationId: Int!
+      locationId: Int
+      districtId: Int
+      talukId: Int
+      areaId: Int
+      streetId: Int
       bloodGroup: String
       professionName: String
     ): User!
@@ -215,7 +219,11 @@ export const typeDefs = gql`
       name: String!
       phone: String!
       password: String!
-      locationId: Int!
+      locationId: Int
+      districtId: Int
+      talukId: Int
+      areaId: Int
+      streetId: Int
       bloodGroup: String
       professionName: String   # User can type their profession directly
     ): Member!

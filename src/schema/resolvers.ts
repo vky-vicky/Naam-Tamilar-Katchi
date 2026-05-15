@@ -298,7 +298,10 @@ export const resolvers = {
     },
 
     createUser: async (_: any, args: any, context: any) => {
-      const { professionName, ...rest } = args;
+      const { professionName, streetId, areaId, talukId, districtId, locationId, ...rest } = args;
+
+      // Determine the most specific location ID
+      const finalLocationId = streetId || areaId || talukId || districtId || locationId;
 
       // 1. Handle Profession
       let professionId = null;
@@ -331,8 +334,8 @@ export const resolvers = {
         userData.parent = { connect: { id: creatorId } };
       }
 
-      if (rest.locationId) {
-        userData.location = { connect: { id: rest.locationId } };
+      if (finalLocationId) {
+        userData.location = { connect: { id: finalLocationId } };
       }
 
       if (professionId) {
@@ -346,7 +349,10 @@ export const resolvers = {
     },
 
     addMember: async (_: any, args: any, context: any) => {
-      const { professionName, password, ...rest } = args;
+      const { professionName, password, streetId, areaId, talukId, districtId, locationId, ...rest } = args;
+
+      // Determine the most specific location ID
+      const finalLocationId = streetId || areaId || talukId || districtId || locationId;
 
       // 1. Handle Profession (Find or Create)
       let professionId = null;
@@ -369,6 +375,7 @@ export const resolvers = {
       const memberData: any = {
         ...rest,
         approvalStatus: 'PENDING',
+        locationId: finalLocationId,
         professionId: professionId,
         createdById: creatorId || null
       };
