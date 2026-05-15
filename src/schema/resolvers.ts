@@ -66,7 +66,10 @@ export const resolvers = {
     },
 
     getLocationDetails: async (_: any, { id }: any) => {
-      return (prisma as any).location.findUnique({ where: { id } });
+      return (prisma as any).location.findUnique({
+        where: { id },
+        include: { parent: true, children: true }
+      });
     },
 
     getMemberList: async (_: any, { locationId, professionName, bloodGroup, search, limit = 50, offset = 0, approvalStatus }: any, context: any) => {
@@ -257,23 +260,7 @@ export const resolvers = {
       });
     },
 
-    getLocationList: async (_: any, { parentId, type }: any) => {
-      const where: any = {};
-      if (parentId) where.parentId = parentId;
-      if (type) where.type = type;
 
-      return (prisma as any).location.findMany({
-        where,
-        orderBy: { name: 'asc' }
-      });
-    },
-
-    getLocationDetails: async (_: any, { id }: any) => {
-      return (prisma as any).location.findUnique({
-        where: { id },
-        include: { parent: true, children: true }
-      });
-    },
   },
 
   Mutation: {
