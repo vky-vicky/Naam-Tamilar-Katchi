@@ -166,7 +166,14 @@ export const typeDefs = gql`
     createdAt: String!
   }
 
-  union Activity = Event | EmergencyRequest
+  type MemberApprovalActivity {
+    id: Int!
+    memberName: String!
+    approvedByName: String!
+    time: String!
+  }
+
+  union Activity = Event | EmergencyRequest | MemberApprovalActivity
 
   type Query {
     me: User

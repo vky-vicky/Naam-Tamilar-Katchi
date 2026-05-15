@@ -167,17 +167,33 @@ export const resolvers = {
         filter.locationId = { in: allLocationIds };
       }
 
-      const [events, requests] = await Promise.all([
+      const [events, requests, approvals] = await Promise.all([
         (prisma as any).event.findMany({ where: filter, take: limit, orderBy: { createdAt: 'desc' } }),
         (prisma as any).emergencyRequest.findMany({ where: filter, take: limit, orderBy: { createdAt: 'desc' }, include: { member: true } }),
+        (prisma as any).member.findMany({ 
+          where: { ...filter, approvalStatus: 'APPROVED', approvedById: { not: null } }, 
+          take: limit, 
+          orderBy: { updatedAt: 'desc' },
+          include: { approvedBy: true }
+        }),
       ]);
 
-      const activities = [...events, ...requests].sort((a: any, b: any) => b.createdAt.getTime() - a.createdAt.getTime()).slice(0, limit);
-      
-      return activities.map((a: any) => ({
-        ...a,
-        __typename: 'title' in a && 'status' in a && !('memberId' in a) ? 'Event' : 'EmergencyRequest'
-      }));
+      const activities = [
+        ...events.map((e: any) => ({ ...e, __typename: 'Event' })),
+        ...requests.map((r: any) => ({ ...r, __typename: 'EmergencyRequest' })),
+        ...approvals.map((a: any) => ({
+          id: a.id,
+          memberName: a.name,
+          approvedByName: a.approvedBy?.name || 'Admin',
+          time: a.updatedAt.toISOString(),
+          createdAt: a.updatedAt,
+          __typename: 'MemberApprovalActivity'
+        }))
+      ];
+
+      return activities.sort((a: any, b: any) => 
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      ).slice(0, limit);
     },
 
     professions: async () => {
