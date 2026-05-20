@@ -154,6 +154,17 @@ export const typeDefs = gql`
     authorName: String!
     authorRole: String
     likes: Int!
+    comments: [Comment!]!
+    commentCount: Int!
+    createdAt: String!
+  }
+
+  type Comment {
+    id: Int!
+    content: String!
+    authorName: String!
+    authorRole: String
+    postId: Int!
     createdAt: String!
   }
 
@@ -249,6 +260,8 @@ export const typeDefs = gql`
 
     # Community & Notifications
     createPost(content: String!, image: String, authorName: String!, authorRole: String, locationId: Int!): Post!
+    likePost(id: Int!): Post!
+    addComment(postId: Int!, content: String!, authorName: String!, authorRole: String): Comment!
     createNotification(title: String!, message: String!, type: String!, time: String, locationId: Int!): Notification!
     updateFcmToken(token: String!): Boolean!
 

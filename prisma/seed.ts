@@ -93,12 +93,17 @@ async function main() {
     const existingCount = await prisma.member.count({ where: { locationId: street.id } });
     if (existingCount === 0) {
       for (let i = 0; i < 10; i++) {
+        const bg = ['A+', 'O+', 'B+'][Math.floor(Math.random() * 3)] || 'O+';
+        const randomProf = professions[Math.floor(Math.random() * professions.length)];
+        const profId = randomProf ? randomProf.id : null;
+        const nameVal = realisticNames[i] ? `${realisticNames[i]} - ${sName}` : `Member - ${sName}`;
+
         await prisma.member.create({
           data: {
-            name: `${realisticNames[i]} - ${sName}`,
+            name: nameVal,
             phone: `9${Math.floor(100000000 + Math.random() * 900000000)}`,
-            bloodGroup: ['A+', 'O+', 'B+'][Math.floor(Math.random() * 3)],
-            professionId: professions[Math.floor(Math.random() * professions.length)].id,
+            bloodGroup: bg,
+            professionId: profId,
             locationId: street.id,
             role: 'Member',
             approvalStatus: i < 5 ? 'APPROVED' : 'PENDING', // 5 approved, 5 pending

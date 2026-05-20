@@ -519,6 +519,28 @@ export const resolvers = {
       });
     },
 
+    likePost: async (_: any, { id }: any) => {
+      return (prisma as any).post.update({
+        where: { id },
+        data: {
+          likes: {
+            increment: 1
+          }
+        }
+      });
+    },
+
+    addComment: async (_: any, { postId, content, authorName, authorRole }: any) => {
+      return (prisma as any).comment.create({
+        data: {
+          postId,
+          content,
+          authorName,
+          authorRole
+        }
+      });
+    },
+
     createNotification: async (_: any, args: any) => {
       return (prisma as any).notification.create({
         data: args
@@ -610,5 +632,10 @@ export const resolvers = {
       if ('memberId' in obj) return 'EmergencyRequest';
       return 'Event';
     },
+  },
+
+  Post: {
+    comments: (parent: any) => (prisma as any).comment.findMany({ where: { postId: parent.id }, orderBy: { createdAt: 'desc' } }),
+    commentCount: (parent: any) => (prisma as any).comment.count({ where: { postId: parent.id } })
   },
 };
