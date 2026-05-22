@@ -78,6 +78,9 @@ export const typeDefs = gql`
     approvalStatus: ApprovalStatus!
     createdAt: String!
     activityHistory: [Activity!]!
+    allergies: String
+    conditions: String
+    emergencyContact: String
   }
 
   type User {

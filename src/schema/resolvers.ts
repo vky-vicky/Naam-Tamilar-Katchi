@@ -1,5 +1,6 @@
 import { UserRole } from '@prisma/client';
 import prisma from '../db.js';
+import { whatsappService } from '../services/whatsapp.service.js';
 
 // Helper to get all child location IDs recursively
 async function getChildLocationIds(locationId: number): Promise<number[]> {
@@ -463,7 +464,7 @@ export const resolvers = {
       }
 
       // 4. Create the event with a GUARANTEED valid creatorId
-      return (prisma as any).event.create({
+      const event = await (prisma as any).event.create({
         data: {
           title,
           description,
@@ -473,6 +474,41 @@ export const resolvers = {
         },
         include: { location: true, createdBy: true }
       });
+
+      try {
+        // 5. Create database Notification
+        await (prisma as any).notification.create({
+          data: {
+            title: `New Event: ${title}`,
+            message: `${description || 'A new event has been scheduled.'} Date: ${new Date(date).toLocaleDateString()}`,
+            type: 'EVENT',
+            locationId: Number(locationId),
+            time: 'Just now'
+          }
+        });
+
+        // 6. Retrieve phone numbers of all active members in this location & all its children
+        const allLocationIds = [Number(locationId), ...(await getChildLocationIds(Number(locationId)))];
+        const members = await (prisma as any).member.findMany({
+          where: {
+            locationId: { in: allLocationIds },
+            isActive: true
+          },
+          select: { phone: true }
+        });
+
+        const phoneNumbers = members.map((m: any) => m.phone).filter(Boolean);
+        if (phoneNumbers.length > 0) {
+          await whatsappService.sendMessage(
+            phoneNumbers,
+            `📢 New Event Alert!\n🌟 *${title}*\n📅 Date: ${new Date(date).toLocaleDateString()}\n📍 Location: ${event.location.name}\n\nJoin us and respond on the app!`
+          );
+        }
+      } catch (error) {
+        console.error('Error sending event creation notifications:', error);
+      }
+
+      return event;
     },
 
     respondToEvent: async (_: any, { eventId, memberId, status }: any) => {
