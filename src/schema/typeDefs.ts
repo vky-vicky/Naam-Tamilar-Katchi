@@ -46,6 +46,12 @@ export const typeDefs = gql`
     SUSPENDED
   }
 
+  enum CampaignStatus {
+    DRAFT
+    SENT
+    FAILED
+  }
+
 
   type Location {
     id: Int!
@@ -69,6 +75,7 @@ export const typeDefs = gql`
   type Member {
     id: Int!
     name: String!
+    surname: String
     phone: String # Redacted for restricted roles
     bloodGroup: String
     role: String!
@@ -81,16 +88,34 @@ export const typeDefs = gql`
     allergies: String
     conditions: String
     emergencyContact: String
+    createdBy: User
+    image: String
   }
 
   type User {
     id: Int!
     name: String!
+    surname: String
     phone: String!
     role: UserRole!
     approvalStatus: ApprovalStatus!
     location: Location
     isActive: Boolean!
+  }
+
+  type Campaign {
+    id: Int!
+    title: String!
+    message: String!
+    status: CampaignStatus!
+    createdBy: User!
+    targets: [CampaignTarget!]!
+    createdAt: String!
+  }
+
+  type CampaignTarget {
+    id: Int!
+    location: Location!
   }
 
 
@@ -203,20 +228,22 @@ export const typeDefs = gql`
     getUserList(locationId: Int, role: UserRole): [User!]!
     getEventList(locationId: Int, status: EventStatus): [Event!]!
     getEmergencyRequestList(locationId: Int, status: RequestStatus): [EmergencyRequest!]!
+    getCommunities: [Community!]!
+    getCommunityPosts(communityId: Int!): [CommunityPost!]!
   }
 
   type Mutation {
-    # Unified Login with Role Selection (Figma Flow)
+    # Login — just phone + password, role auto-detected from DB
     adminLogin(
       phone: String!
       password: String!
-      role: String           # "Super Admin", "Admin", "Sub Admin", or "Member"
     ): AuthResponse!
 
 
     # User & Member Creation (Figma Flow)
     createUser(
       name: String!
+      surname: String
       phone: String!
       password: String!
       role: UserRole!
@@ -231,6 +258,7 @@ export const typeDefs = gql`
 
     addMember(
       name: String!
+      surname: String
       phone: String!
       password: String!
       locationId: Int
@@ -240,22 +268,28 @@ export const typeDefs = gql`
       streetId: Int
       bloodGroup: String
       professionName: String   # User can type their profession directly
+      image: String
     ): Member!
     
     updateMember(
       id: Int!, 
       name: String, 
+      surname: String,
       phone: String, 
       bloodGroup: String, 
       role: String,
       professionName: String, 
-      locationId: Int
+      locationId: Int,
+      image: String
     ): Member!
     
     updateMemberStatus(id: Int!, status: ApprovalStatus!): Member!
     
-    # Events & Requests
-    createEvent(title: String!, description: String, date: String!, locationId: Int!): Event!
+    # Events, Campaigns & Requests
+    createEvent(title: String!, description: String, date: String!, locationId: Int!, professionNames: [String!]): Event!
+    createCampaign(title: String!, message: String!, locationId: Int!, professionNames: [String!]): Campaign!
+    recallEvent(id: Int!): Boolean!
+    recallCampaign(id: Int!): Boolean!
     respondToEvent(eventId: Int!, memberId: Int!, status: RSVPStatus!): EventResponse!
     
     createEmergencyRequest(title: String!, description: String, type: RequestType!, locationId: Int!, audience: String): EmergencyRequest!
@@ -268,7 +302,42 @@ export const typeDefs = gql`
     createNotification(title: String!, message: String!, type: String!, time: String, locationId: Int!): Notification!
     updateFcmToken(token: String!): Boolean!
 
+    # Communities Mutations
+    createCommunity(name: String!, description: String, image: String): Community!
+    joinCommunity(communityId: Int!, memberId: Int!): Boolean!
+    createCommunityPost(communityId: Int!, title: String!, content: String!, image: String): CommunityPost!
+    likeCommunityPost(postId: Int!): CommunityPost!
+    addCommunityComment(postId: Int!, content: String!): CommunityComment!
+  }
 
+  type Community {
+    id: Int!
+    name: String!
+    description: String
+    image: String
+    memberCount: Int!
+    createdAt: String!
+  }
+
+  type CommunityPost {
+    id: Int!
+    title: String!
+    content: String!
+    image: String
+    community: Community!
+    createdBy: User!
+    likes: Int!
+    comments: [CommunityComment!]!
+    createdAt: String!
+  }
+
+  type CommunityComment {
+    id: Int!
+    content: String!
+    authorName: String!
+    authorRole: String
+    postId: Int!
+    createdAt: String!
   }
 `;
 

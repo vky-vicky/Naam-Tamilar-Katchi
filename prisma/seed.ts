@@ -115,6 +115,57 @@ async function main() {
     }
   }
 
+  // 6. Ensure default Communities exist
+  const defaultCommunities = [
+    { name: 'Lawyers', description: 'Lawyers Community' },
+    { name: 'Police', description: 'Police Assistance Community' },
+    { name: 'Farmers', description: 'Farmers Coordination Community' },
+    { name: 'Students', description: 'Students Community' },
+    { name: 'Doctors', description: 'Doctors & Medical Community' }
+  ];
+  const dbCommunities = [];
+  for (const comm of defaultCommunities) {
+    let community = await (prisma as any).community.findUnique({ where: { name: comm.name } });
+    if (!community) {
+      community = await (prisma as any).community.create({
+        data: {
+          name: comm.name,
+          description: comm.description,
+          image: `https://avatar.iran.liara.run/username?username=${comm.name}`
+        }
+      });
+    }
+    dbCommunities.push(community);
+  }
+
+  // 7. Auto-join seeded members to matching communities based on profession
+  const allMembers = await (prisma as any).member.findMany({
+    include: { profession: true }
+  });
+  for (const m of allMembers) {
+    if (m.profession) {
+      const normalized = m.profession.name.toLowerCase().trim();
+      for (const dbComm of dbCommunities) {
+        const normalCommunity = dbComm.name.toLowerCase();
+        if (normalCommunity.includes(normalized) || normalized.includes(normalCommunity)) {
+          await (prisma as any).communityMember.upsert({
+            where: {
+              communityId_memberId: {
+                communityId: dbComm.id,
+                memberId: m.id
+              }
+            },
+            create: {
+              communityId: dbComm.id,
+              memberId: m.id
+            },
+            update: {}
+          });
+        }
+      }
+    }
+  }
+
   console.log('✅ Hierarchy Seeding completed! Use phones 9000000001, 9000000002, 9000000003 for testing.');
 }
 

@@ -1,6 +1,7 @@
 import { UserRole } from '@prisma/client';
 import prisma from '../db.js';
 import { whatsappService } from '../services/whatsapp.service.js';
+import { I18nService } from '../services/i18n.service.js';
 
 // Helper to get all child location IDs recursively
 async function getChildLocationIds(locationId: number): Promise<number[]> {
@@ -15,6 +16,63 @@ async function getChildLocationIds(locationId: number): Promise<number[]> {
     ids = [...ids, ...childIds];
   }
   return ids;
+}
+
+// Helper to validate location targeting based on user role and assigned location
+// SUPER_ADMIN  → can target ANY location (full Tamil Nadu or specific street)
+// ADMIN        → can target their assigned location OR any child under it
+// SUB_ADMIN    → can target their assigned location OR any child under it
+// MEMBER       → cannot create events/broadcasts
+async function validateLocationTargeting(userId: number, role: string, userLocationId: number | null, targetLocationId: number, lang: string = 'en') {
+  // 1. SUPER_ADMIN has full access — can target any location at any level
+  if (role === 'SUPER_ADMIN') {
+    return true;
+  }
+
+  // Find target location
+  const targetLocation = await (prisma as any).location.findUnique({
+    where: { id: targetLocationId }
+  });
+  if (!targetLocation) {
+    throw new Error(I18nService.translate("target_location_not_found", lang));
+  }
+
+  // 2. ADMIN — can target their assigned location or any location under it
+  if (role === 'ADMIN') {
+    if (!userLocationId) {
+      throw new Error(I18nService.translate("admin_no_scope", lang));
+    }
+    // Exact match — admin targeting their own assigned location
+    if (userLocationId === targetLocationId) {
+      return true;
+    }
+    // Check if target is a child of admin's location (any level deep)
+    const childIds = await getChildLocationIds(userLocationId);
+    if (childIds.includes(targetLocationId)) {
+      return true;
+    }
+    throw new Error(I18nService.translate("admin_outside_scope", lang));
+  }
+
+  // 3. SUB_ADMIN — can target their assigned location or any location under it
+  if (role === 'SUB_ADMIN') {
+    if (!userLocationId) {
+      throw new Error(I18nService.translate("subadmin_no_scope", lang));
+    }
+    // Exact match — sub admin targeting their own assigned location
+    if (userLocationId === targetLocationId) {
+      return true;
+    }
+    // Check if target is a child of sub admin's location
+    const childIds = await getChildLocationIds(userLocationId);
+    if (childIds.includes(targetLocationId)) {
+      return true;
+    }
+    throw new Error(I18nService.translate("subadmin_outside_scope", lang));
+  }
+
+  // 4. MEMBERS are not allowed to create events or broadcasts
+  throw new Error(I18nService.translate("member_not_allowed", lang));
 }
 
 // Helper to resolve location names to a Street ID
@@ -32,6 +90,32 @@ async function resolveLocationId(districtName: string, constituencyName: string,
   if (!street) street = await (prisma as any).location.create({ data: { name: streetName, type: 'STREET', parentId: town.id } });
 
   return street.id;
+}
+
+// Auto join member to communities matching their profession name
+async function autoJoinCommunities(memberId: number, professionName: string | undefined) {
+  if (!professionName) return;
+  const normalized = professionName.toLowerCase().trim();
+  const communities = await (prisma as any).community.findMany();
+  for (const community of communities) {
+    const normalCommunity = community.name.toLowerCase();
+    // E.g., profession "lawyer" matches community "lawyers"
+    if (normalCommunity.includes(normalized) || normalized.includes(normalCommunity)) {
+      await (prisma as any).communityMember.upsert({
+        where: {
+          communityId_memberId: {
+            communityId: community.id,
+            memberId
+          }
+        },
+        create: {
+          communityId: community.id,
+          memberId
+        },
+        update: {}
+      });
+    }
+  }
 }
 
 export const resolvers = {
@@ -261,14 +345,52 @@ export const resolvers = {
       });
     },
 
+    getCommunities: async (_: any, __: any) => {
+      const communities = await (prisma as any).community.findMany({
+        orderBy: { name: 'asc' }
+      });
+      
+      const results = [];
+      for (const community of communities) {
+        const memberCount = await (prisma as any).communityMember.count({
+          where: { communityId: community.id }
+        });
+        results.push({
+          ...community,
+          memberCount,
+          createdAt: community.createdAt.toISOString()
+        });
+      }
+      return results;
+    },
+
+    getCommunityPosts: async (_: any, { communityId }: any) => {
+      const posts = await (prisma as any).communityPost.findMany({
+        where: { communityId },
+        include: {
+          community: true,
+          createdBy: true,
+          comments: {
+            orderBy: { createdAt: 'asc' }
+          }
+        },
+        orderBy: { createdAt: 'desc' }
+      });
+      return posts.map((p: any) => ({
+        ...p,
+        createdAt: p.createdAt.toISOString()
+      }));
+    },
+
 
   },
 
   Mutation: {
-    adminLogin: async (_: any, { phone, password, role }: any) => {
-      if (!phone || !password) return { error: "Please provide phone and password" };
+    adminLogin: async (_: any, { phone, password }: any, context: any) => {
+      const lang = context?.language || 'en';
+      if (!phone || !password) return { error: I18nService.translate("provide_phone_password", lang) };
 
-      // 1. Find User or Member
+      // 1. Find User (Admin/SuperAdmin/SubAdmin) or Member
       let user = await (prisma as any).user.findFirst({ where: { phone } });
       let member = null;
       if (!user) {
@@ -276,28 +398,24 @@ export const resolvers = {
       }
 
       const finalUser = user || member;
-      if (!finalUser) return { error: "User not found" };
+      if (!finalUser) return { error: I18nService.translate("user_not_found", lang) };
 
       // 2. Verify Password
       if (finalUser.password !== password && password !== 'admin123') {
-        return { error: "Invalid password" };
+        return { error: I18nService.translate("invalid_password", lang) };
       }
 
-      // 3. Role Validation (Match with Figma Buttons)
+      // 3. Auto-detect role from database (no role selection needed)
       const dbRole = (finalUser as any).role || 'MEMBER';
-      if (role) {
-        const formattedInputRole = role.toUpperCase().replace(' ', '_');
-        if (dbRole !== formattedInputRole) {
-          return { error: `You are not registered as a ${role}` };
-        }
-      }
+      // Normalize member role to uppercase format
+      const normalizedRole = dbRole === 'Member' ? 'MEMBER' : dbRole;
 
-      // 4. Success Response
+      // 4. Success Response — role returned automatically
       return {
-        token: `${dbRole.toLowerCase()}_token`,
+        token: `${normalizedRole.toLowerCase()}_token`,
         user: {
           ...finalUser,
-          role: dbRole,
+          role: normalizedRole,
           approvalStatus: (finalUser as any).approvalStatus || 'APPROVED'
         }
       };
@@ -329,6 +447,7 @@ export const resolvers = {
 
       const userData: any = {
         name: rest.name,
+        surname: rest.surname || null,
         phone: rest.phone,
         password: rest.password,
         role: rest.role,
@@ -390,12 +509,16 @@ export const resolvers = {
         include: { location: true, profession: true },
       });
 
+      if (professionName) {
+        await autoJoinCommunities(member.id, professionName);
+      }
+
       return member;
     },
 
     updateMemberStatus: async (_: any, { id, status }: any, context: any) => {
       // Permission Check (Only Admins/SuperAdmins can approve)
-      if (context?.user?.role === 'MEMBER') throw new Error("Unauthorized");
+      if (context?.user?.role === 'MEMBER') throw new Error(I18nService.translate("member_not_allowed", context?.language));
 
       const data: any = { approvalStatus: status };
       
@@ -411,8 +534,18 @@ export const resolvers = {
       });
     },
 
-    updateMember: async (_: any, args: any) => {
+    updateMember: async (_: any, args: any, context: any) => {
+      // Permission Check
+      if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", context?.language));
+
       const { id, professionName, ...data } = args;
+      
+      // Super Admin, Admin, and Sub Admin can edit any member.
+      // Normal Member can only edit their own profile.
+      const isMember = context.user.role === 'MEMBER';
+      if (isMember && Number(context.user.id) !== Number(id)) {
+        throw new Error(I18nService.translate("unauthorized_edit_member", context?.language));
+      }
       
       let updateData: any = { ...data };
 
@@ -426,42 +559,30 @@ export const resolvers = {
         updateData.professionId = profession.id;
       }
 
-      return (prisma as any).member.update({
+      const updatedMember = await (prisma as any).member.update({
         where: { id },
         data: updateData,
         include: { location: true, profession: true }
       });
+
+      if (professionName) {
+        await autoJoinCommunities(updatedMember.id, professionName);
+      }
+
+      return updatedMember;
     },
 
-    createEvent: async (_: any, { title, description, date, locationId }: any, context: any) => {
-      // 1. Ensure we have a numeric creator ID
-      let creatorId = context.user?.id ? Number(context.user.id) : null;
-      
-      // 2. Double check if this user actually exists in the database
-      if (creatorId) {
-        const userExists = await (prisma as any).user.findUnique({ where: { id: creatorId } });
-        if (!userExists) creatorId = null;
-      }
+    createEvent: async (_: any, { title, description, date, locationId, professionNames }: any, context: any) => {
+      if (!context.user) throw new Error(I18nService.translate("unauthorized_login", context?.language));
 
-      // 3. If no valid creator, find any user or create a system user
-      if (!creatorId) {
-        const anyUser = await (prisma as any).user.findFirst();
-        if (anyUser) {
-          creatorId = anyUser.id;
-        } else {
-          const newAdmin = await (prisma as any).user.create({
-            data: {
-              name: "System Admin",
-              phone: "0000000000",
-              password: "admin123",
-              role: 'SUPER_ADMIN',
-              username: "systemadmin",
-              approvalStatus: 'APPROVED'
-            }
-          });
-          creatorId = newAdmin.id;
-        }
-      }
+      // 1. Fetch fresh user details (role and locationId)
+      const dbUser = await (prisma as any).user.findUnique({ where: { id: Number(context.user.id) } });
+      if (!dbUser) throw new Error(I18nService.translate("user_not_found", context?.language));
+
+      // 2. Enforce geographic targeting permissions based on role
+      await validateLocationTargeting(dbUser.id, dbUser.role, dbUser.locationId, Number(locationId), context?.language);
+
+      let creatorId = dbUser.id;
 
       // 4. Create the event with a GUARANTEED valid creatorId
       const event = await (prisma as any).event.create({
@@ -489,11 +610,17 @@ export const resolvers = {
 
         // 6. Retrieve phone numbers of all active members in this location & all its children
         const allLocationIds = [Number(locationId), ...(await getChildLocationIds(Number(locationId)))];
+        
+        const memberWhere: any = {
+          locationId: { in: allLocationIds },
+          isActive: true
+        };
+        if (professionNames && professionNames.length > 0) {
+          memberWhere.profession = { name: { in: professionNames } };
+        }
+
         const members = await (prisma as any).member.findMany({
-          where: {
-            locationId: { in: allLocationIds },
-            isActive: true
-          },
+          where: memberWhere,
           select: { phone: true }
         });
 
@@ -501,7 +628,7 @@ export const resolvers = {
         if (phoneNumbers.length > 0) {
           await whatsappService.sendMessage(
             phoneNumbers,
-            `📢 New Event Alert!\n🌟 *${title}*\n📅 Date: ${new Date(date).toLocaleDateString()}\n📍 Location: ${event.location.name}\n\nJoin us and respond on the app!`
+            I18nService.getEventBroadcastMessage(title, new Date(date).toLocaleDateString(), event.location.name)
           );
         }
       } catch (error) {
@@ -509,6 +636,127 @@ export const resolvers = {
       }
 
       return event;
+    },
+
+    createCampaign: async (_: any, { title, message, locationId, professionNames }: any, context: any) => {
+      if (!context.user) throw new Error(I18nService.translate("unauthorized_login", context?.language));
+
+      // 1. Fetch fresh user details (role and locationId)
+      const dbUser = await (prisma as any).user.findUnique({ where: { id: Number(context.user.id) } });
+      if (!dbUser) throw new Error(I18nService.translate("user_not_found", context?.language));
+
+      // 2. Enforce geographic targeting permissions based on role
+      await validateLocationTargeting(dbUser.id, dbUser.role, dbUser.locationId, Number(locationId), context?.language);
+
+      // 3. Create the Campaign
+      const campaign = await (prisma as any).campaign.create({
+        data: {
+          title,
+          message,
+          createdById: dbUser.id,
+          status: 'SENT'
+        },
+        include: { createdBy: true }
+      });
+
+      // 4. Create CampaignTarget
+      await (prisma as any).campaignTarget.create({
+        data: {
+          campaignId: campaign.id,
+          locationId: Number(locationId)
+        }
+      });
+
+      // 5. Get all target location IDs (including all sub-locations recursively)
+      const allLocationIds = [Number(locationId), ...(await getChildLocationIds(Number(locationId)))];
+      
+      const memberWhere: any = {
+        locationId: { in: allLocationIds },
+        isActive: true
+      };
+      if (professionNames && professionNames.length > 0) {
+        memberWhere.profession = { name: { in: professionNames } };
+      }
+
+      const members = await (prisma as any).member.findMany({
+        where: memberWhere
+      });
+
+      const phoneNumbers = members.map((m: any) => m.phone).filter(Boolean);
+
+      // 6. Broadcast via WhatsApp and log messages
+      if (phoneNumbers.length > 0) {
+        try {
+          await whatsappService.sendMessage(
+            phoneNumbers,
+            I18nService.getCampaignBroadcastMessage(title, message)
+          );
+
+          // Create message logs
+          const logsData = members.map((m: any) => ({
+            campaignId: campaign.id,
+            memberId: m.id,
+            phone: m.phone,
+            status: 'SENT' as any
+          }));
+
+          await (prisma as any).messageLog.createMany({
+            data: logsData
+          });
+        } catch (error) {
+          console.error("Error broadcasting campaign messages:", error);
+          await (prisma as any).campaign.update({
+            where: { id: campaign.id },
+            data: { status: 'FAILED' }
+          });
+        }
+      }
+
+      // Return loaded campaign with relations
+      return (prisma as any).campaign.findUnique({
+        where: { id: campaign.id },
+        include: { 
+          createdBy: true,
+          targets: { include: { location: true } }
+        }
+      });
+    },
+
+    recallEvent: async (_: any, { id }: any, context: any) => {
+      if (!context.user) throw new Error(I18nService.translate("unauthorized_login", context?.language));
+      
+      // Ensure the event exists
+      const event = await (prisma as any).event.findUnique({ where: { id: Number(id) } });
+      if (!event) throw new Error(I18nService.translate("event_not_found", context?.language));
+
+      // Permission Check: only SUPER_ADMIN or the creator can recall
+      if (context.user.role !== 'SUPER_ADMIN' && Number(context.user.id) !== event.createdById) {
+        throw new Error(I18nService.translate("unauthorized_recall_event", context?.language));
+      }
+
+      // Delete associated responses first, then the event
+      await (prisma as any).eventResponse.deleteMany({ where: { eventId: Number(id) } });
+      await (prisma as any).event.delete({ where: { id: Number(id) } });
+      
+      return true;
+    },
+
+    recallCampaign: async (_: any, { id }: any, context: any) => {
+      if (!context.user) throw new Error(I18nService.translate("unauthorized_login", context?.language));
+      
+      const campaign = await (prisma as any).campaign.findUnique({ where: { id: Number(id) } });
+      if (!campaign) throw new Error(I18nService.translate("campaign_not_found", context?.language));
+
+      if (context.user.role !== 'SUPER_ADMIN' && Number(context.user.id) !== campaign.createdById) {
+        throw new Error(I18nService.translate("unauthorized_recall_campaign", context?.language));
+      }
+
+      // Delete associated message logs and targets first
+      await (prisma as any).messageLog.deleteMany({ where: { campaignId: Number(id) } });
+      await (prisma as any).campaignTarget.deleteMany({ where: { campaignId: Number(id) } });
+      await (prisma as any).campaign.delete({ where: { id: Number(id) } });
+      
+      return true;
     },
 
     respondToEvent: async (_: any, { eventId, memberId, status }: any) => {
@@ -602,6 +850,146 @@ export const resolvers = {
       
       return true;
     },
+
+    createCommunity: async (_: any, { name, description, image }: any, context: any) => {
+      if (!context.user) throw new Error(I18nService.translate("unauthorized_login", context?.language));
+      if (context.user.role !== 'SUPER_ADMIN' && context.user.role !== 'ADMIN') {
+        throw new Error(I18nService.translate("member_not_allowed", context?.language));
+      }
+
+      const community = await (prisma as any).community.upsert({
+        where: { name },
+        update: { description, image },
+        create: { name, description, image }
+      });
+
+      return {
+        ...community,
+        memberCount: 0,
+        createdAt: community.createdAt.toISOString()
+      };
+    },
+
+    joinCommunity: async (_: any, { communityId, memberId }: any) => {
+      await (prisma as any).communityMember.upsert({
+        where: {
+          communityId_memberId: {
+            communityId,
+            memberId
+          }
+        },
+        update: {},
+        create: {
+          communityId,
+          memberId
+        }
+      });
+      return true;
+    },
+
+    createCommunityPost: async (_: any, { communityId, title, content, image }: any, context: any) => {
+      if (!context.user) throw new Error(I18nService.translate("unauthorized_login", context?.language));
+      if (context.user.role !== 'SUPER_ADMIN' && context.user.role !== 'ADMIN') {
+        throw new Error(I18nService.translate("member_not_allowed", context?.language));
+      }
+
+      const community = await (prisma as any).community.findUnique({
+        where: { id: communityId }
+      });
+      if (!community) throw new Error("Community not found");
+
+      const post = await (prisma as any).communityPost.create({
+        data: {
+          title,
+          content,
+          image,
+          communityId,
+          createdById: Number(context.user.id)
+        },
+        include: {
+          community: true,
+          createdBy: true,
+          comments: true
+        }
+      });
+
+      // 4. WhatsApp-style Broadcast
+      const members = await (prisma as any).communityMember.findMany({
+        where: { communityId },
+        include: { member: true }
+      });
+
+      const phoneNumbers = members.map((m: any) => m.member.phone).filter(Boolean);
+      if (phoneNumbers.length > 0) {
+        try {
+          const broadcastMsg = `📢 *${community.name}*\n🌟 *${title}*\n\n${content}`;
+          await whatsappService.sendMessage(phoneNumbers, broadcastMsg);
+
+          for (const m of members) {
+            await (prisma as any).notification.create({
+              data: {
+                title: `${community.name}: ${title}`,
+                message: content,
+                type: 'ALERT',
+                locationId: m.member.locationId,
+                time: 'Just now'
+              }
+            });
+          }
+        } catch (error) {
+          console.error("Error sending community broadcast notifications:", error);
+        }
+      }
+
+      return {
+        ...post,
+        createdAt: post.createdAt.toISOString(),
+        likes: 0,
+        comments: []
+      };
+    },
+
+    likeCommunityPost: async (_: any, { postId }: any) => {
+      const post = await (prisma as any).communityPost.update({
+        where: { id: postId },
+        data: { likes: { increment: 1 } },
+        include: {
+          community: true,
+          createdBy: true,
+          comments: {
+            orderBy: { createdAt: 'asc' }
+          }
+        }
+      });
+      return {
+        ...post,
+        createdAt: post.createdAt.toISOString()
+      };
+    },
+
+    addCommunityComment: async (_: any, { postId, content }: any, context: any) => {
+      let authorName = "Member";
+      let authorRole = "MEMBER";
+
+      if (context?.user) {
+        authorName = context.user.name || "Admin";
+        authorRole = context.user.role || "ADMIN";
+      }
+
+      const comment = await (prisma as any).communityComment.create({
+        data: {
+          content,
+          postId,
+          authorName,
+          authorRole
+        }
+      });
+
+      return {
+        ...comment,
+        createdAt: comment.createdAt.toISOString()
+      };
+    },
   },
 
   Member: {
@@ -620,6 +1008,10 @@ export const resolvers = {
         ...a,
         __typename: 'title' in a && 'status' in a && !('memberId' in a) ? 'Event' : 'EmergencyRequest'
       }));
+    },
+    createdBy: async (parent: any) => {
+      if (!parent.createdById) return null;
+      return (prisma as any).user.findUnique({ where: { id: parent.createdById } });
     },
   },
 

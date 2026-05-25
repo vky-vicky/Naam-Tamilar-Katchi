@@ -7,12 +7,29 @@ import cors from 'cors';
 import { typeDefs } from './schema/typeDefs.js';
 import { resolvers } from './schema/resolvers.js';
 import * as dotenv from 'dotenv';
+import { Server } from 'socket.io';
 
 dotenv.config();
 
 async function startServer() {
   const app = express();
   const httpServer = http.createServer(app);
+
+  const io = new Server(httpServer, {
+    cors: {
+      origin: '*',
+      methods: ['GET', 'POST']
+    }
+  });
+
+  io.on('connection', (socket) => {
+    console.log('🔌 Client connected to Socket.io:', socket.id);
+    socket.on('disconnect', () => {
+      console.log('🔌 Client disconnected from Socket.io:', socket.id);
+    });
+  });
+
+  (global as any).io = io;
 
   const server = new ApolloServer({
     typeDefs,
@@ -29,12 +46,14 @@ async function startServer() {
     expressMiddleware(server, {
       context: async ({ req }) => {
         // Simple auth simulation - in real app, decode JWT here
+        const language = req.headers['accept-language'] || 'en';
         return { 
           user: { 
             id: 1, 
             role: 'SUPER_ADMIN', // Simulated role for testing
             locationId: null 
-          } 
+          },
+          language
         };
       },
     })

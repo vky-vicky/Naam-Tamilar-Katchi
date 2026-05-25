@@ -31,8 +31,10 @@ model Location {
 model Member {
   id           Int        @id @default(autoincrement())
   name         String
+  surname      String?
   phone        String     @unique
   password     String?
+  image                 String?
   bloodGroup            String?
   allergies             String?
   conditions            String?
@@ -55,6 +57,7 @@ model Member {
   messageLogs MessageLog[]
   requests    EmergencyRequest[]
   eventResponses EventResponse[]
+  communityMembers CommunityMember[]
 
   @@index([locationId])
   @@index([professionId])
@@ -71,6 +74,7 @@ model Profession {
 model User {
   id              Int            @id @default(autoincrement())
   name            String
+  surname         String?
   phone           String         @unique
   password        String
   role            UserRole       @default(MEMBER)
@@ -90,6 +94,7 @@ model User {
   approvedMembers Member[]       @relation("MemberApprover")
   fcmToken        String?
   location        Location?      @relation(fields: [locationId], references: [id])
+  communityPosts  CommunityPost[]
 
   @@index([role])
   @@index([approvalStatus])
@@ -285,4 +290,51 @@ enum MessageStatus {
   SENT
   DELIVERED
   FAILED
+}
+
+model Community {
+  id          Int               @id @default(autoincrement())
+  name        String            @unique
+  description String?
+  image       String?
+  posts       CommunityPost[]
+  members     CommunityMember[]
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+}
+
+model CommunityPost {
+  id          Int                @id @default(autoincrement())
+  title       String
+  content     String
+  image       String?
+  communityId Int
+  community   Community          @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  createdById Int
+  createdBy   User               @relation(fields: [createdById], references: [id])
+  likes       Int                @default(0)
+  comments    CommunityComment[]
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+}
+
+model CommunityMember {
+  id          Int       @id @default(autoincrement())
+  communityId Int
+  community   Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  memberId    Int
+  member      Member    @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+
+  @@unique([communityId, memberId])
+}
+
+model CommunityComment {
+  id         Int           @id @default(autoincrement())
+  content    String
+  authorName String
+  authorRole String?
+  postId     Int
+  post       CommunityPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  createdAt  DateTime      @default(now())
 }
