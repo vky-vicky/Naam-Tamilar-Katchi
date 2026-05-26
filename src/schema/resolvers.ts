@@ -637,31 +637,34 @@ export const resolvers = {
       if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", context?.language));
 
       const { id, professionName, ...data } = args;
-      
-      // Super Admin, Admin, and Sub Admin can edit any member.
-      // Normal Member can only edit their own profile.
-      const isMember = context.user.role === 'MEMBER';
-      if (isMember && Number(context.user.id) !== Number(id)) {
-        throw new Error(I18nService.translate("unauthorized_edit_member", context?.language));
-      }
-      
-      let updateData: any = { ...data };
+const { surname, ...memberData } = data;
+// Normal Member can only edit their own profile.
+const isMember = context.user.role === 'MEMBER';
+if (isMember && Number(context.user.id) !== Number(id)) {
+  throw new Error(I18nService.translate("unauthorized_edit_member", context?.language));
+}
 
-      // Handle Profession update if name provided
-      if (professionName) {
-        const profession = await (prisma as any).profession.upsert({
-          where: { name: professionName },
-          update: {},
-          create: { name: professionName }
-        });
-        updateData.professionId = profession.id;
-      }
+let updateData: any = { ...memberData };
+// Handle Profession update if name provided
+if (professionName) {
+  const profession = await (prisma as any).profession.upsert({
+    where: { name: professionName },
+    update: {},
+    create: { name: professionName }
+  });
+  updateData.professionId = profession.id;
+}
 
-      const updatedMember = await (prisma as any).member.update({
-        where: { id },
-        data: updateData,
-        include: { location: true, profession: true }
-      });
+const updatedMember = await (prisma as any).member.update({
+  where: { id },
+  data: updateData,
+  include: { location: true, profession: true }
+});
+      
+      
+
+
+      
 
       if (professionName) {
         await autoJoinCommunities(updatedMember.id, professionName);
