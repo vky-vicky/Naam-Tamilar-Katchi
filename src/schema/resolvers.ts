@@ -382,7 +382,100 @@ export const resolvers = {
       }));
     },
 
+    getTargetableLocations: async (_: any, __: any, context: any) => {
+      const user = context.user;
+      if (!user) return [];
+      const role = user.role;
+      const userLocId = user.locationId;
 
+      // Super Admin can target the whole state (assume root location id = null or 0)
+      if (role === 'SUPER_ADMIN') {
+        // Return top‑level locations (states) – assuming type STATE
+        const states = await (prisma as any).location.findMany({
+          where: { type: 'STATE' },
+          select: { id: true, name: true, type: true },
+        });
+        const withCount = await Promise.all(
+          states.map(async (loc: any) => {
+            const memberCount = await (prisma as any).member.count({ where: { locationId: loc.id } });
+            return { ...loc, memberCount };
+          })
+        );
+        return withCount;
+      }
+
+      // Admin / Sub‑Admin – can target own location and all its children
+      if (role === 'ADMIN' || role === 'SUB_ADMIN') {
+        if (!userLocId) return [];
+        const own = await (prisma as any).location.findUnique({
+          where: { id: userLocId },
+          select: { id: true, name: true, type: true },
+        });
+        const childIds = await getChildLocationIds(userLocId);
+        const children = await (prisma as any).location.findMany({
+          where: { id: { in: childIds } },
+          select: { id: true, name: true, type: true },
+        });
+        const all = [own, ...children];
+        const withCount = await Promise.all(
+          all.map(async (loc: any) => {
+            const memberCount = await (prisma as any).member.count({ where: { locationId: loc.id } });
+            return { ...loc, memberCount };
+          })
+        );
+        return withCount;
+      }
+
+      // Members have no broadcast permissions
+      return [];
+    },
+
+    getBroadcasts: async (_: any, { locationId, scope }: any, context: any) => {
+      // Only return broadcasts that the user is authorized to see
+      const user = context.user;
+      if (!user) return [];
+      const role = user.role;
+      const userLocId = user.locationId;
+
+      // Build a list of location IDs the user can view based on role
+      let visibleLocationIds: number[] = [];
+      if (role === 'SUPER_ADMIN') {
+        // Super admin can see everything – fetch all broadcasts optionally filtered
+        visibleLocationIds = [];
+      } else if (role === 'ADMIN' || role === 'SUB_ADMIN') {
+        if (!userLocId) return [];
+        const childIds = await getChildLocationIds(userLocId);
+        visibleLocationIds = [userLocId, ...childIds];
+      } else {
+        // Members cannot view broadcasts (or only those targeted at their exact location)
+        if (!userLocId) return [];
+        visibleLocationIds = [userLocId];
+      }
+
+      const where: any = {};
+      if (locationId !== undefined) where.locationId = locationId;
+      if (scope) where.scope = scope;
+      if (visibleLocationIds.length > 0) where.locationId = { in: visibleLocationIds };
+
+      const broadcasts = await (prisma as any).broadcast.findMany({
+        where,
+        include: { location: true, createdBy: true },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      // Compute recipient count for each broadcast (members in that location subtree)
+      const withCount = await Promise.all(
+        broadcasts.map(async (b: any) => {
+          const targetIds = await getChildLocationIds(b.locationId);
+          const allIds = [b.locationId, ...targetIds];
+          const recipientCount = await (prisma as any).member.count({
+            where: { locationId: { in: allIds }, isActive: true },
+          });
+          return { ...b, recipientCount };
+        })
+      );
+      return withCount;
+    }
   },
 
   Mutation: {
@@ -391,10 +484,16 @@ export const resolvers = {
       if (!phone || !password) return { error: I18nService.translate("provide_phone_password", lang) };
 
       // 1. Find User (Admin/SuperAdmin/SubAdmin) or Member
-      let user = await (prisma as any).user.findFirst({ where: { phone } });
+      let user = await (prisma as any).user.findFirst({
+        where: { phone },
+        include: { location: true }
+      });
       let member = null;
       if (!user) {
-        member = await (prisma as any).member.findFirst({ where: { phone } });
+        member = await (prisma as any).member.findFirst({
+          where: { phone },
+          include: { location: true }
+        });
       }
 
       const finalUser = user || member;
@@ -453,7 +552,8 @@ export const resolvers = {
         role: rest.role,
         bloodGroup: rest.bloodGroup,
         professionName: professionName, // Save as simple string
-        approvalStatus: 'APPROVED'
+        approvalStatus: 'APPROVED',
+        image: rest.image || null
       };
 
       if (creatorId) {
@@ -722,6 +822,49 @@ export const resolvers = {
       });
     },
 
+    createBroadcast: async (_: any, { title, message, image, locationId }: any, context: any) => {
+      const user = context.user;
+      if (!user) throw new Error('Unauthenticated');
+      const role = user.role;
+      const userLocId = user.locationId;
+
+      // Validate that the caller can target the requested location
+      await validateLocationTargeting(user.id, role, userLocId, Number(locationId), context?.language);
+
+      // Determine scope based on the target location's type
+      const targetLoc = await (prisma as any).location.findUnique({ where: { id: Number(locationId) } });
+      if (!targetLoc) throw new Error('Target location not found');
+
+      const broadcast = await (prisma as any).broadcast.create({
+        data: {
+          title,
+          message,
+          image: image || null,
+          scope: targetLoc.type,
+          locationId: Number(locationId),
+          createdById: Number(user.id),
+        },
+        include: { location: true, createdBy: true },
+      });
+
+      // Send WhatsApp broadcast to all members in the target subtree
+      const targetIds = await getChildLocationIds(broadcast.locationId);
+      const allIds = [broadcast.locationId, ...targetIds];
+      const members = await (prisma as any).member.findMany({
+        where: { locationId: { in: allIds }, isActive: true },
+        select: { phone: true },
+      });
+      const phoneNumbers = members.map((m: any) => m.phone).filter(Boolean);
+      if (phoneNumbers.length > 0) {
+        await whatsappService.sendMessage(
+          phoneNumbers,
+          I18nService.getBroadcastMessage(title, message)
+        );
+      }
+
+      return broadcast;
+    },
+
     recallEvent: async (_: any, { id }: any, context: any) => {
       if (!context.user) throw new Error(I18nService.translate("unauthorized_login", context?.language));
       
@@ -759,6 +902,17 @@ export const resolvers = {
       return true;
     },
 
+    recallBroadcast: async (_: any, { id }: any, context: any) => {
+      if (!context.user) throw new Error('Unauthenticated');
+      const broadcast = await (prisma as any).broadcast.findUnique({ where: { id: Number(id) } });
+      if (!broadcast) throw new Error('Broadcast not found');
+      if (context.user.role !== 'SUPER_ADMIN' && Number(context.user.id) !== broadcast.createdById) {
+        throw new Error('Unauthorized');
+      }
+      await (prisma as any).broadcast.delete({ where: { id: Number(id) } });
+      return true;
+    },
+
     respondToEvent: async (_: any, { eventId, memberId, status }: any) => {
       return (prisma as any).eventResponse.upsert({
         where: { eventId_memberId: { eventId, memberId } },
@@ -770,6 +924,11 @@ export const resolvers = {
 
     createEmergencyRequest: async (_: any, { title, description, type, locationId, audience }: any, context: any) => {
       const userId = context.user?.id || 1;
+      // Enforce geographic targeting based on role
+      const dbUser = await (prisma as any).user.findUnique({ where: { id: Number(userId) } });
+      if (dbUser) {
+        await validateLocationTargeting(dbUser.id, dbUser.role, dbUser.locationId, Number(locationId), context?.language);
+      }
       return (prisma as any).emergencyRequest.create({
         data: {
           title,
@@ -990,6 +1149,122 @@ export const resolvers = {
         createdAt: comment.createdAt.toISOString()
       };
     },
+
+    changeUserRole: async (_: any, { phone, role }: any, context: any) => {
+      const lang = context?.language || 'en';
+      if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", lang));
+
+      // Get requester's role
+      const requesterRole = context.user.role;
+      if (requesterRole === 'MEMBER') {
+        throw new Error(I18nService.translate("member_not_allowed", lang));
+      }
+
+      const targetRole = role.toUpperCase().trim();
+      const validRoles = ['SUPER_ADMIN', 'ADMIN', 'SUB_ADMIN', 'MEMBER'];
+      if (!validRoles.includes(targetRole)) {
+        throw new Error(`Invalid target role: ${role}`);
+      }
+
+      // Find the target in User and Member tables
+      const dbUser = await (prisma as any).user.findFirst({ where: { phone } });
+      const dbMember = await (prisma as any).member.findFirst({ where: { phone } });
+
+      if (!dbUser && !dbMember) {
+        throw new Error(I18nService.translate("user_not_found", lang));
+      }
+
+      // Check permission hierarchy
+      // 1. If target is already an admin (exists in User table):
+      if (dbUser) {
+        if (requesterRole !== 'SUPER_ADMIN') {
+          throw new Error("Unauthorized: Only Super Admin can change Admin roles");
+        }
+      }
+
+      // 2. If requester is Admin or Sub-Admin:
+      if (requesterRole === 'ADMIN' || requesterRole === 'SUB_ADMIN') {
+        // They can only change normal members
+        if (dbUser) {
+          throw new Error("Unauthorized: Admin/Sub-Admin cannot modify other Admins");
+        }
+        // They cannot promote anyone to Super Admin
+        if (targetRole === 'SUPER_ADMIN') {
+          throw new Error("Unauthorized: Admin/Sub-Admin cannot promote to Super Admin");
+        }
+      }
+
+      // Perform Role Transition
+      if (targetRole === 'MEMBER') {
+        // Demoting to MEMBER
+        if (dbUser) {
+          // If they exist in User table, migrate to Member table (if not exists) and remove from User table
+          if (!dbMember) {
+            await (prisma as any).member.create({
+              data: {
+                name: dbUser.name,
+                surname: dbUser.surname,
+                phone: dbUser.phone,
+                password: dbUser.password,
+                locationId: dbUser.locationId || 1,
+                role: 'Member',
+                approvalStatus: 'APPROVED',
+                isActive: true
+              }
+            });
+          } else {
+            await (prisma as any).member.update({
+              where: { id: dbMember.id },
+              data: { role: 'Member' }
+            });
+          }
+          // Remove from User table so they can't log in as admin anymore
+          await (prisma as any).user.delete({ where: { id: dbUser.id } });
+        } else if (dbMember) {
+          await (prisma as any).member.update({
+            where: { id: dbMember.id },
+            data: { role: 'Member' }
+          });
+        }
+      } else {
+        // Promoting to SUPER_ADMIN, ADMIN, or SUB_ADMIN
+        if (dbUser) {
+          // Simply update the role in User table
+          await (prisma as any).user.update({
+            where: { id: dbUser.id },
+            data: { role: targetRole }
+          });
+          // Update matching member role if it exists for sync
+          if (dbMember) {
+            await (prisma as any).member.update({
+              where: { id: dbMember.id },
+              data: { role: targetRole }
+            });
+          }
+        } else if (dbMember) {
+          // Promote from Member table to User table
+          await (prisma as any).user.create({
+            data: {
+              name: dbMember.name,
+              surname: dbMember.surname,
+              phone: dbMember.phone,
+              password: dbMember.password || 'admin123',
+              role: targetRole,
+              locationId: dbMember.locationId,
+              approvalStatus: 'APPROVED',
+              isActive: true
+            }
+          });
+          // Update the Member's role field to reflect status
+          await (prisma as any).member.update({
+            where: { id: dbMember.id },
+            data: { role: targetRole }
+          });
+        }
+      }
+
+      return true;
+    },
   },
 
   Member: {
@@ -1013,6 +1288,19 @@ export const resolvers = {
       if (!parent.createdById) return null;
       return (prisma as any).user.findUnique({ where: { id: parent.createdById } });
     },
+    addedBy: async (parent: any) => {
+      if (!parent.createdById) return "Self";
+      const creator = await (prisma as any).user.findUnique({ where: { id: parent.createdById } });
+      return creator ? creator.name : "Self";
+    },
+  },
+
+  User: {
+    addedBy: async (parent: any) => {
+      if (!parent.parentId) return "Self";
+      const parentUser = await (prisma as any).user.findUnique({ where: { id: parent.parentId } });
+      return parentUser ? parentUser.name : "Self";
+    }
   },
 
   Location: {

@@ -102,4 +102,6 @@ export class I18nService {
   static getCampaignBroadcastMessage(title: string, message: string): string {
     return `📢 *Naam Tamilar Katchi - Announcement* / நாம் தமிழர் கட்சி - அறிவிப்பு\n\n🌟 *${title}*\n\n${message}`;
   }
-}
+  static getBroadcastMessage(title: string, message: string): string {
+    return `📢 ${title}\n\n${message}`;
+  }

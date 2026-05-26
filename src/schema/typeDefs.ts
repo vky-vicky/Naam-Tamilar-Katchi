@@ -89,6 +89,7 @@ export const typeDefs = gql`
     conditions: String
     emergencyContact: String
     createdBy: User
+    addedBy: String
     image: String
   }
 
@@ -101,6 +102,8 @@ export const typeDefs = gql`
     approvalStatus: ApprovalStatus!
     location: Location
     isActive: Boolean!
+    addedBy: String
+    image: String
   }
 
   type Campaign {
@@ -205,6 +208,26 @@ export const typeDefs = gql`
     createdAt: String!
   }
 
+  type Broadcast {
+    id: Int!
+    title: String!
+    message: String!
+    image: String
+    scope: LocationType!
+    location: Location!
+    createdBy: User!
+    isActive: Boolean!
+    recipientCount: Int!
+    createdAt: String!
+  }
+
+  type TargetableLocation {
+    id: Int!
+    name: String!
+    type: LocationType!
+    memberCount: Int!
+  }
+
   type MemberApprovalActivity {
     id: Int!
     memberName: String!
@@ -215,6 +238,10 @@ export const typeDefs = gql`
   union Activity = Event | EmergencyRequest | MemberApprovalActivity
 
   type Query {
+  # Existing queries ...
+  getTargetableGroups: [Community!]!
+  getCommunityFeed(locationId: Int): [CommunityPost!]!
+
     me: User
     getLocationList(parentId: Int, type: LocationType): [Location!]!
     getLocationDetails(id: Int!): Location
@@ -223,13 +250,15 @@ export const typeDefs = gql`
     dashboardStats(locationId: Int): DashboardStats!
     recentActivity(locationId: Int, limit: Int): [Activity!]!
     professions: [Profession!]!
-    communityFeed(locationId: Int): [Post!]!
+    communityFeed(locationId: Int): [CommunityPost!]!
     notifications(locationId: Int): [Notification!]!
     getUserList(locationId: Int, role: UserRole): [User!]!
     getEventList(locationId: Int, status: EventStatus): [Event!]!
     getEmergencyRequestList(locationId: Int, status: RequestStatus): [EmergencyRequest!]!
     getCommunities: [Community!]!
     getCommunityPosts(communityId: Int!): [CommunityPost!]!
+    getBroadcasts(locationId: Int, scope: LocationType): [Broadcast!]!
+    getTargetableLocations: [TargetableLocation!]!
   }
 
   type Mutation {
@@ -254,6 +283,7 @@ export const typeDefs = gql`
       streetId: Int
       bloodGroup: String
       professionName: String
+      image: String
     ): User!
 
     addMember(
@@ -303,11 +333,22 @@ export const typeDefs = gql`
     updateFcmToken(token: String!): Boolean!
 
     # Communities Mutations
-    createCommunity(name: String!, description: String, image: String): Community!
+    createCommunity(name: String!, description: String, image: String, role: UserRole, locationId: Int): Community!
     joinCommunity(communityId: Int!, memberId: Int!): Boolean!
     createCommunityPost(communityId: Int!, title: String!, content: String!, image: String): CommunityPost!
     likeCommunityPost(postId: Int!): CommunityPost!
     addCommunityComment(postId: Int!, content: String!): CommunityComment!
+    changeUserRole(phone: String!, role: String!): Boolean!
+    updateProfileImage(image: String!): Boolean!
+
+    # Broadcasts
+    createBroadcast(
+      title: String!
+      message: String!
+      image: String
+      locationId: Int!
+    ): Broadcast!
+    recallBroadcast(id: Int!): Boolean!
   }
 
   type Community {
@@ -315,6 +356,8 @@ export const typeDefs = gql`
     name: String!
     description: String
     image: String
+    role: UserRole
+    location: Location
     memberCount: Int!
     createdAt: String!
   }
