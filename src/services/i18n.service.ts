@@ -76,6 +76,14 @@ const translations = {
   location_required: {
     en: 'Location is required. Please specify a location (Street, Area, Taluk, District, or Location ID).',
     ta: 'இடம் தேவைப்படுகிறது. தயவுசெய்து ஒரு இடத்தை (தெரு, பகுதி, தாலுகா, மாவட்டம், அல்லது இடத்தின் குறியீடு) குறிப்பிடவும்.'
+  },
+  phone_already_registered: {
+    en: 'This phone number is already registered.',
+    ta: 'இந்த தொலைபேசி எண் ஏற்கனவே பதிவு செய்யப்பட்டுள்ளது.'
+  },
+  invalid_referenced_data: {
+    en: 'Invalid referenced data (e.g. location or profession does not exist).',
+    ta: 'தவறான குறிப்புத் தரவு (எ.கா. பகுதி அல்லது தொழில் இல்லை).'
   }
 };
 

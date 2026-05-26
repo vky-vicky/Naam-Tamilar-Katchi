@@ -4,14 +4,31 @@ import { whatsappService } from '../services/whatsapp.service.js';
 import { I18nService } from '../services/i18n.service.js';
 
 // Helper to wrap resolvers and return consistent error objects
+// Helper to wrap resolvers and return consistent, translated GraphQL errors
 function safeResolver<T>(fn: (...args: any[]) => Promise<T>) {
   return async (...args: any[]) => {
     try {
       return await fn(...args);
     } catch (err: any) {
-      // If error message is already translated, return it directly
-      const message = err?.message ?? 'internal_error';
-      return { error: message } as any;
+      console.error("Resolver Error Caught:", err);
+
+      // Determine language from the resolver's context parameter (args[2])
+      const context = args[2];
+      const lang = context?.language || 'en';
+
+      let message = err?.message ?? 'internal_error';
+
+      // Map Prisma-specific database errors to clear translation keys
+      if (message.includes('Unique constraint failed') && message.includes('phone')) {
+        message = I18nService.translate("phone_already_registered", lang);
+      } else if (message.includes('Foreign key constraint failed') || message.includes('connectOrCreate') || message.includes('connect')) {
+        message = I18nService.translate("invalid_referenced_data", lang);
+      } else {
+        // If the error message matches a translation key, translate it, otherwise keep original
+        message = I18nService.translate(message as any, lang);
+      }
+
+      throw new Error(message);
     }
   };
 }
