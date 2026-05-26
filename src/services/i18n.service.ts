@@ -72,6 +72,10 @@ const translations = {
   provide_phone_password: {
     en: 'Please provide phone and password',
     ta: 'தொலைபேசி எண் மற்றும் கடவுச்சொல்லை உள்ளிடவும்'
+  },
+  location_required: {
+    en: 'Location is required. Please specify a location (Street, Area, Taluk, District, or Location ID).',
+    ta: 'இடம் தேவைப்படுகிறது. தயவுசெய்து ஒரு இடத்தை (தெரு, பகுதி, தாலுகா, மாவட்டம், அல்லது இடத்தின் குறியீடு) குறிப்பிடவும்.'
   }
 };
 

@@ -3,6 +3,19 @@ import prisma from '../db.js';
 import { whatsappService } from '../services/whatsapp.service.js';
 import { I18nService } from '../services/i18n.service.js';
 
+// Helper to wrap resolvers and return consistent error objects
+function safeResolver<T>(fn: (...args: any[]) => Promise<T>) {
+  return async (...args: any[]) => {
+    try {
+      return await fn(...args);
+    } catch (err: any) {
+      // If error message is already translated, return it directly
+      const message = err?.message ?? 'internal_error';
+      return { error: message } as any;
+    }
+  };
+}
+
 // Helper to get all child location IDs recursively
 async function getChildLocationIds(locationId: number): Promise<number[]> {
   const children = await (prisma as any).location.findMany({
@@ -479,7 +492,9 @@ export const resolvers = {
   },
 
   Mutation: {
-    adminLogin: async (_: any, { phone, password }: any, context: any) => {
+
+
+    adminLogin: safeResolver(async (_: any, { phone, password }: any, context: any) => {
       const lang = context?.language || 'en';
       if (!phone || !password) return { error: I18nService.translate("provide_phone_password", lang) };
 
@@ -518,13 +533,29 @@ export const resolvers = {
           approvalStatus: (finalUser as any).approvalStatus || 'APPROVED'
         }
       };
-    },
+    }),
 
-    createUser: async (_: any, args: any, context: any) => {
+    createUser: safeResolver(async (_: any, args: any, context: any) => {
       const { professionName, streetId, areaId, talukId, districtId, locationId, ...rest } = args;
 
-      // Determine the most specific location ID
-      const finalLocationId = streetId || areaId || talukId || districtId || locationId;
+      // 1. Creator Hierarchy logic
+      let creatorId = context?.user?.id;
+      if (!creatorId) {
+        const systemAdmin = await (prisma as any).user.findFirst({ where: { role: 'SUPER_ADMIN' } });
+        creatorId = systemAdmin?.id;
+      }
+
+      // Determine the most specific location ID or fallback to creator's location
+      let finalLocationId = streetId || areaId || talukId || districtId || locationId;
+
+      // If no location provided, use creator's location as fallback
+      if (!finalLocationId) {
+        const creatorUser = await (prisma as any).user.findUnique({
+          where: { id: Number(creatorId) },
+          select: { locationId: true }
+        });
+        finalLocationId = creatorUser?.locationId;
+      }
 
       // 1. Handle Profession
       let professionId = null;
@@ -535,13 +566,6 @@ export const resolvers = {
           create: { name: professionName }
         });
         professionId = profession.id;
-      }
-
-      // 2. Creator Hierarchy logic
-      let creatorId = context?.user?.id;
-      if (!creatorId) {
-        const systemAdmin = await (prisma as any).user.findFirst({ where: { role: 'SUPER_ADMIN' } });
-        creatorId = systemAdmin?.id;
       }
 
       const userData: any = {
@@ -566,15 +590,45 @@ export const resolvers = {
         data: userData,
         include: { location: true }
       });
-    },
+    }),
 
-    addMember: async (_: any, args: any, context: any) => {
+    addMember: safeResolver(async (_: any, args: any, context: any) => {
       const { professionName, password, streetId, areaId, talukId, districtId, locationId, ...rest } = args;
 
-      // Determine the most specific location ID
-      const finalLocationId = streetId || areaId || talukId || districtId || locationId;
+      // 1. Creator Fallback for testing
+      let creatorId = context?.user?.id;
+      if (!creatorId) {
+        const fallback = await (prisma as any).user.findFirst({ where: { role: 'SUPER_ADMIN' } });
+        creatorId = fallback?.id;
+      }
 
-      // 1. Handle Profession (Find or Create)
+      // Determine the most specific location ID
+      let finalLocationId = streetId || areaId || talukId || districtId || locationId;
+
+      // If no location provided, use creator's location as fallback
+      if (!finalLocationId) {
+        if (creatorId) {
+          const creatorUser = await (prisma as any).user.findUnique({
+            where: { id: Number(creatorId) },
+            select: { locationId: true }
+          });
+          finalLocationId = creatorUser?.locationId;
+        }
+      }
+
+      // If still no location, fallback to the first location in the database to prevent validation errors
+      if (!finalLocationId) {
+        const firstLocation = await (prisma as any).location.findFirst({
+          select: { id: true }
+        });
+        finalLocationId = firstLocation?.id;
+      }
+
+      if (!finalLocationId) {
+        throw new Error(I18nService.translate("location_required", context?.language));
+      }
+
+      // 2. Handle Profession (Find or Create)
       let professionId = null;
       if (professionName) {
         const profession = await (prisma as any).profession.upsert({
@@ -583,13 +637,6 @@ export const resolvers = {
           create: { name: professionName }
         });
         professionId = profession.id;
-      }
-
-      // 2. Creator Fallback for testing
-      let creatorId = context?.user?.id;
-      if (!creatorId) {
-        const fallback = await (prisma as any).user.findFirst({ where: { role: 'SUPER_ADMIN' } });
-        creatorId = fallback?.id;
       }
 
       const memberData: any = {
@@ -612,9 +659,9 @@ export const resolvers = {
       }
 
       return member;
-    },
+    }),
 
-    updateMemberStatus: async (_: any, { id, status }: any, context: any) => {
+    updateMemberStatus: safeResolver(async (_: any, { id, status }: any, context: any) => {
       // Permission Check (Only Admins/SuperAdmins can approve)
       if (context?.user?.role === 'MEMBER') throw new Error(I18nService.translate("member_not_allowed", context?.language));
 
@@ -630,50 +677,45 @@ export const resolvers = {
         data: data,
         include: { location: true, approvedBy: true }
       });
-    },
+    }),
 
-    updateMember: async (_: any, args: any, context: any) => {
+    updateMember: safeResolver(async (_: any, args: any, context: any) => {
       // Permission Check
       if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", context?.language));
 
       const { id, professionName, ...data } = args;
-const { surname, ...memberData } = data;
-// Normal Member can only edit their own profile.
-const isMember = context.user.role === 'MEMBER';
-if (isMember && Number(context.user.id) !== Number(id)) {
-  throw new Error(I18nService.translate("unauthorized_edit_member", context?.language));
-}
+      const { surname, ...memberData } = data;
+      // Normal Member can only edit their own profile.
+      const isMember = context.user.role === 'MEMBER';
+      if (isMember && Number(context.user.id) !== Number(id)) {
+        throw new Error(I18nService.translate("unauthorized_edit_member", context?.language));
+      }
 
-let updateData: any = { ...memberData };
-// Handle Profession update if name provided
-if (professionName) {
-  const profession = await (prisma as any).profession.upsert({
-    where: { name: professionName },
-    update: {},
-    create: { name: professionName }
-  });
-  updateData.professionId = profession.id;
-}
+      let updateData: any = { ...memberData };
+      // Handle Profession update if name provided
+      if (professionName) {
+        const profession = await (prisma as any).profession.upsert({
+          where: { name: professionName },
+          update: {},
+          create: { name: professionName }
+        });
+        updateData.professionId = profession.id;
+      }
 
-const updatedMember = await (prisma as any).member.update({
-  where: { id },
-  data: updateData,
-  include: { location: true, profession: true }
-});
+      const updatedMember = await (prisma as any).member.update({
+        where: { id },
+        data: updateData,
+        include: { location: true, profession: true }
+      });
       
-      
-
-
-      
-
       if (professionName) {
         await autoJoinCommunities(updatedMember.id, professionName);
       }
 
       return updatedMember;
-    },
+    }),
 
-    createEvent: async (_: any, { title, description, date, locationId, professionNames }: any, context: any) => {
+    createEvent: safeResolver(async (_: any, { title, description, date, locationId, professionNames }: any, context: any) => {
       if (!context.user) throw new Error(I18nService.translate("unauthorized_login", context?.language));
 
       // 1. Fetch fresh user details (role and locationId)
@@ -737,7 +779,7 @@ const updatedMember = await (prisma as any).member.update({
       }
 
       return event;
-    },
+    }),
 
     createCampaign: async (_: any, { title, message, locationId, professionNames }: any, context: any) => {
       if (!context.user) throw new Error(I18nService.translate("unauthorized_login", context?.language));
