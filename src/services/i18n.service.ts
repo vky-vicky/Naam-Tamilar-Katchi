@@ -105,3 +105,5 @@ export class I18nService {
   static getBroadcastMessage(title: string, message: string): string {
     return `📢 ${title}\n\n${message}`;
   }
+}
+

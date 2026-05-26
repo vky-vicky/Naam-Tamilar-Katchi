@@ -546,12 +546,10 @@ export const resolvers = {
 
       const userData: any = {
         name: rest.name,
-        surname: rest.surname || null,
+        ...(rest.surname ? { surname: rest.surname } : {}),
         phone: rest.phone,
         password: rest.password,
         role: rest.role,
-        bloodGroup: rest.bloodGroup,
-        professionName: professionName, // Save as simple string
         approvalStatus: 'APPROVED',
         image: rest.image || null
       };
