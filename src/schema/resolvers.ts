@@ -261,16 +261,28 @@ export const resolvers = {
         (prisma as any).emergencyRequest.count({ where: { ...filter, status: 'PENDING' } }),
       ]);
 
-      return { 
-        locationName, 
-        totalAdmins, 
-        totalSubAdmins, 
-        totalMembers, 
-        pendingApprovals, 
-        totalStreets, 
-        activeEvents, 
-        emergencyRequests 
+      return {
+        locationName,
+        totalAdmins,
+        totalSubAdmins,
+        totalMembers,
+        pendingApprovals,
+        totalStreets,
+        activeEvents,
+        emergencyRequests,
       };
+    },
+
+    // New resolver for towns and streets
+    getTownsAndStreets: async (_: any, { constituencyId }: any) => {
+      const towns = await (prisma as any).location.findMany({
+        where: { parentId: constituencyId, type: 'AREA' },
+        include: { children: true },
+      });
+      return towns.map((t: any) => ({
+        town: t,
+        streets: t.children.filter((c: any) => c.type === 'STREET'),
+      }));
     },
 
     getMemberDetails: async (_: any, { id }: any) => {
@@ -603,9 +615,13 @@ export const resolvers = {
       // Normalize member role to uppercase format
       const normalizedRole = dbRole === 'Member' ? 'MEMBER' : dbRole;
 
+      const userType = user ? 'admin' : 'member';
+      const rawToken = `${normalizedRole.toLowerCase()}_token:${finalUser.id}:${userType}`;
+      const base64Token = Buffer.from(rawToken).toString('base64');
+
       // 4. Success Response — role returned automatically
       return {
-        token: `${normalizedRole.toLowerCase()}_token`,
+        token: base64Token,
         user: {
           ...finalUser,
           role: normalizedRole,
@@ -1528,3 +1544,5 @@ export const resolvers = {
     }
   },
 };
+
+
