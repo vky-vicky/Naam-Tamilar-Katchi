@@ -83,29 +83,59 @@ async function main() {
     { town: "கோடியக்கரை", streets: ["ஓமகுட்டி தெரு", "திருவள்ளuவர் சாலை", "ஆசிரியர் கே.கே.நடேசன் தெரு, அன்னை சத்தியா தெரு", "ஏ.வி.எம் சுப்பிரமணியன் தெரு", "எம்.ஜி.ஆர் நகர்", "பேரறிஞர் அண்ணா காலணி", "கணக்கர் பரமசாமி நகர்"] }
   ];
 
+  let townCount = 0;
+  let streetCount = 0;
+
   for (const item of data) {
-    const town = await prisma.location.create({
-      data: {
+    let town = await prisma.location.findFirst({
+      where: {
         name: item.town,
         type: 'AREA',
-        parent: { connect: { id: constituency.id } },
-        password: 'town123'
+        parentId: constituency.id
       }
     });
 
-    for (const sName of item.streets) {
-      await prisma.location.create({
+    if (!town) {
+      town = await prisma.location.create({
         data: {
-          name: sName,
-          type: 'STREET',
-          parent: { connect: { id: town.id } }
+          name: item.town,
+          type: 'AREA',
+          parent: { connect: { id: constituency.id } },
+          password: 'town123'
         }
       });
+      townCount++;
+    }
+
+    const existingStreets = await prisma.location.findMany({
+      where: {
+        type: 'STREET',
+        parentId: town.id
+      },
+      select: { name: true }
+    });
+    const existingStreetNames = new Set(existingStreets.map((street) => street.name));
+    const missingStreets = item.streets.filter((sName) => !existingStreetNames.has(sName));
+
+    for (let i = 0; i < missingStreets.length; i += 10) {
+      const batch = missingStreets.slice(i, i + 10);
+      await Promise.all(
+        batch.map((sName) =>
+          prisma.location.create({
+            data: {
+              name: sName,
+              type: 'STREET',
+              parent: { connect: { id: town.id } }
+            }
+          })
+        )
+      );
+      streetCount += batch.length;
     }
     console.log(`✅ Imported Town: ${item.town} with ${item.streets.length} streets.`);
   }
 
-  console.log('✨ All Vedaranyam data imported successfully!');
+  console.log(`✨ All Vedaranyam data imported successfully! New towns: ${townCount}, new streets: ${streetCount}`);
 }
 
 main()

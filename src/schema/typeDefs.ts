@@ -26,10 +26,14 @@ export const typeDefs = gql`
   enum EventStatus {
     ACTIVE
     INACTIVE
+    COMPLETED
+    CANCELLED
   }
 
   enum RequestStatus {
     PENDING
+    IN_PROGRESS
+    COMPLETED
     RESOLVED
   }
 
@@ -205,7 +209,7 @@ export const typeDefs = gql`
     image: String
     likes: Int!
     community: Community!
-    createdBy: User!
+    createdBy: User
     comments: [Comment!]!
     createdAt: String!
   }
@@ -262,6 +266,7 @@ export const typeDefs = gql`
     totalSubAdmins: Int!
     totalMembers: Int!
     pendingApprovals: Int!
+    totalTowns: Int!
     totalStreets: Int!
     activeEvents: Int!
     emergencyRequests: Int!

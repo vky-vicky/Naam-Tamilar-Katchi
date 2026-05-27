@@ -33,18 +33,29 @@ function safeResolver<T>(fn: (...args: any[]) => Promise<T>) {
   };
 }
 
-// Helper to get all child location IDs recursively
+// Helper to get all child location IDs without one DB query per tree node.
 async function getChildLocationIds(locationId: number): Promise<number[]> {
-  const children = await (prisma as any).location.findMany({
-    where: { parentId: locationId },
-    select: { id: true },
+  const locations = await (prisma as any).location.findMany({
+    select: { id: true, parentId: true },
   });
+  const childrenByParent = new Map<number, number[]>();
 
-  let ids = children.map((c: any) => c.id);
-  for (const id of ids) {
-    const childIds = await getChildLocationIds(id);
-    ids = [...ids, ...childIds];
+  for (const location of locations) {
+    if (location.parentId === null || location.parentId === undefined) continue;
+    const siblings = childrenByParent.get(location.parentId) || [];
+    siblings.push(location.id);
+    childrenByParent.set(location.parentId, siblings);
   }
+
+  const ids: number[] = [];
+  const queue = [...(childrenByParent.get(locationId) || [])];
+
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    ids.push(id);
+    queue.push(...(childrenByParent.get(id) || []));
+  }
+
   return ids;
 }
 
@@ -386,6 +397,7 @@ export const resolvers = {
         totalSubAdmins, 
         totalMembers, 
         pendingApprovals, 
+        totalTowns,
         totalStreets, 
         activeEvents, 
         emergencyRequests
@@ -394,6 +406,7 @@ export const resolvers = {
         (prisma as any).user.count({ where: { ...userFilter, role: 'SUB_ADMIN' } }),
         (prisma as any).member.count({ where: { ...filter, approvalStatus: 'APPROVED' } }),
         (prisma as any).member.count({ where: { ...filter, approvalStatus: 'PENDING' } }),
+        (prisma as any).location.count({ where: { ...locationFilter, type: 'AREA' } }),
         (prisma as any).location.count({ where: { ...locationFilter, type: 'STREET' } }),
         (prisma as any).event.count({ where: { ...filter, status: 'ACTIVE' } }),
         (prisma as any).emergencyRequest.count({ where: { ...filter, status: 'PENDING' } }),
@@ -405,6 +418,7 @@ export const resolvers = {
         totalSubAdmins,
         totalMembers,
         pendingApprovals,
+        totalTowns,
         totalStreets,
         activeEvents,
         emergencyRequests,
@@ -2030,6 +2044,29 @@ export const resolvers = {
   },
 
   Comment: {
+    createdAt: (parent: any) => {
+      if (!parent.createdAt) return null;
+      return parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString();
+    }
+  },
+
+  CommunityPost: {
+    community: async (parent: any) => {
+      if (parent.community) return parent.community;
+      return (prisma as any).community.findUnique({ where: { id: parent.communityId } });
+    },
+    createdBy: async (parent: any) => {
+      if (parent.createdBy) return parent.createdBy;
+      if (!parent.createdById) return null;
+      return (prisma as any).user.findUnique({ where: { id: parent.createdById } });
+    },
+    comments: (parent: any) => {
+      if (parent.comments) return parent.comments;
+      return (prisma as any).communityComment.findMany({
+        where: { postId: parent.id },
+        orderBy: { createdAt: 'asc' }
+      });
+    },
     createdAt: (parent: any) => {
       if (!parent.createdAt) return null;
       return parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString();
