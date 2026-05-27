@@ -150,6 +150,144 @@ async function autoJoinCommunities(memberId: number, professionName: string | un
   }
 }
 
+const ADMIN_ROLES = ['SUPER_ADMIN', 'ADMIN', 'SUB_ADMIN'];
+
+function isCommunityAdmin(role: string | undefined) {
+  return !!role && ADMIN_ROLES.includes(role);
+}
+
+function getSenderType(user: any) {
+  return user?.role === 'MEMBER' ? 'MEMBER' : user?.role;
+}
+
+async function getCommunityMessageSender(message: any) {
+  if (message.senderType === 'MEMBER') {
+    return (prisma as any).member.findUnique({
+      where: { id: Number(message.senderId) },
+      select: { name: true, role: true }
+    });
+  }
+
+  return (prisma as any).user.findUnique({
+    where: { id: Number(message.senderId) },
+    select: { name: true, role: true }
+  });
+}
+
+async function getCommunityActorName(actorId: number, actorType: string) {
+  const actor = await getCommunityMessageSender({ senderId: actorId, senderType: actorType });
+  return actor?.name || 'Unknown';
+}
+
+async function assertCommunityReadAccess(communityId: number, context: any) {
+  if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", context?.language));
+
+  const community = await (prisma as any).community.findUnique({
+    where: { id: Number(communityId) }
+  });
+  if (!community) throw new Error("Community not found");
+
+  if (context.user.role === 'MEMBER') {
+    const membership = await (prisma as any).communityMember.findUnique({
+      where: {
+        communityId_memberId: {
+          communityId: Number(communityId),
+          memberId: Number(context.user.id)
+        }
+      }
+    });
+    if (!membership) throw new Error("Only community members can access this chat");
+  }
+
+  return community;
+}
+
+async function assertCommunityAdminAccess(context: any) {
+  if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", context?.language));
+  if (!isCommunityAdmin(context.user.role)) {
+    throw new Error("Only admin can manage community chat");
+  }
+}
+
+async function assertCommunityWriteAccess(communityId: number, context: any) {
+  const community = await assertCommunityReadAccess(communityId, context);
+  const user = context.user;
+
+  if (community.isMuted) {
+    const mutedUntil = community.mutedUntil ? new Date(community.mutedUntil).getTime() : null;
+    if (!isCommunityAdmin(user.role) && (!mutedUntil || mutedUntil > Date.now())) {
+      throw new Error("This community chat is muted");
+    }
+  }
+
+  if (user.role === 'MEMBER') {
+    const membership = await (prisma as any).communityMember.findUnique({
+      where: {
+        communityId_memberId: {
+          communityId,
+          memberId: Number(user.id)
+        }
+      }
+    });
+
+    const mutedUntil = membership?.mutedUntil ? new Date(membership.mutedUntil).getTime() : null;
+    if (membership?.isMuted && (!mutedUntil || mutedUntil > Date.now())) {
+      throw new Error("You are muted in this community");
+    }
+
+    if (!community.allowMemberMessages) {
+      throw new Error("Only admin can message");
+    }
+  } else if (!isCommunityAdmin(user.role)) {
+    throw new Error("Only community members can message");
+  }
+
+  return community;
+}
+
+async function incrementCommunityUnreadCounts(communityId: number, senderId: number, senderType: string) {
+  if (senderType !== 'MEMBER') {
+    await (prisma as any).communityMember.updateMany({
+      where: { communityId },
+      data: { unreadCount: { increment: 1 } }
+    });
+    return;
+  }
+
+  await (prisma as any).communityMember.updateMany({
+    where: {
+      communityId,
+      memberId: { not: senderId }
+    },
+    data: { unreadCount: { increment: 1 } }
+  });
+}
+
+async function formatCommunityMessage(message: any) {
+  const sender = await getCommunityMessageSender(message);
+  const reactions = message.reactions || await (prisma as any).communityMessageReaction.findMany({
+    where: { messageId: Number(message.id) },
+    orderBy: { createdAt: 'asc' }
+  });
+  const readByCount = await (prisma as any).communityMessageRead.count({
+    where: { messageId: Number(message.id) }
+  });
+
+  return {
+    ...message,
+    senderName: sender?.name || 'Unknown',
+    reactions: await Promise.all(reactions.map(async (reaction: any) => ({
+      ...reaction,
+      reactorName: await getCommunityActorName(reaction.reactorId, reaction.reactorType),
+      createdAt: reaction.createdAt instanceof Date ? reaction.createdAt.toISOString() : new Date(reaction.createdAt).toISOString()
+    }))),
+    readByCount,
+    editedAt: message.editedAt ? (message.editedAt instanceof Date ? message.editedAt.toISOString() : new Date(message.editedAt).toISOString()) : null,
+    deletedAt: message.deletedAt ? (message.deletedAt instanceof Date ? message.deletedAt.toISOString() : new Date(message.deletedAt).toISOString()) : null,
+    createdAt: message.createdAt instanceof Date ? message.createdAt.toISOString() : new Date(message.createdAt).toISOString()
+  };
+}
+
 export const resolvers = {
   Query: {
     me: async (_: any, __: any, context: any) => {
@@ -426,51 +564,112 @@ export const resolvers = {
       }));
     },
 
-    getTargetableLocations: async (_: any, __: any, context: any) => {
+    getCommunityMessages: async (_: any, { communityId, limit = 50, beforeMessageId }: any, context: any) => {
+      await assertCommunityReadAccess(Number(communityId), context);
+
+      const where: any = { communityId: Number(communityId) };
+      if (beforeMessageId) {
+        const beforeMessage = await (prisma as any).communityMessage.findFirst({
+          where: {
+            id: Number(beforeMessageId),
+            communityId: Number(communityId)
+          },
+          select: { createdAt: true }
+        });
+        if (beforeMessage) {
+          where.createdAt = { lt: beforeMessage.createdAt };
+        }
+      }
+
+      const messages = await (prisma as any).communityMessage.findMany({
+        where,
+        take: Math.min(Number(limit) || 50, 100),
+        include: { replyTo: true, reactions: true },
+        orderBy: { createdAt: 'desc' }
+      });
+
+      return Promise.all(messages.reverse().map(formatCommunityMessage));
+    },
+
+    getCommunityUnreadCount: async (_: any, { communityId }: any, context: any) => {
+      await assertCommunityReadAccess(Number(communityId), context);
+
+      if (context.user.role !== 'MEMBER') return 0;
+
+      const membership = await (prisma as any).communityMember.findUnique({
+        where: {
+          communityId_memberId: {
+            communityId: Number(communityId),
+            memberId: Number(context.user.id)
+          }
+        },
+        select: { unreadCount: true }
+      });
+
+      return membership?.unreadCount || 0;
+    },
+
+    getTargetableLocations: async (_: any, { parentId }: any, context: any) => {
       const user = context.user;
       if (!user) return [];
       const role = user.role;
       const userLocId = user.locationId;
 
-      // Super Admin can target the whole state (assume root location id = null or 0)
+      // Helper to fetch locations and attach member count
+      const fetchWithMemberCount = async (locations: any[]) => {
+        return Promise.all(
+          locations.map(async (loc: any) => {
+            const childIds = await getChildLocationIds(loc.id);
+            const allIds = [loc.id, ...childIds];
+            const memberCount = await (prisma as any).member.count({ 
+              where: { locationId: { in: allIds }, isActive: true } 
+            });
+            return { ...loc, memberCount };
+          })
+        );
+      };
+
+      if (parentId !== undefined && parentId !== null) {
+        // Enforce permissions: Check if user is allowed to target this parent location
+        if (role !== 'SUPER_ADMIN') {
+          if (!userLocId) return [];
+          if (userLocId !== parentId) {
+            const childIds = await getChildLocationIds(userLocId);
+            if (!childIds.includes(parentId)) {
+              return []; // Unauthorized
+            }
+          }
+        }
+
+        // Return direct children of the parentId
+        const children = await (prisma as any).location.findMany({
+          where: { parentId: parentId },
+          select: { id: true, name: true, type: true, parentId: true }
+        });
+        return fetchWithMemberCount(children);
+      }
+
+      // If no parentId is passed:
       if (role === 'SUPER_ADMIN') {
-        // Return top‑level locations (states) – assuming type STATE
+        // Return top‑level locations (states)
         const states = await (prisma as any).location.findMany({
           where: { type: 'STATE' },
-          select: { id: true, name: true, type: true },
+          select: { id: true, name: true, type: true, parentId: true },
         });
-        const withCount = await Promise.all(
-          states.map(async (loc: any) => {
-            const memberCount = await (prisma as any).member.count({ where: { locationId: loc.id } });
-            return { ...loc, memberCount };
-          })
-        );
-        return withCount;
+        return fetchWithMemberCount(states);
       }
 
-      // Admin / Sub‑Admin – can target own location and all its children
       if (role === 'ADMIN' || role === 'SUB_ADMIN') {
         if (!userLocId) return [];
+        // Return only their assigned location as the root choice
         const own = await (prisma as any).location.findUnique({
           where: { id: userLocId },
-          select: { id: true, name: true, type: true },
+          select: { id: true, name: true, type: true, parentId: true },
         });
-        const childIds = await getChildLocationIds(userLocId);
-        const children = await (prisma as any).location.findMany({
-          where: { id: { in: childIds } },
-          select: { id: true, name: true, type: true },
-        });
-        const all = [own, ...children];
-        const withCount = await Promise.all(
-          all.map(async (loc: any) => {
-            const memberCount = await (prisma as any).member.count({ where: { locationId: loc.id } });
-            return { ...loc, memberCount };
-          })
-        );
-        return withCount;
+        if (!own) return [];
+        return fetchWithMemberCount([own]);
       }
 
-      // Members have no broadcast permissions
       return [];
     },
 
@@ -1151,7 +1350,7 @@ export const resolvers = {
       return true;
     },
 
-    createCommunity: async (_: any, { name, description, image }: any, context: any) => {
+    createCommunity: async (_: any, { name, description, image, allowMemberMessages }: any, context: any) => {
       if (!context.user) throw new Error(I18nService.translate("unauthorized_login", context?.language));
       if (context.user.role !== 'SUPER_ADMIN' && context.user.role !== 'ADMIN') {
         throw new Error(I18nService.translate("member_not_allowed", context?.language));
@@ -1159,8 +1358,17 @@ export const resolvers = {
 
       const community = await (prisma as any).community.upsert({
         where: { name },
-        update: { description, image },
-        create: { name, description, image }
+        update: {
+          description,
+          image,
+          ...(allowMemberMessages !== undefined ? { allowMemberMessages } : {})
+        },
+        create: {
+          name,
+          description,
+          image,
+          allowMemberMessages: allowMemberMessages ?? true
+        }
       });
 
       return {
@@ -1293,6 +1501,297 @@ export const resolvers = {
         ...comment,
         createdAt: comment.createdAt.toISOString()
       };
+    },
+
+    sendCommunityMessage: async (_: any, { communityId, message, replyToMessageId, messageType = 'TEXT', mediaUrl, mediaType, fileName }: any, context: any) => {
+      await assertCommunityWriteAccess(Number(communityId), context);
+      const user = context.user;
+      const trimmedMessage = String(message || '').trim();
+
+      if (!trimmedMessage && !mediaUrl) throw new Error("Message or media is required");
+
+      if (replyToMessageId) {
+        const replyTo = await (prisma as any).communityMessage.findFirst({
+          where: {
+            id: Number(replyToMessageId),
+            communityId: Number(communityId)
+          }
+        });
+        if (!replyTo) throw new Error("Reply message not found in this community");
+      }
+
+      const createdMessage = await (prisma as any).communityMessage.create({
+        data: {
+          communityId: Number(communityId),
+          senderId: Number(user.id),
+          senderType: getSenderType(user),
+          message: trimmedMessage,
+          messageType,
+          mediaUrl,
+          mediaType,
+          fileName,
+          replyToMessageId: replyToMessageId ? Number(replyToMessageId) : null
+        },
+        include: { replyTo: true, reactions: true }
+      });
+
+      await incrementCommunityUnreadCounts(Number(communityId), Number(user.id), getSenderType(user));
+
+      const payload = await formatCommunityMessage(createdMessage);
+      const io = (global as any).io;
+      if (io) {
+        io.to(`community:${communityId}`).emit('communityMessage', payload);
+      }
+
+      return payload;
+    },
+
+    editCommunityMessage: async (_: any, { id, message }: any, context: any) => {
+      if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", context?.language));
+      const existing = await (prisma as any).communityMessage.findUnique({
+        where: { id: Number(id) }
+      });
+      if (!existing) throw new Error("Community message not found");
+      if (existing.isDeleted) throw new Error("Deleted message cannot be edited");
+
+      const isOwner = existing.senderId === Number(context.user.id) && existing.senderType === getSenderType(context.user);
+      if (!isOwner && !isCommunityAdmin(context.user.role)) {
+        throw new Error("Only sender or admin can edit this message");
+      }
+
+      const trimmedMessage = String(message || '').trim();
+      if (!trimmedMessage) throw new Error("Message is required");
+
+      const updatedMessage = await (prisma as any).communityMessage.update({
+        where: { id: Number(id) },
+        data: {
+          message: trimmedMessage,
+          editedAt: new Date()
+        },
+        include: { replyTo: true, reactions: true }
+      });
+
+      const payload = await formatCommunityMessage(updatedMessage);
+      const io = (global as any).io;
+      if (io) {
+        io.to(`community:${existing.communityId}`).emit('communityMessageEdited', payload);
+      }
+
+      return payload;
+    },
+
+    deleteCommunityMessage: async (_: any, { id }: any, context: any) => {
+      if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", context?.language));
+      if (!isCommunityAdmin(context.user.role)) {
+        throw new Error("Only admin can delete community messages");
+      }
+
+      const existing = await (prisma as any).communityMessage.findUnique({
+        where: { id: Number(id) }
+      });
+      if (!existing) throw new Error("Community message not found");
+
+      await (prisma as any).communityMessage.update({
+        where: { id: Number(id) },
+        data: {
+          message: "This message was deleted",
+          isDeleted: true,
+          deletedAt: new Date()
+        }
+      });
+
+      const io = (global as any).io;
+      if (io) {
+        io.to(`community:${existing.communityId}`).emit('communityMessageDeleted', {
+          id: Number(id),
+          communityId: existing.communityId
+        });
+      }
+
+      return true;
+    },
+
+    reactToCommunityMessage: async (_: any, { messageId, emoji }: any, context: any) => {
+      if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", context?.language));
+      const message = await (prisma as any).communityMessage.findUnique({
+        where: { id: Number(messageId) }
+      });
+      if (!message) throw new Error("Community message not found");
+      await assertCommunityReadAccess(Number(message.communityId), context);
+
+      const cleanEmoji = String(emoji || '').trim();
+      if (!cleanEmoji) throw new Error("Reaction emoji is required");
+
+      await (prisma as any).communityMessageReaction.upsert({
+        where: {
+          messageId_reactorId_reactorType: {
+            messageId: Number(messageId),
+            reactorId: Number(context.user.id),
+            reactorType: getSenderType(context.user)
+          }
+        },
+        update: { emoji: cleanEmoji },
+        create: {
+          messageId: Number(messageId),
+          reactorId: Number(context.user.id),
+          reactorType: getSenderType(context.user),
+          emoji: cleanEmoji
+        }
+      });
+
+      const updatedMessage = await (prisma as any).communityMessage.findUnique({
+        where: { id: Number(messageId) },
+        include: { replyTo: true, reactions: true }
+      });
+      const payload = await formatCommunityMessage(updatedMessage);
+      const io = (global as any).io;
+      if (io) {
+        io.to(`community:${message.communityId}`).emit('communityMessageReaction', payload);
+      }
+
+      return payload;
+    },
+
+    markCommunityMessagesRead: async (_: any, { communityId, messageIds }: any, context: any) => {
+      await assertCommunityReadAccess(Number(communityId), context);
+      const readerType = getSenderType(context.user);
+
+      for (const messageId of messageIds || []) {
+        const message = await (prisma as any).communityMessage.findFirst({
+          where: {
+            id: Number(messageId),
+            communityId: Number(communityId)
+          }
+        });
+        if (!message) continue;
+
+        await (prisma as any).communityMessageRead.upsert({
+          where: {
+            messageId_readerId_readerType: {
+              messageId: Number(messageId),
+              readerId: Number(context.user.id),
+              readerType
+            }
+          },
+          update: { readAt: new Date() },
+          create: {
+            messageId: Number(messageId),
+            readerId: Number(context.user.id),
+            readerType
+          }
+        });
+      }
+
+      if (context.user.role === 'MEMBER') {
+        await (prisma as any).communityMember.update({
+          where: {
+            communityId_memberId: {
+              communityId: Number(communityId),
+              memberId: Number(context.user.id)
+            }
+          },
+          data: {
+            unreadCount: 0,
+            lastReadAt: new Date()
+          }
+        });
+      }
+
+      const io = (global as any).io;
+      if (io) {
+        io.to(`community:${communityId}`).emit('communityMessagesRead', {
+          communityId: Number(communityId),
+          readerId: Number(context.user.id),
+          readerType,
+          messageIds
+        });
+      }
+
+      return true;
+    },
+
+    updateCommunityChatSettings: async (_: any, { communityId, allowMemberMessages, isMuted, mutedUntil, pinnedMessageId }: any, context: any) => {
+      await assertCommunityAdminAccess(context);
+
+      if (pinnedMessageId) {
+        const pinnedMessage = await (prisma as any).communityMessage.findFirst({
+          where: {
+            id: Number(pinnedMessageId),
+            communityId: Number(communityId)
+          }
+        });
+        if (!pinnedMessage) throw new Error("Pinned message not found in this community");
+      }
+
+      const community = await (prisma as any).community.update({
+        where: { id: Number(communityId) },
+        data: {
+          ...(allowMemberMessages !== undefined ? { allowMemberMessages } : {}),
+          ...(isMuted !== undefined ? { isMuted } : {}),
+          ...(mutedUntil !== undefined ? { mutedUntil: mutedUntil ? new Date(mutedUntil) : null } : {}),
+          ...(pinnedMessageId !== undefined ? { pinnedMessageId: pinnedMessageId ? Number(pinnedMessageId) : null } : {})
+        }
+      });
+
+      const io = (global as any).io;
+      if (io) {
+        io.to(`community:${communityId}`).emit('communityChatSettingsUpdated', community);
+      }
+
+      return {
+        ...community,
+        memberCount: await (prisma as any).communityMember.count({ where: { communityId: Number(communityId) } }),
+        createdAt: community.createdAt.toISOString()
+      };
+    },
+
+    muteCommunityMember: async (_: any, { communityId, memberId, mutedUntil }: any, context: any) => {
+      await assertCommunityAdminAccess(context);
+      await (prisma as any).communityMember.update({
+        where: {
+          communityId_memberId: {
+            communityId: Number(communityId),
+            memberId: Number(memberId)
+          }
+        },
+        data: {
+          isMuted: true,
+          mutedUntil: mutedUntil ? new Date(mutedUntil) : null
+        }
+      });
+
+      const io = (global as any).io;
+      if (io) {
+        io.to(`community:${communityId}`).emit('communityMemberMuted', {
+          communityId: Number(communityId),
+          memberId: Number(memberId),
+          mutedUntil: mutedUntil || null
+        });
+      }
+
+      return true;
+    },
+
+    removeCommunityMember: async (_: any, { communityId, memberId }: any, context: any) => {
+      await assertCommunityAdminAccess(context);
+      await (prisma as any).communityMember.delete({
+        where: {
+          communityId_memberId: {
+            communityId: Number(communityId),
+            memberId: Number(memberId)
+          }
+        }
+      });
+
+      const io = (global as any).io;
+      if (io) {
+        io.to(`community:${communityId}`).emit('communityMemberRemoved', {
+          communityId: Number(communityId),
+          memberId: Number(memberId)
+        });
+      }
+
+      return true;
     },
 
     changeUserRole: async (_: any, { phone, role }: any, context: any) => {
@@ -1531,6 +2030,68 @@ export const resolvers = {
   },
 
   Comment: {
+    createdAt: (parent: any) => {
+      if (!parent.createdAt) return null;
+      return parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString();
+    }
+  },
+
+  Community: {
+    allowMemberMessages: (parent: any) => parent.allowMemberMessages ?? true,
+    isMuted: (parent: any) => parent.isMuted ?? false,
+    mutedUntil: (parent: any) => {
+      if (!parent.mutedUntil) return null;
+      return parent.mutedUntil instanceof Date ? parent.mutedUntil.toISOString() : new Date(parent.mutedUntil).toISOString();
+    },
+    pinnedMessage: async (parent: any) => {
+      if (!parent.pinnedMessageId) return null;
+      const message = await (prisma as any).communityMessage.findUnique({
+        where: { id: Number(parent.pinnedMessageId) },
+        include: { replyTo: true, reactions: true }
+      });
+      return message ? formatCommunityMessage(message) : null;
+    },
+    unreadCount: async (parent: any, _: any, context: any) => {
+      if (context?.user?.role !== 'MEMBER') return 0;
+      const membership = await (prisma as any).communityMember.findUnique({
+        where: {
+          communityId_memberId: {
+            communityId: Number(parent.id),
+            memberId: Number(context.user.id)
+          }
+        },
+        select: { unreadCount: true }
+      });
+      return membership?.unreadCount || 0;
+    },
+    createdAt: (parent: any) => {
+      if (!parent.createdAt) return null;
+      return parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString();
+    }
+  },
+
+  CommunityMessage: {
+    senderName: async (parent: any) => {
+      if (parent.senderName) return parent.senderName;
+      const sender = await getCommunityMessageSender(parent);
+      return sender?.name || 'Unknown';
+    },
+    replyTo: async (parent: any) => {
+      if (!parent.replyToMessageId) return null;
+      if (parent.replyTo) return formatCommunityMessage(parent.replyTo);
+      const replyTo = await (prisma as any).communityMessage.findUnique({
+        where: { id: Number(parent.replyToMessageId) }
+      });
+      return replyTo ? formatCommunityMessage(replyTo) : null;
+    },
+    createdAt: (parent: any) => {
+      if (!parent.createdAt) return null;
+      return parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString();
+    }
+  },
+
+  CommunityMessageReaction: {
+    reactorName: async (parent: any) => getCommunityActorName(parent.reactorId, parent.reactorType),
     createdAt: (parent: any) => {
       if (!parent.createdAt) return null;
       return parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString();

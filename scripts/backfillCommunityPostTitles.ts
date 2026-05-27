@@ -4,7 +4,7 @@ import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 
 async function backfillTitles() {
-  const posts = await prisma.communityPost.findMany({
+  const posts = await (prisma as any).communityPost.findMany({
     where: { title: null },
     select: { id: true }
   });

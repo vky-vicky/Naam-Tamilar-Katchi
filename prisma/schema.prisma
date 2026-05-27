@@ -1,25 +1,426 @@
-// Added after existing enums
-
-enum ResponseStatus {
-  INTERESTED
-  MAYBE
-  NOT_INTERESTED
-  ATTENDING
-  MAYBE_ATTENDING
-  NOT_ATTENDING
+generator client {
+  provider = "prisma-client-js"
 }
 
-model Response {
-  id            Int            @id @default(autoincrement())
-  messageId     Int            // References EmergencyRequest.id (or future EmergencyMessage.id)
-  memberId      Int
-  responseStatus ResponseStatus
-  remarks       String?
-  responseTime  DateTime       @default(now())
-  createdAt     DateTime       @default(now())
+datasource db {
+  provider = "postgresql"
+}
 
-  // Relations (optional)
-  member        Member         @relation(fields: [memberId], references: [id])
-  // Assuming emergency request as the message
-  emergencyRequest EmergencyRequest @relation(fields: [messageId], references: [id])
+model Location {
+  id            Int                @id @default(autoincrement())
+  name          String
+  type          LocationType
+  parentId      Int?
+  password      String?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  targets       CampaignTarget[]
+  parent        Location?          @relation("LocationHierarchy", fields: [parentId], references: [id])
+  children      Location[]         @relation("LocationHierarchy")
+  members       Member[]
+  users         User[]
+  events        Event[]
+  requests      EmergencyRequest[]
+  posts         Post[]
+  notifications Notification[]
+  broadcasts    Broadcast[]
+  communities   Community[]
+
+  @@index([parentId])
+  @@index([type])
+}
+
+model Member {
+  id               Int                @id @default(autoincrement())
+  name             String
+  surname          String?
+  phone            String             @unique
+  password         String?
+  image            String?
+  bloodGroup       String?
+  allergies        String?
+  conditions       String?
+  emergencyContact String?
+  role             String             @default("Member")
+  professionId     Int?
+  profession       Profession?        @relation(fields: [professionId], references: [id])
+  locationId       Int
+  location         Location           @relation(fields: [locationId], references: [id])
+  approvalStatus   ApprovalStatus     @default(PENDING)
+  consent          Boolean            @default(true)
+  isActive         Boolean            @default(true)
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  createdById      Int?
+  createdBy        User?              @relation("MemberCreator", fields: [createdById], references: [id])
+  approvedById     Int?
+  approvedBy       User?              @relation("MemberApprover", fields: [approvedById], references: [id])
+  fcmToken         String?
+  messageLogs      MessageLog[]
+  requests         EmergencyRequest[]
+  eventResponses   EventResponse[]
+  communityMembers CommunityMember[]
+
+  @@index([locationId])
+  @@index([professionId])
+}
+
+model Profession {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  members   Member[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model User {
+  id              Int                @id @default(autoincrement())
+  name            String
+  surname         String?
+  phone           String             @unique
+  password        String
+  role            UserRole           @default(MEMBER)
+  approvalStatus  ApprovalStatus     @default(PENDING)
+  locationId      Int?
+  parentId        Int?
+  parent          User?              @relation("Hierarchy", fields: [parentId], references: [id])
+  children        User[]             @relation("Hierarchy")
+  isActive        Boolean            @default(true)
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  auditLogs       AuditLog[]
+  campaigns       Campaign[]
+  createdEvents   Event[]
+  createdRequests EmergencyRequest[]
+  createdMembers  Member[]           @relation("MemberCreator")
+  approvedMembers Member[]           @relation("MemberApprover")
+  fcmToken        String?
+  image           String?
+  location        Location?          @relation(fields: [locationId], references: [id])
+  communityPosts  CommunityPost[]
+  broadcasts      Broadcast[]
+
+  @@index([role])
+  @@index([approvalStatus])
+}
+
+model Campaign {
+  id          Int              @id @default(autoincrement())
+  title       String
+  message     String
+  createdById Int
+  status      CampaignStatus   @default(DRAFT)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  createdBy   User             @relation(fields: [createdById], references: [id])
+  targets     CampaignTarget[]
+  messageLogs MessageLog[]
+}
+
+model CampaignTarget {
+  id         Int      @id @default(autoincrement())
+  campaignId Int
+  locationId Int
+  campaign   Campaign @relation(fields: [campaignId], references: [id])
+  location   Location @relation(fields: [locationId], references: [id])
+}
+
+model MessageLog {
+  id                Int           @id @default(autoincrement())
+  campaignId        Int
+  memberId          Int
+  phone             String
+  status            MessageStatus @default(PENDING)
+  providerMessageId String?
+  errorMessage      String?
+  sentAt            DateTime?
+  createdAt         DateTime      @default(now())
+  campaign          Campaign      @relation(fields: [campaignId], references: [id])
+  member            Member        @relation(fields: [memberId], references: [id])
+}
+
+model OTP {
+  id         Int      @id @default(autoincrement())
+  phone      String
+  otp        String
+  expiresAt  DateTime
+  isVerified Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  @@index([phone])
+}
+
+model AuditLog {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  action    String
+  details   String?
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id])
+}
+
+model Event {
+  id          Int             @id @default(autoincrement())
+  title       String
+  description String?
+  date        DateTime
+  locationId  Int
+  location    Location        @relation(fields: [locationId], references: [id])
+  status      EventStatus     @default(ACTIVE)
+  createdById Int
+  createdBy   User            @relation(fields: [createdById], references: [id])
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  responses   EventResponse[]
+}
+
+model EventResponse {
+  id        Int        @id @default(autoincrement())
+  eventId   Int
+  event     Event      @relation(fields: [eventId], references: [id])
+  memberId  Int
+  member    Member     @relation(fields: [memberId], references: [id])
+  status    RSVPStatus
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  @@unique([eventId, memberId])
+}
+
+model EmergencyRequest {
+  id          Int           @id @default(autoincrement())
+  title       String
+  description String?
+  type        RequestType   @default(EMERGENCY)
+  status      RequestStatus @default(PENDING)
+  locationId  Int
+  location    Location      @relation(fields: [locationId], references: [id])
+  memberId    Int?
+  member      Member?       @relation(fields: [memberId], references: [id])
+  createdById Int?
+  createdBy   User?         @relation(fields: [createdById], references: [id])
+  audience    String? // Ex: "ALL_CAPTAINS", "STREET_MEMBERS"
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+}
+
+model Post {
+  id         Int       @id @default(autoincrement())
+  content    String
+  image      String?
+  authorName String
+  authorRole String?
+  likes      Int       @default(0)
+  locationId Int
+  location   Location  @relation(fields: [locationId], references: [id])
+  comments   Comment[]
+  createdAt  DateTime  @default(now())
+}
+
+model Comment {
+  id         Int      @id @default(autoincrement())
+  content    String
+  authorName String
+  authorRole String?
+  postId     Int
+  post       Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+}
+
+model Notification {
+  id         Int      @id @default(autoincrement())
+  title      String
+  message    String
+  type       String // "EVENT", "REQUEST", "ALERT"
+  time       String? // e.g. "2h ago"
+  locationId Int
+  location   Location @relation(fields: [locationId], references: [id])
+  createdAt  DateTime @default(now())
+}
+
+enum LocationType {
+  STATE
+  DISTRICT
+  TALUK
+  AREA
+  STREET
+}
+
+enum EventStatus {
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+enum RequestType {
+  EMERGENCY
+  NORMAL
+}
+
+enum RequestStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum RSVPStatus {
+  GOING
+  MAYBE
+  NOT_GOING
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+  SUB_ADMIN
+  MEMBER
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  SUSPENDED
+}
+
+enum CampaignStatus {
+  DRAFT
+  SENT
+  FAILED
+}
+
+enum MessageStatus {
+  PENDING
+  SENT
+  DELIVERED
+  FAILED
+}
+
+model Broadcast {
+  id          Int          @id @default(autoincrement())
+  title       String
+  message     String
+  image       String?
+  scope       LocationType // STATE, DISTRICT, TALUK, AREA, STREET — broadcast reach level
+  locationId  Int
+  location    Location     @relation(fields: [locationId], references: [id])
+  createdById Int
+  createdBy   User         @relation(fields: [createdById], references: [id])
+  isActive    Boolean      @default(true)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([locationId])
+  @@index([createdById])
+  @@index([scope])
+}
+
+model Community {
+  id                  Int                @id @default(autoincrement())
+  role                UserRole? // Role the group targets (e.g., DOCTOR)
+  locationId          Int? // Location scope of the group
+  location            Location?          @relation(fields: [locationId], references: [id])
+  name                String             @unique
+  description         String?
+  image               String?
+  allowMemberMessages Boolean            @default(true)
+  isMuted             Boolean            @default(false)
+  mutedUntil          DateTime?
+  pinnedMessageId     Int?
+  posts               CommunityPost[]
+  members             CommunityMember[]
+  messages            CommunityMessage[]
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+}
+
+model CommunityPost {
+  id          Int                @id @default(autoincrement())
+  title       String
+  content     String
+  image       String?
+  communityId Int
+  community   Community          @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  createdById Int
+  createdBy   User               @relation(fields: [createdById], references: [id])
+  likes       Int                @default(0)
+  comments    CommunityComment[]
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+}
+
+model CommunityMember {
+  id          Int       @id @default(autoincrement())
+  communityId Int
+  community   Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  memberId    Int
+  member      Member    @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  isMuted     Boolean   @default(false)
+  mutedUntil  DateTime?
+  unreadCount Int       @default(0)
+  lastReadAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@unique([communityId, memberId])
+}
+
+model CommunityComment {
+  id         Int           @id @default(autoincrement())
+  content    String
+  authorName String
+  authorRole String?
+  postId     Int
+  post       CommunityPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  createdAt  DateTime      @default(now())
+}
+
+model CommunityMessage {
+  id               Int                        @id @default(autoincrement())
+  communityId      Int
+  senderId         Int
+  senderType       String
+  message          String
+  messageType      String                     @default("TEXT")
+  mediaUrl         String?
+  mediaType        String?
+  fileName         String?
+  status           String                     @default("SENT")
+  replyToMessageId Int?
+  editedAt         DateTime?
+  isDeleted        Boolean                    @default(false)
+  deletedAt        DateTime?
+  createdAt        DateTime                   @default(now())
+  community        Community                  @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  replyTo          CommunityMessage?          @relation("CommunityMessageReplies", fields: [replyToMessageId], references: [id])
+  replies          CommunityMessage[]         @relation("CommunityMessageReplies")
+  reactions        CommunityMessageReaction[]
+  reads            CommunityMessageRead[]
+
+  @@index([communityId, createdAt])
+  @@index([senderId, senderType])
+}
+
+model CommunityMessageReaction {
+  id          Int              @id @default(autoincrement())
+  messageId   Int
+  reactorId   Int
+  reactorType String
+  emoji       String
+  createdAt   DateTime         @default(now())
+  message     CommunityMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, reactorId, reactorType])
+  @@index([messageId])
+}
+
+model CommunityMessageRead {
+  id         Int              @id @default(autoincrement())
+  messageId  Int
+  readerId   Int
+  readerType String
+  readAt     DateTime         @default(now())
+  message    CommunityMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, readerId, readerType])
+  @@index([messageId])
 }

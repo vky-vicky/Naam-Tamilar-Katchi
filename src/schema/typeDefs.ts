@@ -148,7 +148,45 @@ export const typeDefs = gql`
     name: String!
     description: String
     image: String
+    allowMemberMessages: Boolean!
+    isMuted: Boolean!
+    mutedUntil: String
+    pinnedMessageId: Int
+    pinnedMessage: CommunityMessage
+    unreadCount: Int!
     memberCount: Int!
+    createdAt: String!
+  }
+
+  type CommunityMessageReaction {
+    id: Int!
+    messageId: Int!
+    reactorId: Int!
+    reactorType: String!
+    reactorName: String!
+    emoji: String!
+    createdAt: String!
+  }
+
+  type CommunityMessage {
+    id: Int!
+    communityId: Int!
+    senderId: Int!
+    senderType: String!
+    senderName: String!
+    message: String!
+    messageType: String!
+    mediaUrl: String
+    mediaType: String
+    fileName: String
+    status: String!
+    replyToMessageId: Int
+    replyTo: CommunityMessage
+    editedAt: String
+    isDeleted: Boolean!
+    deletedAt: String
+    reactions: [CommunityMessageReaction!]!
+    readByCount: Int!
     createdAt: String!
   }
 
@@ -246,7 +284,9 @@ export const typeDefs = gql`
     getEmergencyRequestList(locationId: Int, status: RequestStatus): [EmergencyRequest!]!
     getCommunities: [Community!]!
     getCommunityPosts(communityId: Int!): [CommunityPost!]!
-    getTargetableLocations: [Location!]!
+    getCommunityMessages(communityId: Int!, limit: Int = 50, beforeMessageId: Int): [CommunityMessage!]!
+    getCommunityUnreadCount(communityId: Int!): Int!
+    getTargetableLocations(parentId: Int): [Location!]!
     getBroadcasts(locationId: Int, scope: BroadcastScope): [Broadcast!]!
     pendingMembers(locationId: Int): [Member!]!
     bloodGroups: [String!]!
@@ -323,6 +363,7 @@ export const typeDefs = gql`
       name: String!
       description: String
       image: String
+      allowMemberMessages: Boolean
     ): Community!
     joinCommunity(
       communityId: Int!
@@ -339,6 +380,46 @@ export const typeDefs = gql`
       postId: Int!
       content: String!
     ): CommunityComment!
+    sendCommunityMessage(
+      communityId: Int!
+      message: String!
+      replyToMessageId: Int
+      messageType: String
+      mediaUrl: String
+      mediaType: String
+      fileName: String
+    ): CommunityMessage!
+    editCommunityMessage(
+      id: Int!
+      message: String!
+    ): CommunityMessage!
+    deleteCommunityMessage(
+      id: Int!
+    ): Boolean!
+    reactToCommunityMessage(
+      messageId: Int!
+      emoji: String!
+    ): CommunityMessage!
+    markCommunityMessagesRead(
+      communityId: Int!
+      messageIds: [Int!]!
+    ): Boolean!
+    updateCommunityChatSettings(
+      communityId: Int!
+      allowMemberMessages: Boolean
+      isMuted: Boolean
+      mutedUntil: String
+      pinnedMessageId: Int
+    ): Community!
+    muteCommunityMember(
+      communityId: Int!
+      memberId: Int!
+      mutedUntil: String
+    ): Boolean!
+    removeCommunityMember(
+      communityId: Int!
+      memberId: Int!
+    ): Boolean!
     changeUserRole(
       phone: String!
       role: String!

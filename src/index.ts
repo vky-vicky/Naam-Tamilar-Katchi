@@ -25,6 +25,26 @@ async function startServer() {
 
   io.on('connection', (socket) => {
     console.log('🔌 Client connected to Socket.io:', socket.id);
+    socket.on('joinCommunityChat', (communityId: number | string) => {
+      if (!communityId) return;
+      socket.join(`community:${communityId}`);
+    });
+
+    socket.on('leaveCommunityChat', (communityId: number | string) => {
+      if (!communityId) return;
+      socket.leave(`community:${communityId}`);
+    });
+
+    socket.on('communityTyping', (payload: { communityId?: number | string; userId?: number | string; userName?: string }) => {
+      if (!payload?.communityId) return;
+      socket.to(`community:${payload.communityId}`).emit('communityTyping', payload);
+    });
+
+    socket.on('communityStopTyping', (payload: { communityId?: number | string; userId?: number | string; userName?: string }) => {
+      if (!payload?.communityId) return;
+      socket.to(`community:${payload.communityId}`).emit('communityStopTyping', payload);
+    });
+
     socket.on('disconnect', () => {
       console.log('🔌 Client disconnected from Socket.io:', socket.id);
     });
@@ -71,7 +91,7 @@ async function startServer() {
           try {
             if (token.includes(':')) {
               const [roleToken, idStr, type] = token.split(':');
-              const id = parseInt(idStr, 10);
+              const id = parseInt(idStr || '', 10);
               
               if (!isNaN(id)) {
                 let dbUser = null;
