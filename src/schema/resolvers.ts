@@ -126,7 +126,9 @@ async function resolveLocationId(districtName: string, constituencyName: string,
 async function autoJoinCommunities(memberId: number, professionName: string | undefined) {
   if (!professionName) return;
   const normalized = professionName.toLowerCase().trim();
-  const communities = await (prisma as any).community.findMany();
+  const communities = await (prisma as any).community.findMany({
+  select: { id: true, name: true }
+});
   for (const community of communities) {
     const normalCommunity = community.name.toLowerCase();
     // E.g., profession "lawyer" matches community "lawyers"
@@ -505,10 +507,70 @@ export const resolvers = {
         })
       );
       return withCount;
-    }
+    },
+
+    // ─────────────────────────────────────────────────────────────
+    // Pending Members – ADMIN / SUPER_ADMIN மட்டுமே பார்க்கலாம்
+    // ─────────────────────────────────────────────────────────────
+    pendingMembers: async (_: any, { locationId }: any, context: any) => {
+      const user = context?.user;
+      const lang = context?.language || 'en';
+
+      if (!user || (user.role !== 'ADMIN' && user.role !== 'SUPER_ADMIN' && user.role !== 'SUB_ADMIN')) {
+        throw new Error(I18nService.translate('member_not_allowed', lang));
+      }
+
+      const where: any = { approvalStatus: 'PENDING' };
+
+      // Role‑based location scoping
+      if (user.role === 'SUPER_ADMIN') {
+        // Super admin – optional filter
+        if (locationId) {
+          const childIds = await getChildLocationIds(Number(locationId));
+          where.locationId = { in: [Number(locationId), ...childIds] };
+        }
+      } else {
+        // ADMIN / SUB_ADMIN – scope to their own location subtree
+        const scopeId = locationId || user.locationId;
+        if (scopeId) {
+          const childIds = await getChildLocationIds(Number(scopeId));
+          where.locationId = { in: [Number(scopeId), ...childIds] };
+        }
+      }
+
+      const pending = await (prisma as any).member.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        include: { location: true, profession: true },
+      });
+
+      return pending.map((m: any) => ({
+        ...m,
+        createdAt: m.createdAt instanceof Date
+          ? m.createdAt.toISOString()
+          : new Date(m.createdAt).toISOString(),
+      }));
+    },
+
+    // ─────────────────────────────────────────────────────────────
+    // Blood Groups – static enum list (professions போல)
+    // ─────────────────────────────────────────────────────────────
+    bloodGroups: async () => {
+      return [
+        'A_POSITIVE',
+        'A_NEGATIVE',
+        'B_POSITIVE',
+        'B_NEGATIVE',
+        'AB_POSITIVE',
+        'AB_NEGATIVE',
+        'O_POSITIVE',
+        'O_NEGATIVE',
+      ];
+    },
   },
 
   Mutation: {
+
 
 
     adminLogin: safeResolver(async (_: any, { phone, password }: any, context: any) => {
@@ -1328,6 +1390,10 @@ export const resolvers = {
   },
 
   Member: {
+    createdAt: (parent: any) => {
+      if (!parent.createdAt) return null;
+      return parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString();
+    },
     profession: async (parent: any) => {
       if (!parent.professionId) return null;
       const prof = await (prisma as any).profession.findUnique({ where: { id: parent.professionId } });
@@ -1379,6 +1445,14 @@ export const resolvers = {
   },
 
   Event: {
+    date: (parent: any) => {
+      if (!parent.date) return null;
+      return parent.date instanceof Date ? parent.date.toISOString() : new Date(parent.date).toISOString();
+    },
+    createdAt: (parent: any) => {
+      if (!parent.createdAt) return null;
+      return parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString();
+    },
     responses: (parent: any) => (prisma as any).eventResponse.findMany({ where: { eventId: parent.id }, include: { member: true } }),
     stats: async (parent: any) => {
       const responses = await (prisma as any).eventResponse.findMany({ where: { eventId: parent.id } });
@@ -1397,6 +1471,10 @@ export const resolvers = {
   },
 
   EmergencyRequest: {
+    createdAt: (parent: any) => {
+      if (!parent.createdAt) return null;
+      return parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString();
+    },
     member: (parent: any) => parent.memberId ? (prisma as any).member.findUnique({ where: { id: parent.memberId } }) : null,
     createdBy: (parent: any) => parent.createdById ? (prisma as any).user.findUnique({ where: { id: parent.createdById } }) : null,
     location: (parent: any) => (prisma as any).location.findUnique({ where: { id: parent.locationId } }),
@@ -1413,5 +1491,33 @@ export const resolvers = {
   Post: {
     comments: (parent: any) => (prisma as any).comment.findMany({ where: { postId: parent.id }, orderBy: { createdAt: 'desc' } }),
     commentCount: (parent: any) => (prisma as any).comment.count({ where: { postId: parent.id } })
+  },
+
+  Campaign: {
+    createdAt: (parent: any) => {
+      if (!parent.createdAt) return null;
+      return parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString();
+    }
+  },
+
+  Broadcast: {
+    createdAt: (parent: any) => {
+      if (!parent.createdAt) return null;
+      return parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString();
+    }
+  },
+
+  Comment: {
+    createdAt: (parent: any) => {
+      if (!parent.createdAt) return null;
+      return parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString();
+    }
+  },
+
+  Notification: {
+    createdAt: (parent: any) => {
+      if (!parent.createdAt) return null;
+      return parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString();
+    }
   },
 };

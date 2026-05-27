@@ -259,6 +259,8 @@ export const typeDefs = gql`
     getCommunityPosts(communityId: Int!): [CommunityPost!]!
     getBroadcasts(locationId: Int, scope: LocationType): [Broadcast!]!
     getTargetableLocations: [TargetableLocation!]!
+    pendingMembers(locationId: Int): [Member!]!
+    bloodGroups: [String!]!
   }
 
   type Mutation {
