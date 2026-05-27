@@ -972,6 +972,9 @@ export const resolvers = {
       // Send WhatsApp broadcast to all members in the target subtree
       const targetIds = await getChildLocationIds(broadcast.locationId);
       const allIds = [broadcast.locationId, ...targetIds];
+      const recipientCount = await (prisma as any).member.count({
+        where: { locationId: { in: allIds }, isActive: true },
+      });
       const members = await (prisma as any).member.findMany({
         where: { locationId: { in: allIds }, isActive: true },
         select: { phone: true },
@@ -1172,6 +1175,10 @@ export const resolvers = {
       if (!context.user) throw new Error(I18nService.translate("unauthorized_login", context?.language));
       if (context.user.role !== 'SUPER_ADMIN' && context.user.role !== 'ADMIN') {
         throw new Error(I18nService.translate("member_not_allowed", context?.language));
+      }
+      // Validate title is provided and non-empty
+      if (!title || title.trim() === '') {
+        throw new Error('Title is required for community posts');
       }
 
       const community = await (prisma as any).community.findUnique({

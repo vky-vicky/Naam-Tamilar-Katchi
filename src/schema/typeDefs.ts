@@ -259,6 +259,7 @@ export const typeDefs = gql`
     getCommunityPosts(communityId: Int!): [CommunityPost!]!
     getBroadcasts(locationId: Int, scope: LocationType): [Broadcast!]!
     getTargetableLocations: [TargetableLocation!]!
+    getChildLocations(parentId: Int!): [Location!]!
     pendingMembers(locationId: Int): [Member!]!
     bloodGroups: [String!]!
   }
