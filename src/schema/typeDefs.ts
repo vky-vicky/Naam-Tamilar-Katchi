@@ -69,10 +69,14 @@ export const typeDefs = gql`
   type User {
     id: Int!
     name: String!
+    surname: String
     role: Role!
     phone: String
     image: String
+    locationId: Int
     location: Location
+    approvalStatus: ApprovalStatus!
+    createdAt: String
     addedBy: String!
   }
 
@@ -84,7 +88,15 @@ export const typeDefs = gql`
   type Member {
     id: Int!
     name: String!
+    surname: String
     phone: String
+    image: String
+    bloodGroup: String
+    allergies: String
+    conditions: String
+    emergencyContact: String
+    role: String
+    locationId: Int!
     location: Location!
     profession: Profession
     approvalStatus: ApprovalStatus!
@@ -301,8 +313,38 @@ export const typeDefs = gql`
   type Mutation {
     # Mutations are defined in resolvers; placeholders added for schema validity.
     adminLogin(phone: String!, password: String!): AuthPayload
-    createUser(name: String!, phone: String!, role: Role!, locationId: Int, professionName: String): User
-    addMember(name: String!, phone: String!, professionName: String, locationId: Int): Member
+    createUser(
+      name: String!
+      surname: String
+      phone: String!
+      password: String!
+      role: Role!
+      image: String
+      locationId: Int
+      districtId: Int
+      talukId: Int
+      areaId: Int
+      streetId: Int
+      professionName: String
+    ): User
+    addMember(
+      name: String!
+      surname: String
+      phone: String!
+      password: String
+      image: String
+      bloodGroup: String
+      allergies: String
+      conditions: String
+      emergencyContact: String
+      role: String
+      professionName: String
+      locationId: Int
+      districtId: Int
+      talukId: Int
+      areaId: Int
+      streetId: Int
+    ): Member
     updateMemberStatus(id: Int!, status: ApprovalStatus!): Member
     updateMember(id: Int!, name: String, phone: String, professionName: String): Member
     createEvent(

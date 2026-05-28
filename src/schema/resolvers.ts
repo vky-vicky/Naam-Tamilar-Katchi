@@ -1962,6 +1962,10 @@ export const resolvers = {
       if (!parent.parentId) return "Self";
       const parentUser = await (prisma as any).user.findUnique({ where: { id: parent.parentId } });
       return parentUser ? parentUser.name : "Self";
+    },
+    createdAt: (parent: any) => {
+      if (!parent.createdAt) return null;
+      return parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString();
     }
   },
 
