@@ -7,7 +7,8 @@
     "dev": "nodemon --watch src --ext ts,json --exec npx tsx src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "seed:vedaranyam": "tsx prisma/seed_vedaranyam.ts"
+    "seed:vedaranyam": "tsx prisma/seed_vedaranyam.ts",
+    "seed:more-locations": "tsx prisma/seed_more_locations.ts"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"
