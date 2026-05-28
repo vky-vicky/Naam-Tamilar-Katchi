@@ -3,6 +3,42 @@ import prisma from '../db.js';
 import { whatsappService } from '../services/whatsapp.service.js';
 import { I18nService } from '../services/i18n.service.js';
 
+function getReadableError(err: any, lang: string = 'en') {
+  const prismaCode = err?.code;
+  const target = Array.isArray(err?.meta?.target) ? err.meta.target.join(', ') : '';
+  const message = err?.message ?? '';
+
+  if (prismaCode === 'P2002' || (message.includes('Unique constraint failed') && message.includes('phone'))) {
+    return {
+      code: 'USER_PHONE_ALREADY_EXISTS',
+      message: I18nService.translate('phone_already_registered', lang),
+      detail: target ? `Duplicate unique field: ${target}` : 'Duplicate phone number'
+    };
+  }
+
+  if (prismaCode === 'P2003' || message.includes('Foreign key constraint failed') || message.includes('connect')) {
+    return {
+      code: 'INVALID_REFERENCE',
+      message: I18nService.translate('invalid_referenced_data', lang),
+      detail: 'Check locationId, memberId, communityId, or profession reference.'
+    };
+  }
+
+  if (prismaCode === 'P2025') {
+    return {
+      code: 'RECORD_NOT_FOUND',
+      message: 'Record not found. Please check the ID.',
+      detail: message
+    };
+  }
+
+  return {
+    code: 'REQUEST_FAILED',
+    message: I18nService.translate(message as any, lang),
+    detail: message
+  };
+}
+
 // Helper to wrap resolvers and return consistent error objects
 // Helper to wrap resolvers and return consistent, translated GraphQL errors
 function safeResolver<T>(fn: (...args: any[]) => Promise<T>) {
@@ -10,25 +46,20 @@ function safeResolver<T>(fn: (...args: any[]) => Promise<T>) {
     try {
       return await fn(...args);
     } catch (err: any) {
-      console.error("Resolver Error Caught:", err);
-
-      // Determine language from the resolver's context parameter (args[2])
       const context = args[2];
       const lang = context?.language || 'en';
+      const readableError = getReadableError(err, lang);
 
-      let message = err?.message ?? 'internal_error';
+      console.error('Resolver Error:', {
+        code: readableError.code,
+        message: readableError.message,
+        detail: readableError.detail,
+        prismaCode: err?.code,
+        prismaModel: err?.meta?.modelName,
+        args: args[1]
+      });
 
-      // Map Prisma-specific database errors to clear translation keys
-      if (message.includes('Unique constraint failed') && message.includes('phone')) {
-        message = I18nService.translate("phone_already_registered", lang);
-      } else if (message.includes('Foreign key constraint failed') || message.includes('connectOrCreate') || message.includes('connect')) {
-        message = I18nService.translate("invalid_referenced_data", lang);
-      } else {
-        // If the error message matches a translation key, translate it, otherwise keep original
-        message = I18nService.translate(message as any, lang);
-      }
-
-      throw new Error(message);
+      throw new Error(`[${readableError.code}] ${readableError.message}`);
     }
   };
 }
@@ -2091,6 +2122,22 @@ export const resolvers = {
   },
 
   CommunityPost: {
+    authorName: async (parent: any) => {
+      if (parent.createdBy?.name) return parent.createdBy.name;
+      if (!parent.createdById) return null;
+      const user = await (prisma as any).user.findUnique({ where: { id: parent.createdById }, select: { name: true } });
+      return user?.name || null;
+    },
+    authorRole: async (parent: any) => {
+      if (parent.createdBy?.role) return parent.createdBy.role;
+      if (!parent.createdById) return null;
+      const user = await (prisma as any).user.findUnique({ where: { id: parent.createdById }, select: { role: true } });
+      return user?.role || null;
+    },
+    commentCount: async (parent: any) => {
+      if (parent.comments) return parent.comments.length;
+      return (prisma as any).communityComment.count({ where: { postId: parent.id } });
+    },
     community: async (parent: any) => {
       if (parent.community) return parent.community;
       return (prisma as any).community.findUnique({ where: { id: parent.communityId } });

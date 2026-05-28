@@ -219,7 +219,10 @@ export const typeDefs = gql`
     title: String!
     content: String!
     image: String
+    authorName: String
+    authorRole: String
     likes: Int!
+    commentCount: Int!
     community: Community!
     createdBy: User
     comments: [Comment!]!
