@@ -161,6 +161,31 @@ async function autoJoinCommunities(memberId: number, professionName: string | un
   }
 }
 
+function userToMemberShape(user: any) {
+  return {
+    id: -Number(user.id),
+    name: user.name,
+    surname: user.surname,
+    phone: user.phone,
+    image: user.image,
+    bloodGroup: null,
+    allergies: null,
+    conditions: null,
+    emergencyContact: null,
+    role: user.role,
+    locationId: user.locationId,
+    location: user.location,
+    profession: null,
+    professionId: null,
+    approvalStatus: user.approvalStatus,
+    approvedBy: null,
+    approvedById: null,
+    createdAt: user.createdAt,
+    createdBy: null,
+    createdById: user.parentId
+  };
+}
+
 const ADMIN_ROLES = ['SUPER_ADMIN', 'ADMIN', 'SUB_ADMIN'];
 
 function isCommunityAdmin(role: string | undefined) {
@@ -340,8 +365,10 @@ export const resolvers = {
 
     getMemberList: async (_: any, { locationId, professionName, bloodGroup, search, limit = 50, offset = 0, approvalStatus }: any, context: any) => {
       let filter: any = {};
+      let userFilter: any = {};
       
       if (approvalStatus) filter.approvalStatus = approvalStatus;
+      if (approvalStatus) userFilter.approvalStatus = approvalStatus;
       if (professionName) {
         filter.profession = { name: professionName };
       }
@@ -352,22 +379,35 @@ export const resolvers = {
           { name: { contains: search, mode: 'insensitive' } },
           { phone: { contains: search } },
         ];
+        userFilter.OR = [
+          { name: { contains: search, mode: 'insensitive' } },
+          { phone: { contains: search } },
+        ];
       }
 
       if (locationId) {
         const allLocationIds = [locationId, ...(await getChildLocationIds(locationId))];
         filter.locationId = { in: allLocationIds };
+        userFilter.locationId = { in: allLocationIds };
       }
 
-      const members = await (prisma as any).member.findMany({
+      const [members, users] = await Promise.all([
+        (prisma as any).member.findMany({
         where: filter,
-        take: limit,
-        skip: offset,
         include: { location: true, profession: true },
         orderBy: { createdAt: 'desc' },
-      });
+        }),
+        professionName || bloodGroup ? [] : (prisma as any).user.findMany({
+          where: userFilter,
+          include: { location: true },
+          orderBy: { createdAt: 'desc' },
+        })
+      ]);
 
-      return members.map((m: any) => {
+      return [...members, ...users.map(userToMemberShape)]
+        .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        .slice(offset, offset + limit)
+        .map((m: any) => {
         const canSeePhone = context?.user?.role === 'SUPER_ADMIN' || (context?.user?.role === 'ADMIN' && context?.user?.locationId === m.locationId);
         return {
           ...m,
@@ -438,6 +478,14 @@ export const resolvers = {
     },
 
     getMemberDetails: async (_: any, { id }: any) => {
+      if (Number(id) < 0) {
+        const user = await (prisma as any).user.findUnique({
+          where: { id: Math.abs(Number(id)) },
+          include: { location: true }
+        });
+        return user ? userToMemberShape(user) : null;
+      }
+
       return (prisma as any).member.findUnique({
         where: { id },
         include: { location: true, profession: true }
@@ -502,18 +550,6 @@ export const resolvers = {
       return (prisma as any).notification.findMany({
         where,
         orderBy: { createdAt: 'desc' }
-      });
-    },
-
-    getUserList: async (_: any, { locationId, role }: any) => {
-      const where: any = {};
-      if (locationId) where.locationId = locationId;
-      if (role) where.role = role;
-      
-      return (prisma as any).user.findMany({
-        where,
-        include: { location: true },
-        orderBy: { name: 'asc' }
       });
     },
 

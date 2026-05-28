@@ -40,12 +40,13 @@ async function main() {
   // Super Admin (Created Manually via Seed)
   const superAdmin = await prisma.user.upsert({
     where: { phone: '9000000001' },
-    update: { approvalStatus: 'APPROVED' },
+    update: { locationId: state.id, approvalStatus: 'APPROVED' },
     create: { 
       name: 'Thalaivar Seeman', 
       phone: '9000000001', 
       password: 'admin123', 
       role: 'SUPER_ADMIN',
+      locationId: state.id,
       approvalStatus: 'APPROVED'
     }
   });

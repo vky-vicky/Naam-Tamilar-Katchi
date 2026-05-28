@@ -296,7 +296,6 @@ export const typeDefs = gql`
     professions: [Profession!]!
     communityFeed(locationId: Int): [CommunityPost!]!
     notifications(locationId: Int): [Notification!]!
-    getUserList(locationId: Int, role: Role): [User!]!
     getEventList(locationId: Int, status: EventStatus): [Event!]!
     getEmergencyRequestList(locationId: Int, status: RequestStatus): [EmergencyRequest!]!
     getCommunities: [Community!]!

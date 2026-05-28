@@ -294,6 +294,25 @@ async function main() {
   console.log('Importing additional district location data...');
 
   const { location: state } = await findOrCreateLocation('Tamil Nadu', 'STATE');
+  await prisma.user.upsert({
+    where: { phone: '9000000001' },
+    update: {
+      name: 'Thalaivar Seeman',
+      password: 'admin123',
+      role: 'SUPER_ADMIN',
+      locationId: state.id,
+      approvalStatus: 'APPROVED'
+    },
+    create: {
+      name: 'Thalaivar Seeman',
+      phone: '9000000001',
+      password: 'admin123',
+      role: 'SUPER_ADMIN',
+      locationId: state.id,
+      approvalStatus: 'APPROVED'
+    }
+  });
+
   const credentials: SeedCredentials[] = [];
 
   let districtCount = 0;
