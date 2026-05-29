@@ -134,6 +134,14 @@ export const typeDefs = gql`
     member: Member!
   }
 
+  type EmergencyResponse {
+    id: Int!
+    emergencyRequestId: Int!
+    memberId: Int!
+    status: String!
+    member: Member!
+  }
+
   type EmergencyRequest {
     id: Int!
     title: String!
@@ -144,7 +152,13 @@ export const typeDefs = gql`
     location: Location!
     member: Member
     createdBy: User
+    contactName: String
+    contactPhone: String
+    expiryDate: String
+    collectResponse: Boolean!
     createdAt: String!
+    responses: [EmergencyResponse!]!
+    stats: EventStats!
   }
 
   type Broadcast {
@@ -252,12 +266,38 @@ export const typeDefs = gql`
     id: Int!
     content: String!
     image: String
+    category: String
+    images: [String!]
     authorName: String!
     authorRole: String!
     locationId: Int!
+    location: Location!
     likes: Int!
     comments: [Comment!]!
     commentCount: Int!
+    createdAt: String!
+  }
+
+  type PollOption {
+    id: Int!
+    pollId: Int!
+    text: String!
+    votesCount: Int!
+  }
+
+  type Poll {
+    id: Int!
+    question: String!
+    locationId: Int!
+    location: Location!
+    communityId: Int
+    expiresAt: String!
+    createdAt: String!
+    options: [PollOption!]!
+    votesCount: Int!
+    userVoteOptionId: Int
+    createdBy: User
+    member: Member
   }
 
   type CommunityComment {
@@ -297,7 +337,9 @@ export const typeDefs = gql`
     getMemberDetails(id: Int!): Member
     recentActivity(locationId: Int, limit: Int = 10): [Activity!]!
     professions: [Profession!]!
-    communityFeed(locationId: Int): [CommunityPost!]!
+    communityFeed(locationId: Int): [Post!]!
+    getPollList(locationId: Int, communityId: Int): [Poll!]!
+    getPollDetails(id: Int!): Poll
     notifications(locationId: Int): [Notification!]!
     getEventList(locationId: Int, status: EventStatus): [Event!]!
     getEmergencyRequestList(locationId: Int, status: RequestStatus): [EmergencyRequest!]!
@@ -376,12 +418,20 @@ export const typeDefs = gql`
       memberId: Int!
       status: String!
     ): EventResponse!
+    respondToEmergency(
+      emergencyRequestId: Int!
+      status: String!
+    ): EmergencyResponse!
     createEmergencyRequest(
       title: String!
       description: String
       type: String!
       locationId: Int!
       audience: String
+      contactName: String
+      contactPhone: String
+      expiryDate: String
+      collectResponse: Boolean
     ): EmergencyRequest!
     updateRequestStatus(
       id: Int!
@@ -390,10 +440,20 @@ export const typeDefs = gql`
     createPost(
       content: String!
       image: String
+      category: String
+      images: [String!]
       authorName: String!
       authorRole: String!
       locationId: Int!
     ): Post!
+    createPoll(
+      question: String!
+      options: [String!]!
+      durationDays: Int!
+      locationId: Int!
+      communityId: Int
+    ): Poll!
+    voteInPoll(pollId: Int!, optionId: Int!): Poll!
     likePost(id: Int!): Post!
     addComment(
       postId: Int!

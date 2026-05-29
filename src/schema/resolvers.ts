@@ -575,6 +575,26 @@ export const resolvers = {
       });
     },
 
+    getPollList: async (_: any, { locationId, communityId }: any) => {
+      const where: any = {};
+      if (communityId) {
+        where.communityId = communityId;
+      } else if (locationId) {
+        const allLocationIds = [locationId, ...(await getChildLocationIds(locationId))];
+        where.locationId = { in: allLocationIds };
+      }
+      return (prisma as any).poll.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+      });
+    },
+
+    getPollDetails: async (_: any, { id }: any) => {
+      return (prisma as any).poll.findUnique({
+        where: { id }
+      });
+    },
+
     notifications: async (_: any, { locationId }: any) => {
       const where: any = {};
       if (locationId) where.locationId = locationId;
@@ -1343,23 +1363,67 @@ export const resolvers = {
       });
     },
 
-    createEmergencyRequest: async (_: any, { title, description, type, locationId, audience }: any, context: any) => {
-      const userId = context.user?.id || 1;
-      // Enforce geographic targeting based on role
-      const dbUser = await (prisma as any).user.findUnique({ where: { id: Number(userId) } });
-      if (dbUser) {
-        await validateLocationTargeting(dbUser.id, dbUser.role, dbUser.locationId, Number(locationId), context?.language);
+    respondToEmergency: async (_: any, { emergencyRequestId, status }: any, context: any) => {
+      if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", context?.language));
+      if (context.user.role !== 'MEMBER') {
+        throw new Error("Only members can respond to emergencies");
       }
+      const memberId = Number(context.user.id);
+      const normalizedStatus = status.toUpperCase(); // GOING, MAYBE, NOT_GOING
+
+      return (prisma as any).emergencyResponse.upsert({
+        where: {
+          emergencyRequestId_memberId: {
+            emergencyRequestId: Number(emergencyRequestId),
+            memberId
+          }
+        },
+        update: { status: normalizedStatus },
+        create: {
+          emergencyRequestId: Number(emergencyRequestId),
+          memberId,
+          status: normalizedStatus
+        },
+        include: { member: true }
+      });
+    },
+
+    createEmergencyRequest: async (_: any, { title, description, type, locationId, audience, contactName, contactPhone, expiryDate, collectResponse }: any, context: any) => {
+      if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", context?.language));
+      const userId = Number(context.user.id);
+      const userRole = context.user.role;
+
+      let createdById = null;
+      let memberId = null;
+
+      if (userRole === 'MEMBER') {
+        memberId = userId;
+      } else {
+        createdById = userId;
+        // Enforce geographic targeting based on role
+        const dbUser = await (prisma as any).user.findUnique({ where: { id: userId } });
+        if (dbUser) {
+          await validateLocationTargeting(dbUser.id, dbUser.role, dbUser.locationId, Number(locationId), context?.language);
+        }
+      }
+
+      const expiryDateTime = expiryDate ? new Date(expiryDate) : null;
+
       return (prisma as any).emergencyRequest.create({
         data: {
           title,
           description,
           type,
-          locationId,
+          locationId: Number(locationId),
           audience,
-          createdById: userId
+          contactName,
+          contactPhone,
+          expiryDate: expiryDateTime,
+          collectResponse: collectResponse !== undefined ? collectResponse : true,
+          createdById,
+          memberId
         },
-        include: { location: true, createdBy: true }
+        include: { location: true, createdBy: true, member: true }
       });
     },
 
@@ -1376,10 +1440,88 @@ export const resolvers = {
         data: {
           content: args.content,
           image: args.image,
+          category: args.category || "Discussion",
+          images: args.images || [],
           authorName: args.authorName,
           authorRole: args.authorRole,
           locationId: args.locationId
         }
+      });
+    },
+
+    createPoll: async (_: any, { question, options, durationDays, locationId, communityId }: any, context: any) => {
+      if (!context.user) {
+        throw new Error(I18nService.translate("unauthorized_login", context?.language));
+      }
+      
+      const isMember = context.user.role === 'MEMBER';
+      const createdById = isMember ? null : Number(context.user.id);
+      const memberId = isMember ? Number(context.user.id) : null;
+      
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + durationDays);
+      
+      return (prisma as any).poll.create({
+        data: {
+          question,
+          locationId,
+          communityId,
+          createdById,
+          memberId,
+          expiresAt,
+          options: {
+            create: options.map((optText: string) => ({ text: optText }))
+          }
+        }
+      });
+    },
+
+    voteInPoll: async (_: any, { pollId, optionId }: any, context: any) => {
+      if (!context.user) {
+        throw new Error(I18nService.translate("unauthorized_login", context?.language));
+      }
+      
+      if (context.user.role !== 'MEMBER') {
+        throw new Error("Only members can vote in polls");
+      }
+      
+      const memberId = Number(context.user.id);
+      
+      const pollCheck = await (prisma as any).poll.findUnique({
+        where: { id: pollId }
+      });
+      
+      if (!pollCheck) {
+        throw new Error("Poll not found");
+      }
+      
+      if (new Date() > new Date(pollCheck.expiresAt)) {
+        throw new Error("This poll has expired");
+      }
+      
+      const existingVote = await (prisma as any).pollVote.findUnique({
+        where: {
+          pollId_memberId: {
+            pollId,
+            memberId
+          }
+        }
+      });
+      
+      if (existingVote) {
+        throw new Error("You have already voted in this poll");
+      }
+      
+      await (prisma as any).pollVote.create({
+        data: {
+          pollId,
+          optionId,
+          memberId
+        }
+      });
+      
+      return (prisma as any).poll.findUnique({
+        where: { id: pollId }
       });
     },
 
@@ -2077,14 +2219,31 @@ export const resolvers = {
     member: (parent: any) => (prisma as any).member.findUnique({ where: { id: parent.memberId } }),
   },
 
+  EmergencyResponse: {
+    member: (parent: any) => (prisma as any).member.findUnique({ where: { id: parent.memberId } }),
+  },
+
   EmergencyRequest: {
     createdAt: (parent: any) => {
       if (!parent.createdAt) return null;
       return parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString();
     },
+    expiryDate: (parent: any) => {
+      if (!parent.expiryDate) return null;
+      return parent.expiryDate instanceof Date ? parent.expiryDate.toISOString() : new Date(parent.expiryDate).toISOString();
+    },
     member: (parent: any) => parent.memberId ? (prisma as any).member.findUnique({ where: { id: parent.memberId } }) : null,
     createdBy: (parent: any) => parent.createdById ? (prisma as any).user.findUnique({ where: { id: parent.createdById } }) : null,
     location: (parent: any) => (prisma as any).location.findUnique({ where: { id: parent.locationId } }),
+    responses: (parent: any) => (prisma as any).emergencyResponse.findMany({ where: { emergencyRequestId: parent.id }, include: { member: true } }),
+    stats: async (parent: any) => {
+      const responses = await (prisma as any).emergencyResponse.findMany({ where: { emergencyRequestId: parent.id } });
+      return {
+        going: responses.filter((r: any) => r.status === 'GOING').length,
+        maybe: responses.filter((r: any) => r.status === 'MAYBE').length,
+        notGoing: responses.filter((r: any) => r.status === 'NOT_GOING').length,
+      };
+    },
   },
 
   Activity: {
@@ -2097,7 +2256,57 @@ export const resolvers = {
 
   Post: {
     comments: (parent: any) => (prisma as any).comment.findMany({ where: { postId: parent.id }, orderBy: { createdAt: 'desc' } }),
-    commentCount: (parent: any) => (prisma as any).comment.count({ where: { postId: parent.id } })
+    commentCount: (parent: any) => (prisma as any).comment.count({ where: { postId: parent.id } }),
+    location: (parent: any) => (prisma as any).location.findUnique({ where: { id: parent.locationId } }),
+    createdAt: (parent: any) => {
+      if (!parent.createdAt) return null;
+      return parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString();
+    }
+  },
+
+  PollOption: {
+    votesCount: async (parent: any) => {
+      return (prisma as any).pollVote.count({ where: { optionId: parent.id } });
+    }
+  },
+
+  Poll: {
+    expiresAt: (parent: any) => parent.expiresAt instanceof Date ? parent.expiresAt.toISOString() : new Date(parent.expiresAt).toISOString(),
+    createdAt: (parent: any) => parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString(),
+    options: async (parent: any) => {
+      if (parent.options) return parent.options;
+      return (prisma as any).pollOption.findMany({ where: { pollId: parent.id } });
+    },
+    votesCount: async (parent: any) => {
+      return (prisma as any).pollVote.count({ where: { pollId: parent.id } });
+    },
+    userVoteOptionId: async (parent: any, _: any, context: any) => {
+      if (!context?.user || context.user.role !== 'MEMBER') return null;
+      const memberId = Number(context.user.id);
+      const vote = await (prisma as any).pollVote.findUnique({
+        where: {
+          pollId_memberId: {
+            pollId: parent.id,
+            memberId
+          }
+        }
+      });
+      return vote ? vote.optionId : null;
+    },
+    location: async (parent: any) => {
+      if (parent.location) return parent.location;
+      return (prisma as any).location.findUnique({ where: { id: parent.locationId } });
+    },
+    createdBy: async (parent: any) => {
+      if (parent.createdBy) return parent.createdBy;
+      if (!parent.createdById) return null;
+      return (prisma as any).user.findUnique({ where: { id: parent.createdById } });
+    },
+    member: async (parent: any) => {
+      if (parent.member) return parent.member;
+      if (!parent.memberId) return null;
+      return (prisma as any).member.findUnique({ where: { id: parent.memberId } });
+    }
   },
 
   Campaign: {

@@ -74,11 +74,7 @@ async function startServer() {
         const language = req.headers['accept-language'] || 'en';
         const authHeader = req.headers.authorization;
         
-        let contextUser = {
-          id: 1,
-          role: 'SUPER_ADMIN',
-          locationId: null as number | null
-        };
+        let contextUser: any = null;
 
         if (authHeader && authHeader.startsWith('Bearer ')) {
           const rawToken = authHeader.substring(7).trim();

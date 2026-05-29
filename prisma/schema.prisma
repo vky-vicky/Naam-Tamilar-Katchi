@@ -25,6 +25,7 @@ model Location {
   notifications Notification[]
   broadcasts    Broadcast[]
   communities   Community[]
+  polls         Poll[]
 
   @@index([parentId])
   @@index([type])
@@ -60,6 +61,9 @@ model Member {
   requests         EmergencyRequest[]
   eventResponses   EventResponse[]
   communityMembers CommunityMember[]
+  emergencyResponses EmergencyResponse[]
+  polls              Poll[]
+  pollVotes          PollVote[]
 
   @@index([locationId])
   @@index([professionId])
@@ -99,6 +103,7 @@ model User {
   location        Location?          @relation(fields: [locationId], references: [id])
   communityPosts  CommunityPost[]
   broadcasts      Broadcast[]
+  polls           Poll[]
 
   @@index([role])
   @@index([approvalStatus])
@@ -188,26 +193,46 @@ model EventResponse {
 }
 
 model EmergencyRequest {
-  id          Int           @id @default(autoincrement())
-  title       String
-  description String?
-  type        RequestType   @default(EMERGENCY)
-  status      RequestStatus @default(PENDING)
-  locationId  Int
-  location    Location      @relation(fields: [locationId], references: [id])
-  memberId    Int?
-  member      Member?       @relation(fields: [memberId], references: [id])
-  createdById Int?
-  createdBy   User?         @relation(fields: [createdById], references: [id])
-  audience    String? // Ex: "ALL_CAPTAINS", "STREET_MEMBERS"
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  id              Int                 @id @default(autoincrement())
+  title           String
+  description     String?
+  type            String              @default("EMERGENCY")
+  status          RequestStatus       @default(PENDING)
+  locationId      Int
+  location        Location            @relation(fields: [locationId], references: [id])
+  memberId        Int?
+  member          Member?             @relation(fields: [memberId], references: [id])
+  createdById     Int?
+  createdBy       User?               @relation(fields: [createdById], references: [id])
+  audience        String? // Ex: "ALL_CAPTAINS", "STREET_MEMBERS"
+  contactName     String?
+  contactPhone    String?
+  expiryDate      DateTime?
+  collectResponse Boolean             @default(true)
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  responses       EmergencyResponse[]
+}
+
+model EmergencyResponse {
+  id                 Int              @id @default(autoincrement())
+  emergencyRequestId Int
+  emergencyRequest   EmergencyRequest @relation(fields: [emergencyRequestId], references: [id], onDelete: Cascade)
+  memberId           Int
+  member             Member           @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  status             RSVPStatus
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  @@unique([emergencyRequestId, memberId])
 }
 
 model Post {
   id         Int       @id @default(autoincrement())
   content    String
   image      String?
+  category   String?   @default("Discussion")
+  images     String[]
   authorName String
   authorRole String?
   likes      Int       @default(0)
@@ -215,6 +240,48 @@ model Post {
   location   Location  @relation(fields: [locationId], references: [id])
   comments   Comment[]
   createdAt  DateTime  @default(now())
+}
+
+model Poll {
+  id          Int          @id @default(autoincrement())
+  question    String
+  locationId  Int
+  location    Location     @relation(fields: [locationId], references: [id])
+  communityId Int?
+  community   Community?   @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  memberId    Int?
+  member      Member?      @relation(fields: [memberId], references: [id])
+  createdById Int?
+  createdBy   User?        @relation(fields: [createdById], references: [id])
+  expiresAt   DateTime
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  options     PollOption[]
+  votes       PollVote[]
+
+  @@index([locationId])
+  @@index([communityId])
+}
+
+model PollOption {
+  id     Int        @id @default(autoincrement())
+  pollId Int
+  poll   Poll       @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  text   String
+  votes  PollVote[]
+}
+
+model PollVote {
+  id        Int        @id @default(autoincrement())
+  pollId    Int
+  poll      Poll       @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  optionId  Int
+  option    PollOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  memberId  Int
+  member    Member     @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  createdAt DateTime   @default(now())
+
+  @@unique([pollId, memberId])
 }
 
 model Comment {
@@ -330,6 +397,7 @@ model Community {
   posts               CommunityPost[]
   members             CommunityMember[]
   messages            CommunityMessage[]
+  polls               Poll[]
   createdAt           DateTime           @default(now())
   updatedAt           DateTime           @updatedAt
 }
