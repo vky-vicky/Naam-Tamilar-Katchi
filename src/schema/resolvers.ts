@@ -90,6 +90,22 @@ async function getChildLocationIds(locationId: number): Promise<number[]> {
   return ids;
 }
 
+// Helper to get all parent/ancestor location IDs up to the root.
+async function getAncestorLocationIds(locationId: number): Promise<number[]> {
+  const ids: number[] = [locationId];
+  let currentId = locationId;
+  while (true) {
+    const loc = await (prisma as any).location.findUnique({
+      where: { id: currentId },
+      select: { parentId: true }
+    });
+    if (!loc || !loc.parentId) break;
+    ids.push(loc.parentId);
+    currentId = loc.parentId;
+  }
+  return ids;
+}
+
 // Helper to validate location targeting based on user role and assigned location
 // SUPER_ADMIN  → can target ANY location (full Tamil Nadu or specific street)
 // ADMIN        → can target their assigned location OR any child under it
@@ -595,9 +611,46 @@ export const resolvers = {
       });
     },
 
-    notifications: async (_: any, { locationId }: any) => {
+    notifications: async (_: any, { locationId }: any, context: any) => {
+      if (!context?.user) {
+        throw new Error(I18nService.translate("unauthorized_login", context?.language));
+      }
+
+      const role = context.user.role;
+      const userLocId = context.user.locationId;
       const where: any = {};
-      if (locationId) where.locationId = locationId;
+
+      if (role === 'SUPER_ADMIN') {
+        if (locationId) {
+          const allLocationIds = [locationId, ...(await getChildLocationIds(locationId))];
+          where.locationId = { in: allLocationIds };
+        }
+      } else if (role === 'ADMIN' || role === 'SUB_ADMIN') {
+        if (!userLocId) return [];
+        const adminLocationIds = [userLocId, ...(await getChildLocationIds(userLocId))];
+
+        let targetLocationIds = adminLocationIds;
+        if (locationId) {
+          const requestedLocationIds = [locationId, ...(await getChildLocationIds(locationId))];
+          targetLocationIds = requestedLocationIds.filter((id: number) => adminLocationIds.includes(id));
+        }
+        where.locationId = { in: targetLocationIds };
+      } else {
+        // MEMBER
+        if (!userLocId) return [];
+        const ancestorIds = await getAncestorLocationIds(userLocId);
+
+        let targetLocationIds = ancestorIds;
+        if (locationId) {
+          if (ancestorIds.includes(locationId)) {
+            targetLocationIds = [locationId];
+          } else {
+            return []; // Member cannot access other location notifications
+          }
+        }
+        where.locationId = { in: targetLocationIds };
+      }
+
       return (prisma as any).notification.findMany({
         where,
         orderBy: { createdAt: 'desc' }
