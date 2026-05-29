@@ -338,7 +338,7 @@ export const typeDefs = gql`
     getFullLocationTree(constituencyId: Int!): LocationNode!
     getTownsAndStreets(constituencyId: Int!): [TownWithStreets!]!
     me: User
-    getMemberList(locationId: Int, professionName: String, bloodGroup: String, search: String, limit: Int, offset: Int, approvalStatus: ApprovalStatus): [Member!]!
+    getMemberList(locationId: Int, professionName: String, bloodGroup: String, role: String, search: String, limit: Int, offset: Int, approvalStatus: ApprovalStatus): [Member!]!
     getMemberDetails(id: Int!): Member
     recentActivity(locationId: Int, limit: Int = 10): [Activity!]!
     professions: [Profession!]!

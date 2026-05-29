@@ -410,7 +410,7 @@ export const resolvers = {
       });
     },
 
-    getMemberList: async (_: any, { locationId, professionName, bloodGroup, search, limit = 50, offset = 0, approvalStatus }: any, context: any) => {
+    getMemberList: async (_: any, { locationId, professionName, bloodGroup, role, search, limit = 50, offset = 0, approvalStatus }: any, context: any) => {
       let filter: any = {};
       let userFilter: any = {};
       
@@ -420,6 +420,10 @@ export const resolvers = {
         filter.profession = { name: professionName };
       }
       if (bloodGroup) filter.bloodGroup = bloodGroup;
+      if (role) {
+        filter.role = { equals: role, mode: 'insensitive' };
+        userFilter.role = role.toUpperCase();
+      }
       
       if (search) {
         filter.OR = [
@@ -539,21 +543,68 @@ export const resolvers = {
       });
     },
 
-    recentActivity: async (_: any, { locationId, limit = 10 }: any) => {
+    recentActivity: async (_: any, { locationId, limit = 10 }: any, context: any) => {
+      const user = context?.user;
+      if (!user) {
+        throw new Error(I18nService.translate("unauthorized_login", context?.language));
+      }
+
+      if (user.role === 'MEMBER') {
+        return [];
+      }
+
+      let targetLocationId: number | null = null;
+
+      if (user.role === 'SUPER_ADMIN') {
+        if (locationId) {
+          targetLocationId = locationId;
+        }
+      } else {
+        // ADMIN or SUB_ADMIN
+        if (!user.locationId) {
+          return []; // Admin with no assigned location sees nothing
+        }
+
+        const adminLocationIds = [user.locationId, ...(await getChildLocationIds(user.locationId))];
+
+        if (locationId) {
+          // If a filter is requested, verify it is within the admin's scope
+          if (adminLocationIds.includes(locationId)) {
+            targetLocationId = locationId;
+          } else {
+            // Trying to filter outside scope, restrict to their assigned location
+            targetLocationId = user.locationId;
+          }
+        } else {
+          // Default to their assigned scope
+          targetLocationId = user.locationId;
+        }
+      }
+
       let filter: any = {};
-      if (locationId) {
-        const allLocationIds = [locationId, ...(await getChildLocationIds(locationId))];
+      if (targetLocationId) {
+        const allLocationIds = [targetLocationId, ...(await getChildLocationIds(targetLocationId))];
         filter.locationId = { in: allLocationIds };
       }
 
       const [events, requests, approvals] = await Promise.all([
-        (prisma as any).event.findMany({ where: filter, take: limit, orderBy: { createdAt: 'desc' } }),
-        (prisma as any).emergencyRequest.findMany({ where: filter, take: limit, orderBy: { createdAt: 'desc' }, include: { member: true } }),
+        (prisma as any).event.findMany({ 
+          where: filter, 
+          take: limit, 
+          orderBy: { createdAt: 'desc' },
+          include: { location: true, createdBy: true }
+        }),
+        (prisma as any).emergencyRequest.findMany({ 
+          where: filter, 
+          take: limit, 
+          orderBy: { createdAt: 'desc' }, 
+          include: { member: true, location: true, createdBy: true } 
+        }),
         (prisma as any).member.findMany({ 
           where: { ...filter, approvalStatus: 'APPROVED', approvedById: { not: null } }, 
           take: limit, 
           orderBy: { updatedAt: 'desc' },
-          include: { approvedBy: true }
+          include: { approvedBy: true, location: true }
         }),
       ]);
 
