@@ -407,6 +407,8 @@ model CommunityPost {
   title       String
   content     String
   image       String?
+  category    String?            @default("Information")
+  images      String[]
   communityId Int
   community   Community          @relation(fields: [communityId], references: [id], onDelete: Cascade)
   createdById Int

@@ -98,7 +98,7 @@ export const typeDefs = gql`
     role: String
     locationId: Int!
     location: Location!
-    profession: Profession
+    profession: String
     approvalStatus: ApprovalStatus!
     approvedBy: User
     createdAt: String!
@@ -185,6 +185,8 @@ export const typeDefs = gql`
     pinnedMessage: CommunityMessage
     unreadCount: Int!
     memberCount: Int!
+    locationId: Int
+    location: Location
     createdAt: String!
   }
 
@@ -233,12 +235,15 @@ export const typeDefs = gql`
     title: String!
     content: String!
     image: String
+    category: String
+    images: [String!]
     authorName: String
     authorRole: String
     likes: Int!
     commentCount: Int!
     community: Community!
     createdBy: User
+    location: Location
     comments: [Comment!]!
     createdAt: String!
   }
@@ -344,7 +349,7 @@ export const typeDefs = gql`
     getEventList(locationId: Int, status: EventStatus): [Event!]!
     getEmergencyRequestList(locationId: Int, status: RequestStatus): [EmergencyRequest!]!
     getCommunities: [Community!]!
-    getCommunityPosts(communityId: Int!): [CommunityPost!]!
+    getCommunityPosts(communityId: Int!, category: String): [CommunityPost!]!
     getCommunityMessages(communityId: Int!, limit: Int = 50, beforeMessageId: Int): [CommunityMessage!]!
     getCommunityUnreadCount(communityId: Int!): Int!
     getTargetableLocations(parentId: Int): [Location!]!
@@ -390,7 +395,25 @@ export const typeDefs = gql`
       streetId: Int
     ): Member
     updateMemberStatus(id: Int!, status: ApprovalStatus!): Member
-    updateMember(id: Int!, name: String, phone: String, professionName: String): Member
+    updateMember(
+      id: Int!
+      name: String
+      surname: String
+      phone: String
+      password: String
+      image: String
+      bloodGroup: String
+      allergies: String
+      conditions: String
+      emergencyContact: String
+      role: String
+      professionName: String
+      locationId: Int
+      districtId: Int
+      talukId: Int
+      areaId: Int
+      streetId: Int
+    ): Member
     createEvent(
       title: String!
       description: String
@@ -483,6 +506,8 @@ export const typeDefs = gql`
       title: String!
       content: String!
       image: String
+      category: String
+      images: [String!]
     ): CommunityPost!
     likeCommunityPost(postId: Int!): CommunityPost!
     addCommunityComment(

@@ -579,25 +579,62 @@ export const resolvers = {
       return (prisma as any).profession.findMany({ orderBy: { name: 'asc' } });
     },
 
-    communityFeed: async (_: any, { locationId }: any) => {
+    communityFeed: async (_: any, { locationId }: any, context: any) => {
       const where: any = {};
+      const user = context?.user;
+
       if (locationId) {
         const allLocationIds = [locationId, ...(await getChildLocationIds(locationId))];
         where.locationId = { in: allLocationIds };
+      } else if (user) {
+        if (user.role === 'MEMBER') {
+          if (user.locationId) {
+            const ancestorIds = await getAncestorLocationIds(user.locationId);
+            where.locationId = { in: ancestorIds };
+          } else {
+            where.locationId = -1;
+          }
+        } else if (user.role === 'ADMIN' || user.role === 'SUB_ADMIN') {
+          if (user.locationId) {
+            const childIds = await getChildLocationIds(user.locationId);
+            where.locationId = { in: [user.locationId, ...childIds] };
+          } else {
+            where.locationId = -1;
+          }
+        }
       }
+
       return (prisma as any).post.findMany({
         where,
         orderBy: { createdAt: 'desc' },
       });
     },
 
-    getPollList: async (_: any, { locationId, communityId }: any) => {
+    getPollList: async (_: any, { locationId, communityId }: any, context: any) => {
       const where: any = {};
+      const user = context?.user;
+
       if (communityId) {
         where.communityId = communityId;
       } else if (locationId) {
         const allLocationIds = [locationId, ...(await getChildLocationIds(locationId))];
         where.locationId = { in: allLocationIds };
+      } else if (user) {
+        if (user.role === 'MEMBER') {
+          if (user.locationId) {
+            const ancestorIds = await getAncestorLocationIds(user.locationId);
+            where.locationId = { in: ancestorIds };
+          } else {
+            where.locationId = -1;
+          }
+        } else if (user.role === 'ADMIN' || user.role === 'SUB_ADMIN') {
+          if (user.locationId) {
+            const childIds = await getChildLocationIds(user.locationId);
+            where.locationId = { in: [user.locationId, ...childIds] };
+          } else {
+            where.locationId = -1;
+          }
+        }
       }
       return (prisma as any).poll.findMany({
         where,
@@ -659,7 +696,10 @@ export const resolvers = {
 
     getEventList: async (_: any, { locationId, status }: any) => {
       const where: any = {};
-      if (locationId) where.locationId = locationId;
+      if (locationId) {
+        const allLocationIds = [locationId, ...(await getChildLocationIds(locationId))];
+        where.locationId = { in: allLocationIds };
+      }
       if (status) where.status = status;
       
       return (prisma as any).event.findMany({
@@ -671,7 +711,10 @@ export const resolvers = {
 
     getEmergencyRequestList: async (_: any, { locationId, status }: any) => {
       const where: any = {};
-      if (locationId) where.locationId = locationId;
+      if (locationId) {
+        const allLocationIds = [locationId, ...(await getChildLocationIds(locationId))];
+        where.locationId = { in: allLocationIds };
+      }
       if (status) where.status = status;
       
       return (prisma as any).emergencyRequest.findMany({
@@ -681,8 +724,36 @@ export const resolvers = {
       });
     },
 
-    getCommunities: async (_: any, __: any) => {
+    getCommunities: async (_: any, __: any, context: any) => {
+      const user = context?.user;
+      const where: any = {};
+
+      if (user) {
+        if (user.role === 'MEMBER') {
+          if (user.locationId) {
+            const ancestorIds = await getAncestorLocationIds(user.locationId);
+            where.OR = [
+              { locationId: null },
+              { locationId: { in: ancestorIds } }
+            ];
+          } else {
+            where.locationId = null;
+          }
+        } else if (user.role === 'ADMIN' || user.role === 'SUB_ADMIN') {
+          if (user.locationId) {
+            const childIds = await getChildLocationIds(user.locationId);
+            where.OR = [
+              { locationId: null },
+              { locationId: { in: [user.locationId, ...childIds] } }
+            ];
+          } else {
+            where.locationId = null;
+          }
+        }
+      }
+
       const communities = await (prisma as any).community.findMany({
+        where,
         orderBy: { name: 'asc' }
       });
       
@@ -700,9 +771,13 @@ export const resolvers = {
       return results;
     },
 
-    getCommunityPosts: async (_: any, { communityId }: any) => {
+    getCommunityPosts: async (_: any, { communityId, category }: any) => {
+      const where: any = { communityId };
+      if (category) {
+        where.category = category;
+      }
       const posts = await (prisma as any).communityPost.findMany({
-        where: { communityId },
+        where,
         include: {
           community: true,
           createdBy: true,
@@ -850,9 +925,17 @@ export const resolvers = {
       }
 
       const where: any = {};
-      if (locationId !== undefined) where.locationId = locationId;
+      if (locationId !== undefined) {
+        const selectedLocationIds = [locationId, ...(await getChildLocationIds(locationId))];
+        if (visibleLocationIds.length > 0) {
+          where.locationId = { in: selectedLocationIds.filter(id => visibleLocationIds.includes(id)) };
+        } else {
+          where.locationId = { in: selectedLocationIds };
+        }
+      } else if (visibleLocationIds.length > 0) {
+        where.locationId = { in: visibleLocationIds };
+      }
       if (scope) where.scope = scope;
-      if (visibleLocationIds.length > 0) where.locationId = { in: visibleLocationIds };
 
       const broadcasts = await (prisma as any).broadcast.findMany({
         where,
@@ -1131,15 +1214,21 @@ export const resolvers = {
       // Permission Check
       if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", context?.language));
 
-      const { id, professionName, ...data } = args;
-      const { surname, ...memberData } = data;
+      const { id, professionName, streetId, areaId, talukId, districtId, locationId, ...rest } = args;
       // Normal Member can only edit their own profile.
       const isMember = context.user.role === 'MEMBER';
       if (isMember && Number(context.user.id) !== Number(id)) {
         throw new Error(I18nService.translate("unauthorized_edit_member", context?.language));
       }
 
-      let updateData: any = { ...memberData };
+      let updateData: any = { ...rest };
+
+      // Determine the most specific location ID
+      const finalLocationId = streetId || areaId || talukId || districtId || locationId;
+      if (finalLocationId) {
+        updateData.locationId = finalLocationId;
+      }
+
       // Handle Profession update if name provided
       if (professionName) {
         const profession = await (prisma as any).profession.upsert({
@@ -1671,7 +1760,7 @@ export const resolvers = {
       return true;
     },
 
-    createCommunityPost: async (_: any, { communityId, title, content, image }: any, context: any) => {
+    createCommunityPost: async (_: any, { communityId, title, content, image, category, images }: any, context: any) => {
       if (!context.user) throw new Error(I18nService.translate("unauthorized_login", context?.language));
       if (context.user.role !== 'SUPER_ADMIN' && context.user.role !== 'ADMIN') {
         throw new Error(I18nService.translate("member_not_allowed", context?.language));
@@ -1691,6 +1780,8 @@ export const resolvers = {
           title,
           content,
           image,
+          category: category || "Information",
+          images: images || [],
           communityId,
           createdById: Number(context.user.id)
         },
@@ -2416,6 +2507,31 @@ export const resolvers = {
         orderBy: { createdAt: 'asc' }
       });
     },
+    location: async (parent: any) => {
+      // Get the community location first
+      const community = await (prisma as any).community.findUnique({
+        where: { id: parent.communityId },
+        select: { locationId: true }
+      });
+      if (community?.locationId) {
+        return (prisma as any).location.findUnique({
+          where: { id: community.locationId }
+        });
+      }
+      // Fallback to creator's location
+      if (parent.createdById) {
+        const creator = await (prisma as any).user.findUnique({
+          where: { id: parent.createdById },
+          select: { locationId: true }
+        });
+        if (creator?.locationId) {
+          return (prisma as any).location.findUnique({
+            where: { id: creator.locationId }
+          });
+        }
+      }
+      return null;
+    },
     createdAt: (parent: any) => {
       if (!parent.createdAt) return null;
       return parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString();
@@ -2449,6 +2565,10 @@ export const resolvers = {
         select: { unreadCount: true }
       });
       return membership?.unreadCount || 0;
+    },
+    location: async (parent: any) => {
+      if (!parent.locationId) return null;
+      return (prisma as any).location.findUnique({ where: { id: parent.locationId } });
     },
     createdAt: (parent: any) => {
       if (!parent.createdAt) return null;
