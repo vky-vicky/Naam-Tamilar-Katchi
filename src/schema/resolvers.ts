@@ -490,26 +490,42 @@ export const resolvers = {
       const todayEnd = new Date();
       todayEnd.setHours(23, 59, 59, 999);
 
+      const memberUserFilter = locationId
+        ? { role: 'MEMBER', locationId: { in: [locationId, ...(await getChildLocationIds(locationId))] } }
+        : { role: 'MEMBER' };
+
       const [
-        totalAdmins, 
-        totalSubAdmins, 
-        totalMembers, 
-        pendingApprovals,
-        newMembersToday,
-        approvedToday,
+        totalAdmins,
+        totalSubAdmins,
+        membersFromMemberTable,
+        membersFromUserTable,
+        pendingFromMemberTable,
+        pendingFromUserTable,
+        newMembersTodayFromMember,
+        newMembersTodayFromUser,
+        approvedTodayFromMember,
         totalTowns,
-        totalStreets, 
-        activeEvents, 
+        totalStreets,
+        activeEvents,
         emergencyRequests,
         activeBroadcasts
       ] = await Promise.all([
+        // Admins and Sub Admins from User table
         (prisma as any).user.count({ where: { ...userFilter, role: 'ADMIN' } }),
         (prisma as any).user.count({ where: { ...userFilter, role: 'SUB_ADMIN' } }),
+        // APPROVED members from Member table
         (prisma as any).member.count({ where: { ...filter, approvalStatus: 'APPROVED' } }),
+        // MEMBER role users from User table (admin-added as User)
+        (prisma as any).user.count({ where: { ...memberUserFilter, approvalStatus: 'APPROVED' } }),
+        // PENDING from Member table
         (prisma as any).member.count({ where: { ...filter, approvalStatus: 'PENDING' } }),
-        // Members added today (any status)
+        // PENDING from User table (MEMBER role)
+        (prisma as any).user.count({ where: { ...memberUserFilter, approvalStatus: 'PENDING' } }),
+        // New members today from Member table
         (prisma as any).member.count({ where: { ...filter, createdAt: { gte: todayStart, lte: todayEnd } } }),
-        // Members approved today
+        // New members today from User table (MEMBER role)
+        (prisma as any).user.count({ where: { ...memberUserFilter, createdAt: { gte: todayStart, lte: todayEnd } } }),
+        // Approved today from Member table
         (prisma as any).member.count({ where: { ...filter, approvalStatus: 'APPROVED', updatedAt: { gte: todayStart, lte: todayEnd } } }),
         (prisma as any).location.count({ where: { ...locationFilter, type: 'AREA' } }),
         (prisma as any).location.count({ where: { ...locationFilter, type: 'STREET' } }),
@@ -517,6 +533,12 @@ export const resolvers = {
         (prisma as any).emergencyRequest.count({ where: { ...filter, status: 'PENDING' } }),
         (prisma as any).broadcast.count({ where: { ...filter, isActive: true } }),
       ]);
+
+      // Combine both tables for unified counts
+      const totalMembers = membersFromMemberTable + membersFromUserTable;
+      const pendingApprovals = pendingFromMemberTable + pendingFromUserTable;
+      const newMembersToday = newMembersTodayFromMember + newMembersTodayFromUser;
+      const approvedToday = approvedTodayFromMember;
 
       return {
         locationName,

@@ -32,35 +32,35 @@ model Location {
 }
 
 model Member {
-  id               Int                @id @default(autoincrement())
-  name             String
-  surname          String?
-  phone            String             @unique
-  password         String?
-  image            String?
-  bloodGroup       String?
-  allergies        String?
-  conditions       String?
-  emergencyContact String?
-  role             String             @default("Member")
-  professionId     Int?
-  profession       Profession?        @relation(fields: [professionId], references: [id])
-  locationId       Int
-  location         Location           @relation(fields: [locationId], references: [id])
-  approvalStatus   ApprovalStatus     @default(PENDING)
-  consent          Boolean            @default(true)
-  isActive         Boolean            @default(true)
-  createdAt        DateTime           @default(now())
-  updatedAt        DateTime           @updatedAt
-  createdById      Int?
-  createdBy        User?              @relation("MemberCreator", fields: [createdById], references: [id])
-  approvedById     Int?
-  approvedBy       User?              @relation("MemberApprover", fields: [approvedById], references: [id])
-  fcmToken         String?
-  messageLogs      MessageLog[]
-  requests         EmergencyRequest[]
-  eventResponses   EventResponse[]
-  communityMembers CommunityMember[]
+  id                 Int                 @id @default(autoincrement())
+  name               String
+  surname            String?
+  phone              String              @unique
+  password           String?
+  image              String?
+  bloodGroup         String?
+  allergies          String?
+  conditions         String?
+  emergencyContact   String?
+  role               String              @default("Member")
+  professionId       Int?
+  profession         Profession?         @relation(fields: [professionId], references: [id])
+  locationId         Int
+  location           Location            @relation(fields: [locationId], references: [id])
+  approvalStatus     ApprovalStatus      @default(PENDING)
+  consent            Boolean             @default(true)
+  isActive           Boolean             @default(true)
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  createdById        Int?
+  createdBy          User?               @relation("MemberCreator", fields: [createdById], references: [id])
+  approvedById       Int?
+  approvedBy         User?               @relation("MemberApprover", fields: [approvedById], references: [id])
+  fcmToken           String?
+  messageLogs        MessageLog[]
+  requests           EmergencyRequest[]
+  eventResponses     EventResponse[]
+  communityMembers   CommunityMember[]
   emergencyResponses EmergencyResponse[]
   polls              Poll[]
   pollVotes          PollVote[]
