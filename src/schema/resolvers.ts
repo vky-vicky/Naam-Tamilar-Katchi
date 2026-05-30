@@ -2,6 +2,7 @@ import { UserRole } from '@prisma/client';
 import prisma from '../db.js';
 import { whatsappService } from '../services/whatsapp.service.js';
 import { I18nService } from '../services/i18n.service.js';
+import { sendNotificationToLocation, sendNotificationToCommunity } from '../services/fcm.service.js';
 
 function getReadableError(err: any, lang: string = 'en') {
   const prismaCode = err?.code;
@@ -1906,7 +1907,7 @@ export const resolvers = {
 
       const expiryDateTime = expiryDate ? new Date(expiryDate) : null;
 
-      return (prisma as any).emergencyRequest.create({
+      const request = await (prisma as any).emergencyRequest.create({
         data: {
           title,
           description,
@@ -1922,6 +1923,11 @@ export const resolvers = {
         },
         include: { location: true, createdBy: true, member: true }
       });
+      
+      // Push Notification
+      sendNotificationToLocation(Number(locationId), "Emergency Request: " + title, description || "Urgent help needed in your area", { type: 'EMERGENCY', requestId: request.id }).catch(e => console.error(e));
+      
+      return request;
     },
 
     updateRequestStatus: async (_: any, { id, status }: any) => {
@@ -1933,7 +1939,7 @@ export const resolvers = {
     },
 
     createPost: async (_: any, args: any) => {
-      return (prisma as any).post.create({
+      const post = await (prisma as any).post.create({
         data: {
           content: args.content,
           image: args.image,
@@ -1944,6 +1950,13 @@ export const resolvers = {
           locationId: args.locationId
         }
       });
+      
+      // Push Notification
+      if (args.locationId) {
+        sendNotificationToLocation(Number(args.locationId), "New Community Post", `${args.authorName || 'Someone'} posted in the community`, { type: 'ALERT', postId: post.id }).catch(e => console.error(e));
+      }
+      
+      return post;
     },
 
     createPoll: async (_: any, { question, options, durationDays, locationId, communityId }: any, context: any) => {
@@ -1958,7 +1971,7 @@ export const resolvers = {
       const expiresAt = new Date();
       expiresAt.setDate(expiresAt.getDate() + durationDays);
       
-      return (prisma as any).poll.create({
+      const poll = await (prisma as any).poll.create({
         data: {
           question,
           locationId,
@@ -1971,6 +1984,15 @@ export const resolvers = {
           }
         }
       });
+      
+      // Push Notification
+      if (communityId) {
+         sendNotificationToCommunity(Number(communityId), "New Poll", question, { type: 'ALERT', pollId: poll.id }).catch(e => console.error(e));
+      } else if (locationId) {
+         sendNotificationToLocation(Number(locationId), "New Poll", question, { type: 'ALERT', pollId: poll.id }).catch(e => console.error(e));
+      }
+      
+      return poll;
     },
 
     voteInPoll: async (_: any, { pollId, optionId }: any, context: any) => {
@@ -2034,7 +2056,7 @@ export const resolvers = {
     },
 
     addComment: async (_: any, { postId, content, authorName, authorRole }: any) => {
-      return (prisma as any).comment.create({
+      const comment = await (prisma as any).comment.create({
         data: {
           postId,
           content,
@@ -2042,6 +2064,14 @@ export const resolvers = {
           authorRole
         }
       });
+      
+      // Send notification to post author's location (optional, simplified)
+      const post = await (prisma as any).post.findUnique({ where: { id: Number(postId) } });
+      if (post && post.locationId) {
+        sendNotificationToLocation(Number(post.locationId), "New Comment", `${authorName || 'Someone'} commented on a post`, { type: 'ALERT', postId: post.id }).catch(e => console.error(e));
+      }
+      
+      return comment;
     },
 
     createNotification: async (_: any, args: any) => {
