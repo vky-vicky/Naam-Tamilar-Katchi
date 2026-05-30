@@ -365,6 +365,7 @@ export const typeDefs = gql`
     getCommunityPosts(communityId: Int!, category: String): [CommunityPost!]!
     getCommunityMessages(communityId: Int!, limit: Int = 50, beforeMessageId: Int): [CommunityMessage!]!
     getCommunityUnreadCount(communityId: Int!): Int!
+    getCommunityMembers(communityId: Int!): [CommunityMemberDetail!]!
     getTargetableLocations(parentId: Int): [Location!]!
     getBroadcasts(locationId: Int, scope: BroadcastScope): [Broadcast!]!
     pendingMembers(locationId: Int): [Member!]!
@@ -617,5 +618,15 @@ export const typeDefs = gql`
   type RecentActivityLocation {
     id: Int!
     name: String!
+  }
+
+  type CommunityMemberDetail {
+    id: Int!
+    name: String!
+    phone: String
+    image: String
+    role: String!
+    isGroupAdmin: Boolean!
+    isMuted: Boolean!
   }
 `;

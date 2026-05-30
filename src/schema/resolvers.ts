@@ -383,14 +383,27 @@ export const resolvers = {
           where: { id: context.user.id },
           include: { location: true }
         });
-        return member;
+        if (member) {
+          return {
+            ...member,
+            role: 'MEMBER'
+          };
+        }
+        return null;
       }
 
       // If it's an Admin (User table)
-      return (prisma as any).user.findUnique({
+      const user = await (prisma as any).user.findUnique({
         where: { id: context.user.id },
         include: { location: true }
       });
+      if (user) {
+        return {
+          ...user,
+          role: user.role === 'Member' ? 'MEMBER' : user.role
+        };
+      }
+      return null;
     },
     
     getLocationList: async (_: any, { parentId, type }: any) => {
@@ -1117,6 +1130,63 @@ export const resolvers = {
       });
 
       return membership?.unreadCount || 0;
+    },
+
+    getCommunityMembers: async (_: any, { communityId }: any, context: any) => {
+      await assertCommunityReadAccess(Number(communityId), context);
+
+      const community = await (prisma as any).community.findUnique({
+        where: { id: Number(communityId) }
+      });
+      if (!community) throw new Error("Community not found");
+
+      // 1. Fetch all members in CommunityMember table
+      const memberships = await (prisma as any).communityMember.findMany({
+        where: { communityId: Number(communityId) },
+        include: { member: { include: { location: true } } }
+      });
+
+      const memberDetails = memberships.map((m: any) => ({
+        id: m.member.id,
+        name: `${m.member.name} ${m.member.surname || ''}`.trim(),
+        phone: m.member.phone,
+        image: m.member.image,
+        role: 'MEMBER',
+        isGroupAdmin: false,
+        isMuted: m.isMuted
+      }));
+
+      // 2. Fetch all admins who are in the same location or parents of the location
+      let adminUsers: any[] = [];
+      if (community.locationId) {
+        // Fetch users (admins) who have locationId in the ancestor tree of community.locationId
+        const ancestorIds = await getAncestorLocationIds(community.locationId);
+        adminUsers = await (prisma as any).user.findMany({
+          where: {
+            role: { in: ['SUPER_ADMIN', 'ADMIN', 'SUB_ADMIN'] },
+            locationId: { in: ancestorIds }
+          },
+          include: { location: true }
+        });
+      } else {
+        // State-level community, get all super admins
+        adminUsers = await (prisma as any).user.findMany({
+          where: { role: 'SUPER_ADMIN' },
+          include: { location: true }
+        });
+      }
+
+      const adminDetails = adminUsers.map((u: any) => ({
+        id: -Number(u.id), // negative ID for User/Admin to avoid key collision
+        name: `${u.name} ${u.surname || ''}`.trim(),
+        phone: u.phone,
+        image: u.image,
+        role: u.role,
+        isGroupAdmin: true,
+        isMuted: false
+      }));
+
+      return [...adminDetails, ...memberDetails];
     },
 
     getTargetableLocations: async (_: any, { parentId }: any, context: any) => {
