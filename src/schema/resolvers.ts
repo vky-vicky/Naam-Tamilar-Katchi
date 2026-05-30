@@ -583,7 +583,7 @@ export const resolvers = {
       });
     },
 
-    recentActivity: async (_: any, { locationId, limit = 10 }: any, context: any) => {
+    recentActivity: async (_: any, { locationId, limit = 10, offset = 0, search, type, fromDate, toDate }: any, context: any) => {
       const user = context?.user;
       if (!user) {
         throw new Error(I18nService.translate("unauthorized_login", context?.language));
@@ -622,59 +622,238 @@ export const resolvers = {
       }
 
       let filter: any = {};
+      let allLocationIds: number[] = [];
       if (targetLocationId) {
-        const allLocationIds = [targetLocationId, ...(await getChildLocationIds(targetLocationId))];
+        allLocationIds = [targetLocationId, ...(await getChildLocationIds(targetLocationId))];
         filter.locationId = { in: allLocationIds };
       }
 
-      const [events, requests, approvals] = await Promise.all([
-        (prisma as any).event.findMany({ 
-          where: filter, 
-          take: limit, 
-          orderBy: { createdAt: 'desc' },
-          include: { location: true, createdBy: true }
-        }),
-        (prisma as any).emergencyRequest.findMany({ 
-          where: filter, 
-          take: limit, 
-          orderBy: { createdAt: 'desc' }, 
-          include: { member: true, location: true, createdBy: true } 
-        }),
-        (prisma as any).member.findMany({ 
-          where: { 
-            ...filter,
-            approvalStatus: 'APPROVED',
-            OR: [
-              { approvedById: { not: null } },
-              { createdById: { not: null } }
-            ]
-          }, 
-          take: limit, 
-          orderBy: { createdAt: 'desc' },
-          include: { approvedBy: true, createdBy: true, location: true }
-        }),
-      ]);
+      // Build date range filter
+      let dateFilter: any = {};
+      if (fromDate || toDate) {
+        dateFilter.createdAt = {};
+        if (fromDate) {
+          const start = new Date(fromDate);
+          start.setHours(0, 0, 0, 0);
+          dateFilter.createdAt.gte = start;
+        }
+        if (toDate) {
+          const end = new Date(toDate);
+          end.setHours(23, 59, 59, 999);
+          dateFilter.createdAt.lte = end;
+        }
+      }
 
-      const activities = [
-        ...events.map((e: any) => ({ ...e, __typename: 'Event' })),
-        ...requests.map((r: any) => ({ ...r, __typename: 'EmergencyRequest' })),
-        ...approvals.map((a: any) => {
-          const createdAtDate = a.createdAt instanceof Date ? a.createdAt : new Date(a.createdAt);
-          return {
-            id: a.id,
-            memberName: a.name,
-            approvedByName: a.approvedBy?.name || a.createdBy?.name || 'Admin',
-            location: a.location || { id: 0, name: 'Unknown', type: 'STREET', children: [], memberCount: 0, childCount: 0, events: [], requests: [] },
-            time: createdAtDate.toISOString(),
-            createdAt: createdAtDate.toISOString(),
-            __typename: 'MemberApprovalActivity'
-          };
-        })
-      ];
+      // Build search filters for each model
+      let eventSearch: any = {};
+      let emergencySearch: any = {};
+      let approvalSearch: any = {};
+      let broadcastSearch: any = {};
+      let auditSearch: any = {};
 
-      return activities.sort((a: any, b: any) => 
+      if (search) {
+        eventSearch.OR = [
+          { title: { contains: search, mode: 'insensitive' } },
+          { description: { contains: search, mode: 'insensitive' } },
+          { createdBy: { name: { contains: search, mode: 'insensitive' } } }
+        ];
+
+        emergencySearch.OR = [
+          { title: { contains: search, mode: 'insensitive' } },
+          { description: { contains: search, mode: 'insensitive' } },
+          { member: { name: { contains: search, mode: 'insensitive' } } },
+          { createdBy: { name: { contains: search, mode: 'insensitive' } } }
+        ];
+
+        approvalSearch.OR = [
+          { name: { contains: search, mode: 'insensitive' } },
+          { surname: { contains: search, mode: 'insensitive' } },
+          { approvedBy: { name: { contains: search, mode: 'insensitive' } } },
+          { createdBy: { name: { contains: search, mode: 'insensitive' } } }
+        ];
+
+        broadcastSearch.OR = [
+          { title: { contains: search, mode: 'insensitive' } },
+          { message: { contains: search, mode: 'insensitive' } },
+          { createdBy: { name: { contains: search, mode: 'insensitive' } } }
+        ];
+
+        auditSearch.OR = [
+          { action: { contains: search, mode: 'insensitive' } },
+          { details: { contains: search, mode: 'insensitive' } },
+          { user: { name: { contains: search, mode: 'insensitive' } } }
+        ];
+      }
+
+      const promises: Promise<any[]>[] = [];
+      const shouldQuery = (t: string) => !type || type === t;
+      const takeLimit = limit + offset;
+
+      if (shouldQuery('EVENT')) {
+        promises.push(
+          (prisma as any).event.findMany({
+            where: { ...filter, ...eventSearch, ...dateFilter },
+            take: takeLimit,
+            orderBy: { createdAt: 'desc' },
+            include: { location: true, createdBy: true }
+          }).then((events: any[]) => events.map((e: any) => ({
+            id: e.id,
+            activityType: 'EVENT',
+            title: e.title,
+            description: e.description,
+            createdAt: e.createdAt instanceof Date ? e.createdAt.toISOString() : new Date(e.createdAt).toISOString(),
+            member: e.createdBy ? {
+              id: e.createdBy.id,
+              name: e.createdBy.name,
+              phone: e.createdBy.phone,
+              role: e.createdBy.role
+            } : null,
+            location: e.location ? {
+              id: e.location.id,
+              name: e.location.name
+            } : null
+          })))
+        );
+      }
+
+      if (shouldQuery('EMERGENCY')) {
+        promises.push(
+          (prisma as any).emergencyRequest.findMany({
+            where: { ...filter, ...emergencySearch, ...dateFilter },
+            take: takeLimit,
+            orderBy: { createdAt: 'desc' },
+            include: { member: true, location: true, createdBy: true }
+          }).then((requests: any[]) => requests.map((r: any) => ({
+            id: r.id,
+            activityType: 'EMERGENCY',
+            title: r.title,
+            description: r.description,
+            createdAt: r.createdAt instanceof Date ? r.createdAt.toISOString() : new Date(r.createdAt).toISOString(),
+            member: r.member ? {
+              id: r.member.id,
+              name: r.member.name,
+              phone: r.member.phone,
+              role: r.member.role
+            } : (r.createdBy ? {
+              id: r.createdBy.id,
+              name: r.createdBy.name,
+              phone: r.createdBy.phone,
+              role: r.createdBy.role
+            } : null),
+            location: r.location ? {
+              id: r.location.id,
+              name: r.location.name
+            } : null
+          })))
+        );
+      }
+
+      if (shouldQuery('APPROVAL')) {
+        promises.push(
+          (prisma as any).member.findMany({
+            where: {
+              ...filter,
+              approvalStatus: 'APPROVED',
+              ...approvalSearch,
+              ...dateFilter,
+              OR: [
+                { approvedById: { not: null } },
+                { createdById: { not: null } }
+              ]
+            },
+            take: takeLimit,
+            orderBy: { createdAt: 'desc' },
+            include: { approvedBy: true, createdBy: true, location: true }
+          }).then((members: any[]) => members.map((m: any) => {
+            const approvedByName = m.approvedBy?.name || m.createdBy?.name || 'Admin';
+            const actionText = m.approvedById ? 'approved' : 'added';
+            return {
+              id: m.id,
+              activityType: 'APPROVAL',
+              title: m.approvedById ? 'Member Approved' : 'Member Added',
+              description: `Member request ${actionText} for ${m.name} ${m.surname || ''} by ${approvedByName}`,
+              createdAt: m.createdAt instanceof Date ? m.createdAt.toISOString() : new Date(m.createdAt).toISOString(),
+              member: {
+                id: m.id,
+                name: m.name,
+                phone: m.phone,
+                role: m.role
+              },
+              location: m.location ? {
+                id: m.location.id,
+                name: m.location.name
+              } : null
+            };
+          }))
+        );
+      }
+
+      if (shouldQuery('BROADCAST')) {
+        promises.push(
+          (prisma as any).broadcast.findMany({
+            where: { ...filter, ...broadcastSearch, ...dateFilter },
+            take: takeLimit,
+            orderBy: { createdAt: 'desc' },
+            include: { location: true, createdBy: true }
+          }).then((broadcasts: any[]) => broadcasts.map((b: any) => ({
+            id: b.id,
+            activityType: 'BROADCAST',
+            title: b.title,
+            description: b.message,
+            createdAt: b.createdAt instanceof Date ? b.createdAt.toISOString() : new Date(b.createdAt).toISOString(),
+            member: b.createdBy ? {
+              id: b.createdBy.id,
+              name: b.createdBy.name,
+              phone: b.createdBy.phone,
+              role: b.createdBy.role
+            } : null,
+            location: b.location ? {
+              id: b.location.id,
+              name: b.location.name
+            } : null
+          })))
+        );
+      }
+
+      if (shouldQuery('ROLE_CHANGE')) {
+        let auditFilter: any = { action: { contains: 'role', mode: 'insensitive' } };
+        if (targetLocationId) {
+          auditFilter.user = { locationId: { in: allLocationIds } };
+        }
+        promises.push(
+          (prisma as any).auditLog.findMany({
+            where: { ...auditFilter, ...auditSearch, ...dateFilter },
+            take: takeLimit,
+            orderBy: { createdAt: 'desc' },
+            include: { user: { include: { location: true } } }
+          }).then((logs: any[]) => logs.map((l: any) => ({
+            id: l.id,
+            activityType: 'ROLE_CHANGE',
+            title: 'Role Changed',
+            description: l.details || `Role changed for user ${l.user.name}`,
+            createdAt: l.createdAt instanceof Date ? l.createdAt.toISOString() : new Date(l.createdAt).toISOString(),
+            member: {
+              id: l.user.id,
+              name: l.user.name,
+              phone: l.user.phone,
+              role: l.user.role
+            },
+            location: l.user.location ? {
+              id: l.user.location.id,
+              name: l.user.location.name
+            } : null
+          })))
+        );
+      }
+
+      const results = await Promise.all(promises);
+      const allActivities = results.flat();
+
+      allActivities.sort((a: any, b: any) => 
         new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-      ).slice(0, limit);
+      );
+
+      return allActivities.slice(offset, offset + limit);
     },
 
     professions: async () => {

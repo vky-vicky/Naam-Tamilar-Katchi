@@ -345,7 +345,15 @@ export const typeDefs = gql`
     me: User
     getMemberList(locationId: Int, professionName: String, bloodGroup: String, role: String, search: String, limit: Int, offset: Int, approvalStatus: ApprovalStatus): [Member!]!
     getMemberDetails(id: Int!): Member
-    recentActivity(locationId: Int, limit: Int = 10): [Activity!]!
+    recentActivity(
+      locationId: Int
+      limit: Int = 10
+      offset: Int = 0
+      search: String
+      type: ActivityType
+      fromDate: String
+      toDate: String
+    ): [RecentActivity!]!
     professions: [Profession!]!
     communityFeed(locationId: Int): [Post!]!
     getPollList(locationId: Int, communityId: Int): [Poll!]!
@@ -580,4 +588,34 @@ export const typeDefs = gql`
   }
 
   union Activity = Event | EmergencyRequest | MemberApprovalActivity
+
+  enum ActivityType {
+    EVENT
+    EMERGENCY
+    APPROVAL
+    ROLE_CHANGE
+    BROADCAST
+  }
+
+  type RecentActivity {
+    id: Int!
+    activityType: ActivityType!
+    title: String!
+    description: String
+    createdAt: String!
+    member: RecentActivityMember
+    location: RecentActivityLocation
+  }
+
+  type RecentActivityMember {
+    id: Int!
+    name: String!
+    phone: String
+    role: String!
+  }
+
+  type RecentActivityLocation {
+    id: Int!
+    name: String!
+  }
 `;
