@@ -328,6 +328,8 @@ export const typeDefs = gql`
     totalSubAdmins: Int!
     totalMembers: Int!
     pendingApprovals: Int!
+    newMembersToday: Int!
+    approvedToday: Int!
     totalTowns: Int!
     totalStreets: Int!
     activeEvents: Int!
@@ -572,6 +574,7 @@ export const typeDefs = gql`
     id: Int!
     memberName: String!
     approvedByName: String!
+    location: Location!
     time: String!
     createdAt: String!
   }

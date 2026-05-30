@@ -484,11 +484,19 @@ export const resolvers = {
         userFilter.locationId = { in: allLocationIds };
       }
 
+      // Today's date range (midnight to now)
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      const todayEnd = new Date();
+      todayEnd.setHours(23, 59, 59, 999);
+
       const [
         totalAdmins, 
         totalSubAdmins, 
         totalMembers, 
-        pendingApprovals, 
+        pendingApprovals,
+        newMembersToday,
+        approvedToday,
         totalTowns,
         totalStreets, 
         activeEvents, 
@@ -499,6 +507,10 @@ export const resolvers = {
         (prisma as any).user.count({ where: { ...userFilter, role: 'SUB_ADMIN' } }),
         (prisma as any).member.count({ where: { ...filter, approvalStatus: 'APPROVED' } }),
         (prisma as any).member.count({ where: { ...filter, approvalStatus: 'PENDING' } }),
+        // Members added today (any status)
+        (prisma as any).member.count({ where: { ...filter, createdAt: { gte: todayStart, lte: todayEnd } } }),
+        // Members approved today
+        (prisma as any).member.count({ where: { ...filter, approvalStatus: 'APPROVED', updatedAt: { gte: todayStart, lte: todayEnd } } }),
         (prisma as any).location.count({ where: { ...locationFilter, type: 'AREA' } }),
         (prisma as any).location.count({ where: { ...locationFilter, type: 'STREET' } }),
         (prisma as any).event.count({ where: { ...filter, status: 'ACTIVE' } }),
@@ -512,6 +524,8 @@ export const resolvers = {
         totalSubAdmins,
         totalMembers,
         pendingApprovals,
+        newMembersToday,
+        approvedToday,
         totalTowns,
         totalStreets,
         activeEvents,
@@ -605,24 +619,35 @@ export const resolvers = {
           include: { member: true, location: true, createdBy: true } 
         }),
         (prisma as any).member.findMany({ 
-          where: { ...filter, approvalStatus: 'APPROVED', approvedById: { not: null } }, 
+          where: { 
+            ...filter,
+            approvalStatus: 'APPROVED',
+            OR: [
+              { approvedById: { not: null } },
+              { createdById: { not: null } }
+            ]
+          }, 
           take: limit, 
-          orderBy: { updatedAt: 'desc' },
-          include: { approvedBy: true, location: true }
+          orderBy: { createdAt: 'desc' },
+          include: { approvedBy: true, createdBy: true, location: true }
         }),
       ]);
 
       const activities = [
         ...events.map((e: any) => ({ ...e, __typename: 'Event' })),
         ...requests.map((r: any) => ({ ...r, __typename: 'EmergencyRequest' })),
-        ...approvals.map((a: any) => ({
-          id: a.id,
-          memberName: a.name,
-          approvedByName: a.approvedBy?.name || 'Admin',
-          time: a.updatedAt.toISOString(),
-          createdAt: a.updatedAt,
-          __typename: 'MemberApprovalActivity'
-        }))
+        ...approvals.map((a: any) => {
+          const createdAtDate = a.createdAt instanceof Date ? a.createdAt : new Date(a.createdAt);
+          return {
+            id: a.id,
+            memberName: a.name,
+            approvedByName: a.approvedBy?.name || a.createdBy?.name || 'Admin',
+            location: a.location || { id: 0, name: 'Unknown', type: 'STREET', children: [], memberCount: 0, childCount: 0, events: [], requests: [] },
+            time: createdAtDate.toISOString(),
+            createdAt: createdAtDate.toISOString(),
+            __typename: 'MemberApprovalActivity'
+          };
+        })
       ];
 
       return activities.sort((a: any, b: any) => 
@@ -1225,9 +1250,13 @@ export const resolvers = {
         professionId = profession.id;
       }
 
+      // Super Admin / Admin directly adding a member → auto-approve immediately
+      // so it shows up in Recent Activity
+      const isAdminAdding = context?.user?.role === 'SUPER_ADMIN' || context?.user?.role === 'ADMIN' || context?.user?.role === 'SUB_ADMIN';
       const memberData: any = {
         ...rest,
-        approvalStatus: 'PENDING',
+        approvalStatus: isAdminAdding ? 'APPROVED' : 'PENDING',
+        approvedById: isAdminAdding && creatorId ? creatorId : null,
         locationId: finalLocationId,
         professionId: professionId,
         createdById: creatorId || null
