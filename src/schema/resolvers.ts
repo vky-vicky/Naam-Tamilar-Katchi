@@ -225,6 +225,7 @@ function userToMemberShape(user: any) {
     profession: null,
     professionId: null,
     approvalStatus: user.approvalStatus,
+    isActive: user.isActive,
     approvedBy: null,
     approvedById: null,
     createdAt: user.createdAt,
