@@ -76,6 +76,7 @@ export const typeDefs = gql`
     locationId: Int
     location: Location
     approvalStatus: ApprovalStatus!
+    isActive: Boolean!
     createdAt: String
     addedBy: String!
   }
@@ -100,6 +101,7 @@ export const typeDefs = gql`
     location: Location!
     profession: String
     approvalStatus: ApprovalStatus!
+    isActive: Boolean!
     approvedBy: User
     createdAt: String!
     activityHistory: [Activity!]!
@@ -330,6 +332,7 @@ export const typeDefs = gql`
     totalStreets: Int!
     activeEvents: Int!
     emergencyRequests: Int!
+    activeBroadcasts: Int!
   }
 
   type Query {

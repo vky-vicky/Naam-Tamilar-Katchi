@@ -491,7 +491,8 @@ export const resolvers = {
         totalTowns,
         totalStreets, 
         activeEvents, 
-        emergencyRequests
+        emergencyRequests,
+        activeBroadcasts
       ] = await Promise.all([
         (prisma as any).user.count({ where: { ...userFilter, role: 'ADMIN' } }),
         (prisma as any).user.count({ where: { ...userFilter, role: 'SUB_ADMIN' } }),
@@ -501,6 +502,7 @@ export const resolvers = {
         (prisma as any).location.count({ where: { ...locationFilter, type: 'STREET' } }),
         (prisma as any).event.count({ where: { ...filter, status: 'ACTIVE' } }),
         (prisma as any).emergencyRequest.count({ where: { ...filter, status: 'PENDING' } }),
+        (prisma as any).broadcast.count({ where: { ...filter, isActive: true } }),
       ]);
 
       return {
@@ -513,6 +515,7 @@ export const resolvers = {
         totalStreets,
         activeEvents,
         emergencyRequests,
+        activeBroadcasts,
       };
     },
 
