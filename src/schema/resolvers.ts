@@ -660,9 +660,10 @@ export const resolvers = {
     },
 
     getMemberDetails: async (_: any, { id }: any) => {
-      if (Number(id) < 0) {
+      if (Number(id) < 0 || Number(id) >= 1000000) {
+        const userId = Number(id) < 0 ? Math.abs(Number(id)) : (Number(id) - 1000000);
         const user = await (prisma as any).user.findUnique({
-          where: { id: Math.abs(Number(id)) },
+          where: { id: userId },
           include: { location: true }
         });
         return user ? userToMemberShape(user) : null;
@@ -1763,6 +1764,47 @@ export const resolvers = {
         data.approvedById = context.user.id;
       }
 
+      if (Number(id) < 0 || Number(id) >= 1000000) {
+        const userId = Number(id) < 0 ? Math.abs(Number(id)) : (Number(id) - 1000000);
+        const updatedUser = await (prisma as any).user.update({
+          where: { id: userId },
+          data: { approvalStatus: status },
+          include: { location: true }
+        });
+
+        if (status === 'APPROVED') {
+          try {
+            const notification = await (prisma as any).notification.create({
+              data: {
+                title: "Member Approved",
+                message: `Member ${updatedUser.name} has been approved.`,
+                type: 'APPROVAL',
+                locationId: updatedUser.locationId,
+                time: 'Just now'
+              }
+            });
+
+            const io = (global as any).io;
+            if (io) {
+              io.emit('newNotification', notification);
+            }
+
+            if (updatedUser.fcmToken) {
+              sendNotificationToToken(
+                updatedUser.fcmToken,
+                "Membership Approved",
+                "Your membership application has been approved! Welcome.",
+                { type: 'APPROVAL', memberId: id }
+              ).catch(e => console.error(e));
+            }
+          } catch (err) {
+            console.error('Error handling post-approval notifications:', err);
+          }
+        }
+
+        return userToMemberShape(updatedUser);
+      }
+
       const updatedMember = await (prisma as any).member.update({
         where: { id },
         data: data,
@@ -1807,9 +1849,15 @@ export const resolvers = {
       if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", context?.language));
 
       const { id, professionName, streetId, areaId, talukId, districtId, locationId, ...rest } = args;
+      
+      const isUserTable = Number(id) < 0 || Number(id) >= 1000000;
+      const targetId = isUserTable 
+        ? (Number(id) < 0 ? Math.abs(Number(id)) : (Number(id) - 1000000))
+        : Number(id);
+
       // Normal Member can only edit their own profile.
       const isMember = context.user.role === 'MEMBER';
-      if (isMember && Number(context.user.id) !== Number(id)) {
+      if (isMember && Number(context.user.id) !== targetId) {
         throw new Error(I18nService.translate("unauthorized_edit_member", context?.language));
       }
 
@@ -1833,8 +1881,18 @@ export const resolvers = {
         updateData.professionId = profession.id;
       }
 
+      if (isUserTable) {
+        delete updateData.professionId;
+        const updatedUser = await (prisma as any).user.update({
+          where: { id: targetId },
+          data: updateData,
+          include: { location: true }
+        });
+        return userToMemberShape(updatedUser);
+      }
+
       const updatedMember = await (prisma as any).member.update({
-        where: { id },
+        where: { id: targetId },
         data: updateData,
         include: { location: true, profession: true }
       });
