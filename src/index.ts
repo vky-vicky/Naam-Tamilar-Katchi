@@ -106,7 +106,8 @@ async function startServer() {
                   contextUser = {
                     id: dbUser.id,
                     role: dbUser.role === 'Member' ? 'MEMBER' : dbUser.role,
-                    locationId: dbUser.locationId || null
+                    locationId: dbUser.locationId || null,
+                    type: type // 'admin' or 'member'
                   };
                 }
               }
@@ -122,7 +123,8 @@ async function startServer() {
                   contextUser = {
                     id: dbMember.id,
                     role: 'MEMBER',
-                    locationId: dbMember.locationId || null
+                    locationId: dbMember.locationId || null,
+                    type: 'member'
                   };
                 }
               } else {
@@ -134,7 +136,8 @@ async function startServer() {
                   contextUser = {
                     id: dbUser.id,
                     role: dbUser.role,
-                    locationId: dbUser.locationId || null
+                    locationId: dbUser.locationId || null,
+                    type: 'admin'
                   };
                 }
               }

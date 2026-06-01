@@ -120,6 +120,22 @@ export async function sendNotificationToLocation(
           body
         },
         data: stringData,
+        android: {
+          priority: 'high' as const,
+          notification: {
+            sound: 'default',
+            channelId: 'high_importance_channel',
+            priority: 'high' as const,
+          }
+        },
+        apns: {
+          payload: {
+            aps: {
+              sound: 'default',
+              badge: 1,
+            }
+          }
+        },
         tokens: batchTokens
       };
 
@@ -177,6 +193,22 @@ export async function sendNotificationToCommunity(
       await admin.messaging().sendEachForMulticast({
         notification: { title, body },
         data: stringData,
+        android: {
+          priority: 'high' as const,
+          notification: {
+            sound: 'default',
+            channelId: 'high_importance_channel',
+            priority: 'high' as const,
+          }
+        },
+        apns: {
+          payload: {
+            aps: {
+              sound: 'default',
+              badge: 1,
+            }
+          }
+        },
         tokens: batchTokens
       });
     }
@@ -208,7 +240,23 @@ export async function sendNotificationToToken(
     await admin.messaging().send({
       token,
       notification: { title, body },
-      data: stringData
+      data: stringData,
+      android: {
+        priority: 'high' as const,
+        notification: {
+          sound: 'default',
+          channelId: 'high_importance_channel',
+          priority: 'high' as const,
+        }
+      },
+      apns: {
+        payload: {
+          aps: {
+            sound: 'default',
+            badge: 1,
+          }
+        }
+      }
     });
     console.log('[FCM] Sent notification to token successfully');
   } catch (error) {

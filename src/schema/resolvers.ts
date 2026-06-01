@@ -340,7 +340,7 @@ async function assertCommunityReadAccess(communityId: number, context: any) {
   });
   if (!community) throw new Error("Community not found");
 
-  if (context.user.role === 'MEMBER') {
+  if (context.user.type === 'member' || context.user.role === 'MEMBER') {
     const membership = await (prisma as any).communityMember.findUnique({
       where: {
         communityId_memberId: {
@@ -373,7 +373,7 @@ async function assertCommunityWriteAccess(communityId: number, context: any) {
     }
   }
 
-  if (user.role === 'MEMBER') {
+  if (user.type === 'member' || user.role === 'MEMBER') {
     const membership = await (prisma as any).communityMember.findUnique({
       where: {
         communityId_memberId: {
@@ -447,7 +447,7 @@ export const resolvers = {
       if (!context.user) return null;
       
       // If it's a Member, return them as a User-compatible object
-      if (context.user.role === 'MEMBER') {
+      if (context.user.type === 'member' || context.user.role === 'MEMBER') {
         const member = await (prisma as any).member.findUnique({
           where: { id: context.user.id },
           include: { location: true }
@@ -1313,7 +1313,7 @@ export const resolvers = {
     getCommunityUnreadCount: async (_: any, { communityId }: any, context: any) => {
       await assertCommunityReadAccess(Number(communityId), context);
 
-      if (context.user.role !== 'MEMBER') return 0;
+      if (context.user.type !== 'member' && context.user.role !== 'MEMBER') return 0;
 
       const membership = await (prisma as any).communityMember.findUnique({
         where: {
@@ -2272,7 +2272,7 @@ export const resolvers = {
         throw new Error(I18nService.translate("unauthorized_login", context?.language));
       }
       
-      const isMember = context.user.role === 'MEMBER';
+      const isMember = context.user.type === 'member' || context.user.role === 'MEMBER';
       const createdById = isMember ? null : Number(context.user.id);
       const memberId = isMember ? Number(context.user.id) : null;
       
@@ -2444,7 +2444,7 @@ export const resolvers = {
       
       const id = Number(context.user.id);
       
-      if (context.user.role === 'MEMBER') {
+      if (context.user.type === 'member' || context.user.role === 'MEMBER') {
         await (prisma as any).member.update({
           where: { id },
           data: { fcmToken: token }
@@ -2462,7 +2462,7 @@ export const resolvers = {
     logout: async (_: any, __: any, context: any) => {
       if (!context.user) return true;
       const id = Number(context.user.id);
-      if (context.user.role === 'MEMBER') {
+      if (context.user.type === 'member' || context.user.role === 'MEMBER') {
         await (prisma as any).member.update({ where: { id }, data: { fcmToken: null } });
       } else {
         await (prisma as any).user.update({ where: { id }, data: { fcmToken: null } });
@@ -2825,7 +2825,7 @@ export const resolvers = {
         });
       }
 
-      if (context.user.role === 'MEMBER') {
+      if (context.user.type === 'member' || context.user.role === 'MEMBER') {
         await (prisma as any).communityMember.update({
           where: {
             communityId_memberId: {
