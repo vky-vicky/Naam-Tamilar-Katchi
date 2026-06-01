@@ -169,3 +169,35 @@ export async function sendNotificationToCommunity(
     console.error('[FCM] Error sending to community:', error);
   }
 }
+
+/**
+ * Sends a push notification to a single FCM token (e.g. for individual approvals)
+ */
+export async function sendNotificationToToken(
+  token: string,
+  title: string,
+  body: string,
+  data: any = {}
+) {
+  if (!initialized) return;
+
+  try {
+    const stringData: Record<string, string> = {};
+    for (const key in data) {
+      if (data[key] !== null && data[key] !== undefined) {
+        stringData[key] = String(data[key]);
+      }
+    }
+    stringData['click_action'] = 'FLUTTER_NOTIFICATION_CLICK';
+
+    await admin.messaging().send({
+      token,
+      notification: { title, body },
+      data: stringData
+    });
+    console.log('[FCM] Sent notification to token successfully');
+  } catch (error) {
+    console.error('[FCM] Error sending FCM notification to token:', error);
+  }
+}
+

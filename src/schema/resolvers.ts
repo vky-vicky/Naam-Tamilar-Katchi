@@ -2,7 +2,7 @@ import { UserRole } from '@prisma/client';
 import prisma from '../db.js';
 import { whatsappService } from '../services/whatsapp.service.js';
 import { I18nService } from '../services/i18n.service.js';
-import { sendNotificationToLocation, sendNotificationToCommunity } from '../services/fcm.service.js';
+import { sendNotificationToLocation, sendNotificationToCommunity, sendNotificationToToken } from '../services/fcm.service.js';
 
 function getReadableError(err: any, lang: string = 'en') {
   const prismaCode = err?.code;
@@ -132,6 +132,43 @@ async function getLocationFields(locationId: number | null | undefined) {
     currentId = loc.parentId;
   }
   return fields;
+}
+
+async function sendSystemNotification({
+  title,
+  message,
+  type,
+  locationId,
+  data = {}
+}: {
+  title: string;
+  message: string;
+  type: string;
+  locationId: number;
+  data?: any;
+}) {
+  const notification = await (prisma as any).notification.create({
+    data: {
+      title,
+      message,
+      type,
+      locationId,
+      time: 'Just now'
+    }
+  });
+
+  const io = (global as any).io;
+  if (io) {
+    io.emit('newNotification', notification);
+  }
+
+  await sendNotificationToLocation(locationId, title, message, {
+    ...data,
+    type,
+    notificationId: notification.id
+  }).catch(e => console.error('[FCM] Error sending push notification:', e));
+
+  return notification;
 }
 
 // Helper to validate location targeting based on user role and assigned location
@@ -1726,11 +1763,43 @@ export const resolvers = {
         data.approvedById = context.user.id;
       }
 
-      return (prisma as any).member.update({
+      const updatedMember = await (prisma as any).member.update({
         where: { id },
         data: data,
         include: { location: true, approvedBy: true }
       });
+
+      if (status === 'APPROVED') {
+        try {
+          const notification = await (prisma as any).notification.create({
+            data: {
+              title: "Member Approved",
+              message: `Member ${updatedMember.name} has been approved.`,
+              type: 'APPROVAL',
+              locationId: updatedMember.locationId,
+              time: 'Just now'
+            }
+          });
+
+          const io = (global as any).io;
+          if (io) {
+            io.emit('newNotification', notification);
+          }
+
+          if (updatedMember.fcmToken) {
+            sendNotificationToToken(
+              updatedMember.fcmToken,
+              "Membership Approved",
+              "Your membership application has been approved! Welcome.",
+              { type: 'APPROVAL', memberId: updatedMember.id }
+            ).catch(e => console.error(e));
+          }
+        } catch (err) {
+          console.error('Error handling post-approval notifications:', err);
+        }
+      }
+
+      return updatedMember;
     }),
 
     updateMember: safeResolver(async (_: any, args: any, context: any) => {
@@ -1802,15 +1871,13 @@ export const resolvers = {
       });
 
       try {
-        // 5. Create database Notification
-        await (prisma as any).notification.create({
-          data: {
-            title: `New Event: ${title}`,
-            message: `${description || 'A new event has been scheduled.'} Date: ${new Date(date).toLocaleDateString()}`,
-            type: 'EVENT',
-            locationId: Number(locationId),
-            time: 'Just now'
-          }
+        // 5. Create database, Socket, and FCM Notification
+        await sendSystemNotification({
+          title: `New Event: ${title}`,
+          message: `${description || 'A new event has been scheduled.'} Date: ${new Date(date).toLocaleDateString()}`,
+          type: 'EVENT',
+          locationId: Number(locationId),
+          data: { eventId: event.id }
         });
 
         // 6. Retrieve phone numbers of all active members in this location & all its children
@@ -1970,6 +2037,15 @@ export const resolvers = {
         );
       }
 
+      // Create database and Socket/FCM Notification
+      await sendSystemNotification({
+        title: "New Broadcast: " + title,
+        message: message,
+        type: 'BROADCAST',
+        locationId: Number(locationId),
+        data: { broadcastId: broadcast.id }
+      }).catch(e => console.error(e));
+
       return { ...broadcast, recipientCount };
     },
 
@@ -2093,8 +2169,14 @@ export const resolvers = {
         include: { location: true, createdBy: true, member: true }
       });
       
-      // Push Notification
-      sendNotificationToLocation(Number(locationId), "Emergency Request: " + title, description || "Urgent help needed in your area", { type: 'EMERGENCY', requestId: request.id }).catch(e => console.error(e));
+      // Push Notification, DB Notification, and Socket.IO
+      await sendSystemNotification({
+        title: "Emergency Request: " + title,
+        message: description || "Urgent help needed in your area",
+        type: 'EMERGENCY',
+        locationId: Number(locationId),
+        data: { requestId: request.id }
+      }).catch(e => console.error(e));
       
       return request;
     },
@@ -2111,7 +2193,6 @@ export const resolvers = {
       const post = await (prisma as any).post.create({
         data: {
           content: args.content,
-          image: args.image,
           category: args.category || "Discussion",
           images: args.images || [],
           authorName: args.authorName,
@@ -2154,10 +2235,25 @@ export const resolvers = {
         }
       });
       
-      // Push Notification
+      // Push Notification, DB Notification, and Socket.IO
       if (communityId) {
-         sendNotificationToCommunity(Number(communityId), "New Poll", question, { type: 'ALERT', pollId: poll.id }).catch(e => console.error(e));
+         sendNotificationToCommunity(Number(communityId), "New Poll", question, { type: 'POLL', pollId: poll.id }).catch(e => console.error(e));
          
+         // Create a database notification for the community's location if available
+         const notification = await (prisma as any).notification.create({
+           data: {
+             title: "New Poll",
+             message: question,
+             type: 'POLL',
+             locationId: Number(locationId),
+             time: 'Just now'
+           }
+         });
+         const io = (global as any).io;
+         if (io) {
+           io.emit('newNotification', notification);
+         }
+
          // Also inject it into the community chat stream
          const chatMsg = await (prisma as any).communityMessage.create({
            data: {
@@ -2170,13 +2266,18 @@ export const resolvers = {
            },
            include: { replyTo: true, reactions: true }
          });
-         const io = (global as any).io;
          if (io) {
            const payload = await formatCommunityMessage(chatMsg);
            io.to(`community:${communityId}`).emit('communityMessage', payload);
          }
       } else if (locationId) {
-         sendNotificationToLocation(Number(locationId), "New Poll", question, { type: 'ALERT', pollId: poll.id }).catch(e => console.error(e));
+         await sendSystemNotification({
+           title: "New Poll",
+           message: question,
+           type: 'POLL',
+           locationId: Number(locationId),
+           data: { pollId: poll.id }
+         }).catch(e => console.error(e));
       }
       
       return poll;
@@ -2262,9 +2363,22 @@ export const resolvers = {
     },
 
     createNotification: async (_: any, args: any) => {
-      return (prisma as any).notification.create({
+      const notification = await (prisma as any).notification.create({
         data: args
       });
+      const io = (global as any).io;
+      if (io) {
+        io.emit('newNotification', notification);
+      }
+      if (args.locationId) {
+        sendNotificationToLocation(
+          Number(args.locationId),
+          args.title,
+          args.message,
+          { type: args.type || 'ALERT', notificationId: notification.id }
+        ).catch(e => console.error(e));
+      }
+      return notification;
     },
 
     updateFcmToken: async (_: any, { token }: any, context: any) => {
@@ -2343,7 +2457,7 @@ export const resolvers = {
       return true;
     },
 
-    createCommunityPost: async (_: any, { communityId, title, content, image, category, images }: any, context: any) => {
+    createCommunityPost: async (_: any, { communityId, title, content, category, images }: any, context: any) => {
       if (!context.user) throw new Error(I18nService.translate("unauthorized_login", context?.language));
       if (context.user.role !== 'SUPER_ADMIN' && context.user.role !== 'ADMIN') {
         throw new Error(I18nService.translate("member_not_allowed", context?.language));
@@ -2362,7 +2476,6 @@ export const resolvers = {
         data: {
           title,
           content,
-          image,
           category: category || "Information",
           images: images || [],
           communityId,
@@ -2392,12 +2505,20 @@ export const resolvers = {
               data: {
                 title: `${community.name}: ${title}`,
                 message: content,
-                type: 'ALERT',
+                type: 'COMMUNITY',
                 locationId: m.member.locationId,
                 time: 'Just now'
               }
             });
           }
+
+          // Push FCM notification to community
+          sendNotificationToCommunity(
+            Number(communityId),
+            `${community.name}: ${title}`,
+            content,
+            { type: 'COMMUNITY', communityId: Number(communityId) }
+          ).catch(e => console.error(e));
         } catch (error) {
           console.error("Error sending community broadcast notifications:", error);
         }
@@ -2492,6 +2613,20 @@ export const resolvers = {
       if (io) {
         io.to(`community:${communityId}`).emit('communityMessage', payload);
       }
+
+      // Fetch community name for the notification
+      (prisma as any).community.findUnique({
+        where: { id: Number(communityId) },
+        select: { name: true }
+      }).then((comm: any) => {
+        const commName = comm?.name || "Community Chat";
+        sendNotificationToCommunity(
+          Number(communityId),
+          commName,
+          `${payload.senderName}: ${trimmedMessage || 'Sent media'}`,
+          { type: 'CHAT', communityId: Number(communityId) }
+        ).catch((e: any) => console.error(e));
+      }).catch((e: any) => console.error(e));
 
       return payload;
     },

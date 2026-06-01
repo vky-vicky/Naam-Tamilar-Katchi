@@ -256,7 +256,6 @@ export const typeDefs = gql`
     id: Int!
     title: String!
     content: String!
-    image: String
     category: String
     images: [String!]
     authorName: String
@@ -292,7 +291,6 @@ export const typeDefs = gql`
   type Post {
     id: Int!
     content: String!
-    image: String
     category: String
     images: [String!]
     authorName: String!
@@ -503,7 +501,6 @@ export const typeDefs = gql`
     ): EmergencyRequest!
     createPost(
       content: String!
-      image: String
       category: String
       images: [String!]
       authorName: String!
@@ -547,7 +544,6 @@ export const typeDefs = gql`
       communityId: Int!
       title: String!
       content: String!
-      image: String
       category: String
       images: [String!]
     ): CommunityPost!

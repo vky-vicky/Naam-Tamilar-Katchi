@@ -243,7 +243,6 @@ model EmergencyResponse {
 model Post {
   id         Int       @id @default(autoincrement())
   content    String
-  image      String?
   category   String?   @default("Discussion")
   images     String[]
   authorName String
@@ -419,7 +418,6 @@ model CommunityPost {
   id          Int                @id @default(autoincrement())
   title       String
   content     String
-  image       String?
   category    String?            @default("Information")
   images      String[]
   communityId Int
