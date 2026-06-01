@@ -2248,11 +2248,12 @@ export const resolvers = {
     },
 
     createPost: async (_: any, args: any) => {
+      const postImages = args.images || (args.image ? [args.image] : []);
       const post = await (prisma as any).post.create({
         data: {
           content: args.content,
           category: args.category || "Discussion",
-          images: args.images || [],
+          images: postImages,
           authorName: args.authorName,
           authorRole: args.authorRole,
           locationId: args.locationId
@@ -2346,7 +2347,7 @@ export const resolvers = {
         throw new Error(I18nService.translate("unauthorized_login", context?.language));
       }
       
-      if (context.user.role !== 'MEMBER') {
+      if (context.user.type !== 'member' && context.user.role !== 'MEMBER') {
         throw new Error("Only members can vote in polls");
       }
       

@@ -505,6 +505,7 @@ export const typeDefs = gql`
       content: String!
       category: String
       images: [String!]
+      image: String
       authorName: String!
       authorRole: String!
       locationId: Int!

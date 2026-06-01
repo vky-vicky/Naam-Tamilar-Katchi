@@ -44,18 +44,28 @@ try {
  * Gets all child location IDs for a given location
  */
 export async function getChildLocationIdsForFCM(parentId: number): Promise<number[]> {
-  const result: number[] = [];
-  const children = await (prisma as any).location.findMany({
-    where: { parentId },
-    select: { id: true }
+  const locations = await (prisma as any).location.findMany({
+    select: { id: true, parentId: true },
   });
+  const childrenByParent = new Map<number, number[]>();
 
-  for (const child of children) {
-    result.push(child.id);
-    const subChildren = await getChildLocationIdsForFCM(child.id);
-    result.push(...subChildren);
+  for (const location of locations) {
+    if (location.parentId === null || location.parentId === undefined) continue;
+    const siblings = childrenByParent.get(location.parentId) || [];
+    siblings.push(location.id);
+    childrenByParent.set(location.parentId, siblings);
   }
-  return result;
+
+  const ids: number[] = [];
+  const queue = [...(childrenByParent.get(parentId) || [])];
+
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    ids.push(id);
+    queue.push(...(childrenByParent.get(id) || []));
+  }
+
+  return ids;
 }
 
 /**
@@ -139,12 +149,29 @@ export async function sendNotificationToLocation(
         tokens: batchTokens
       };
 
+      console.log('[FCM] Sending Multicast Payload:', JSON.stringify({
+        notification: message.notification,
+        data: message.data,
+        android: message.android,
+        apns: message.apns,
+        tokenCount: batchTokens.length
+      }, null, 2));
+
       const response = await admin.messaging().sendEachForMulticast(message);
       successCount += response.successCount;
       failureCount += response.failureCount;
+
+      console.log(`[FCM] Multicast Response: Success Count = ${response.successCount}, Failure Count = ${response.failureCount}`);
+      response.responses.forEach((res, idx) => {
+        if (!res.success) {
+          console.error(`[FCM] Failed Token [${batchTokens[idx]}]:`, res.error);
+        } else {
+          console.log(`[FCM] Success Token [${batchTokens[idx]}]: Message ID = ${res.messageId}`);
+        }
+      });
     }
 
-    console.log(`[FCM] Notifications sent: ${successCount} success, ${failureCount} failed.`);
+    console.log(`[FCM] Notifications sent summary: ${successCount} success, ${failureCount} failed.`);
   } catch (error) {
     console.error('[FCM] Error sending FCM notification:', error);
   }
@@ -190,7 +217,7 @@ export async function sendNotificationToCommunity(
     const batchSize = 500;
     for (let i = 0; i < uniqueTokens.length; i += batchSize) {
       const batchTokens = uniqueTokens.slice(i, i + batchSize);
-      await admin.messaging().sendEachForMulticast({
+      const message = {
         notification: { title, body },
         data: stringData,
         android: {
@@ -210,6 +237,22 @@ export async function sendNotificationToCommunity(
           }
         },
         tokens: batchTokens
+      };
+
+      console.log('[FCM] Sending Community Multicast Payload:', JSON.stringify({
+        notification: message.notification,
+        data: message.data,
+        tokenCount: batchTokens.length
+      }, null, 2));
+
+      const response = await admin.messaging().sendEachForMulticast(message);
+      console.log(`[FCM] Community Multicast Response: Success = ${response.successCount}, Failure = ${response.failureCount}`);
+      response.responses.forEach((res, idx) => {
+        if (!res.success) {
+          console.error(`[FCM] Community Token Failed [${batchTokens[idx]}]:`, res.error);
+        } else {
+          console.log(`[FCM] Community Token Success [${batchTokens[idx]}]: Message ID = ${res.messageId}`);
+        }
       });
     }
   } catch (error) {
@@ -237,7 +280,14 @@ export async function sendNotificationToToken(
     }
     stringData['click_action'] = 'FLUTTER_NOTIFICATION_CLICK';
 
-    await admin.messaging().send({
+    console.log('[FCM] Sending Single Token Payload:', JSON.stringify({
+      token,
+      title,
+      body,
+      data: stringData
+    }, null, 2));
+
+    const response = await admin.messaging().send({
       token,
       notification: { title, body },
       data: stringData,
@@ -258,7 +308,7 @@ export async function sendNotificationToToken(
         }
       }
     });
-    console.log('[FCM] Sent notification to token successfully');
+    console.log('[FCM] Sent notification to token successfully. Message ID:', response);
   } catch (error) {
     console.error('[FCM] Error sending FCM notification to token:', error);
   }
