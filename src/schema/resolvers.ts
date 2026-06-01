@@ -3184,6 +3184,9 @@ export const resolvers = {
   },
 
   Post: {
+    image: (parent: any) => {
+      return (parent.images && parent.images.length > 0) ? parent.images[0] : null;
+    },
     comments: (parent: any) => (prisma as any).comment.findMany({ where: { postId: parent.id }, orderBy: { createdAt: 'desc' } }),
     commentCount: (parent: any) => (prisma as any).comment.count({ where: { postId: parent.id } }),
     location: (parent: any) => (prisma as any).location.findUnique({ where: { id: parent.locationId } }),
@@ -3260,6 +3263,9 @@ export const resolvers = {
   },
 
   CommunityPost: {
+    image: (parent: any) => {
+      return (parent.images && parent.images.length > 0) ? parent.images[0] : null;
+    },
     authorName: async (parent: any) => {
       if (parent.createdBy?.name) return parent.createdBy.name;
       if (!parent.createdById) return null;

@@ -10,8 +10,22 @@ const __dirname = path.dirname(__filename);
 let initialized = false;
 
 try {
-  const serviceAccountPath = path.resolve(__dirname, '../../serviceAccountKey.json');
-  if (fs.existsSync(serviceAccountPath)) {
+  // Try multiple paths to find serviceAccountKey.json
+  const possiblePaths = [
+    path.resolve(process.cwd(), 'serviceAccountKey.json'),
+    path.resolve(__dirname, '../../serviceAccountKey.json'),
+    path.resolve(__dirname, '../../../serviceAccountKey.json'),
+  ];
+
+  let serviceAccountPath: string | null = null;
+  for (const p of possiblePaths) {
+    if (fs.existsSync(p)) {
+      serviceAccountPath = p;
+      break;
+    }
+  }
+
+  if (serviceAccountPath) {
     const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8'));
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount)
@@ -19,7 +33,8 @@ try {
     console.log('🔥 Firebase Admin initialized successfully');
     initialized = true;
   } else {
-    console.warn('⚠️ serviceAccountKey.json not found, push notifications will be disabled');
+    console.warn('⚠️ serviceAccountKey.json not found in any of:', possiblePaths);
+    console.warn('   Push notifications will be disabled');
   }
 } catch (error) {
   console.error('Error initializing Firebase Admin:', error);

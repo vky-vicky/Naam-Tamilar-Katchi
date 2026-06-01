@@ -257,6 +257,7 @@ export const typeDefs = gql`
     title: String!
     content: String!
     category: String
+    image: String
     images: [String!]
     authorName: String
     authorRole: String
@@ -292,6 +293,7 @@ export const typeDefs = gql`
     id: Int!
     content: String!
     category: String
+    image: String
     images: [String!]
     authorName: String!
     authorRole: String!
