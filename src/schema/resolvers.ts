@@ -508,38 +508,42 @@ export const resolvers = {
         .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
         .slice(offset, offset + limit)
         .map((m: any) => {
-        const canSeePhone = context?.user?.role === 'SUPER_ADMIN' || (context?.user?.role === 'ADMIN' && context?.user?.locationId === m.locationId);
-        return {
-          ...m,
-          phone: canSeePhone ? m.phone : null,
-        };
-      });
+          const canSeePhone = context?.user?.role === 'SUPER_ADMIN' || (context?.user?.role === 'ADMIN' && context?.user?.locationId === m.locationId);
+          return {
+            ...m,
+            phone: canSeePhone ? m.phone : null,
+          };
+        });
     },
 
-    dashboardStats: async (_: any, { locationId }: any) => {
+    dashboardStats: async (_: any, { locationId }: any, context: any) => {
       let filter: any = {};
       let locationFilter: any = {};
       let userFilter: any = { approvalStatus: 'APPROVED' };
       let locationName = "Tamil Nadu";
 
-      if (locationId) {
-        const loc = await (prisma as any).location.findUnique({ where: { id: locationId }, select: { name: true } });
+      // Use context user's locationId if no locationId argument provided (strict location scoping)
+      const contextUser = context?.user;
+      const effectiveLocationId = locationId ?? (contextUser?.locationId ?? null);
+
+      if (effectiveLocationId) {
+        const loc = await (prisma as any).location.findUnique({ where: { id: effectiveLocationId }, select: { name: true } });
         if (loc) locationName = loc.name;
 
-        const allLocationIds = [locationId, ...(await getChildLocationIds(locationId))];
+        const allLocationIds = [effectiveLocationId, ...(await getChildLocationIds(effectiveLocationId))];
         filter.locationId = { in: allLocationIds };
         locationFilter.id = { in: allLocationIds };
         userFilter.locationId = { in: allLocationIds };
       }
 
-      // Today's date range (midnight to now)
+      // Today's date range (midnight to end of day)
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
       const todayEnd = new Date();
       todayEnd.setHours(23, 59, 59, 999);
 
-      const memberUserFilter = locationId
-        ? { role: 'MEMBER', locationId: { in: [locationId, ...(await getChildLocationIds(locationId))] } }
+      const memberUserFilter = effectiveLocationId
+        ? { role: 'MEMBER', locationId: { in: [effectiveLocationId, ...(await getChildLocationIds(effectiveLocationId))] } }
         : { role: 'MEMBER' };
 
       const [
@@ -558,28 +562,30 @@ export const resolvers = {
         emergencyRequests,
         activeBroadcasts
       ] = await Promise.all([
-        // Admins and Sub Admins from User table
+        // Admins and Sub Admins from User table (all-time totals)
         (prisma as any).user.count({ where: { ...userFilter, role: 'ADMIN' } }),
         (prisma as any).user.count({ where: { ...userFilter, role: 'SUB_ADMIN' } }),
-        // APPROVED members from Member table
+        // APPROVED members from Member table (all-time totals)
         (prisma as any).member.count({ where: { ...filter, approvalStatus: 'APPROVED' } }),
         // MEMBER role users from User table (admin-added as User)
         (prisma as any).user.count({ where: { ...memberUserFilter, approvalStatus: 'APPROVED' } }),
-        // PENDING from Member table
-        (prisma as any).member.count({ where: { ...filter, approvalStatus: 'PENDING' } }),
-        // PENDING from User table (MEMBER role)
-        (prisma as any).user.count({ where: { ...memberUserFilter, approvalStatus: 'PENDING' } }),
-        // New members today from Member table
+        // PENDING from Member table - TODAY only
+        (prisma as any).member.count({ where: { ...filter, approvalStatus: 'PENDING', createdAt: { gte: todayStart, lte: todayEnd } } }),
+        // PENDING from User table (MEMBER role) - TODAY only
+        (prisma as any).user.count({ where: { ...memberUserFilter, approvalStatus: 'PENDING', createdAt: { gte: todayStart, lte: todayEnd } } }),
+        // New members today from Member table - TODAY only
         (prisma as any).member.count({ where: { ...filter, createdAt: { gte: todayStart, lte: todayEnd } } }),
-        // New members today from User table (MEMBER role)
+        // New members today from User table (MEMBER role) - TODAY only
         (prisma as any).user.count({ where: { ...memberUserFilter, createdAt: { gte: todayStart, lte: todayEnd } } }),
-        // Approved today from Member table
+        // Approved today from Member table - TODAY only
         (prisma as any).member.count({ where: { ...filter, approvalStatus: 'APPROVED', updatedAt: { gte: todayStart, lte: todayEnd } } }),
         (prisma as any).location.count({ where: { ...locationFilter, type: 'AREA' } }),
         (prisma as any).location.count({ where: { ...locationFilter, type: 'STREET' } }),
         (prisma as any).event.count({ where: { ...filter, status: 'ACTIVE' } }),
-        (prisma as any).emergencyRequest.count({ where: { ...filter, status: 'PENDING' } }),
-        (prisma as any).broadcast.count({ where: { ...filter, isActive: true } }),
+        // Emergency requests - TODAY only (PENDING status created today)
+        (prisma as any).emergencyRequest.count({ where: { ...filter, status: 'PENDING', createdAt: { gte: todayStart, lte: todayEnd } } }),
+        // Active broadcasts - TODAY only (created today and isActive)
+        (prisma as any).broadcast.count({ where: { ...filter, isActive: true, createdAt: { gte: todayStart, lte: todayEnd } } }),
       ]);
 
       // Combine both tables for unified counts
@@ -877,13 +883,14 @@ export const resolvers = {
             },
             take: takeLimit,
             orderBy: { createdAt: 'desc' },
-            include: { location: true }
+            include: { location: true, parent: true }
           }).then((users: any[]) => users.map((u: any) => {
+            const addedByName = u.parent?.name || 'Admin';
             return {
               id: u.id,
               activityType: 'ADMIN',
               title: u.role === 'ADMIN' ? 'Admin Added' : 'Super Admin Added',
-              description: `${u.role.replace('_', ' ')} ${u.name} ${u.surname || ''} added`,
+              description: `${u.role.replace('_', ' ')} ${u.name} ${u.surname || ''} added by ${addedByName}`,
               createdAt: u.createdAt instanceof Date ? u.createdAt.toISOString() : new Date(u.createdAt).toISOString(),
               member: {
                 id: u.id,
@@ -924,13 +931,14 @@ export const resolvers = {
             },
             take: takeLimit,
             orderBy: { createdAt: 'desc' },
-            include: { location: true }
+            include: { location: true, parent: true }
           }).then((users: any[]) => users.map((u: any) => {
+            const addedByName = u.parent?.name || 'Admin';
             return {
               id: u.id,
               activityType: 'SUB_ADMIN',
               title: 'Sub Admin Added',
-              description: `Sub Admin ${u.name} ${u.surname || ''} added`,
+              description: `Sub Admin ${u.name} ${u.surname || ''} added by ${addedByName}`,
               createdAt: u.createdAt instanceof Date ? u.createdAt.toISOString() : new Date(u.createdAt).toISOString(),
               member: {
                 id: u.id,
@@ -1962,7 +1970,7 @@ export const resolvers = {
         );
       }
 
-      return broadcast;
+      return { ...broadcast, recipientCount };
     },
 
     recallEvent: async (_: any, { id }: any, context: any) => {
