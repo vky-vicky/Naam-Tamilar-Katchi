@@ -2596,21 +2596,50 @@ export const resolvers = {
     },
 
     likeCommunityPost: async (_: any, { postId }: any) => {
-      const post = await (prisma as any).communityPost.update({
-        where: { id: postId },
-        data: { likes: { increment: 1 } },
-        include: {
-          community: true,
-          createdBy: true,
-          comments: {
-            orderBy: { createdAt: 'asc' }
+      try {
+        const post = await (prisma as any).communityPost.update({
+          where: { id: postId },
+          data: { likes: { increment: 1 } },
+          include: {
+            community: true,
+            createdBy: true,
+            comments: {
+              orderBy: { createdAt: 'asc' }
+            }
           }
+        });
+        return {
+          ...post,
+          createdAt: post.createdAt.toISOString()
+        };
+      } catch (err) {
+        // Fallback for regular posts when the mobile app calls likeCommunityPost
+        const regularPost = await (prisma as any).post.findUnique({
+          where: { id: postId }
+        });
+        
+        if (regularPost) {
+          const updatedRegularPost = await (prisma as any).post.update({
+            where: { id: postId },
+            data: { likes: { increment: 1 } }
+          });
+          
+          return {
+            id: updatedRegularPost.id,
+            title: updatedRegularPost.category || "Discussion",
+            content: updatedRegularPost.content,
+            category: updatedRegularPost.category || "Discussion",
+            images: updatedRegularPost.images || [],
+            communityId: 1, // Fallback ID
+            createdById: 1,
+            likes: updatedRegularPost.likes,
+            comments: [],
+            createdAt: updatedRegularPost.createdAt.toISOString(),
+            updatedAt: updatedRegularPost.createdAt.toISOString()
+          };
         }
-      });
-      return {
-        ...post,
-        createdAt: post.createdAt.toISOString()
-      };
+        throw err;
+      }
     },
 
     addCommunityComment: async (_: any, { postId, content }: any, context: any) => {
