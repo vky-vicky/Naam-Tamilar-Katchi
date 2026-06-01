@@ -107,6 +107,33 @@ async function getAncestorLocationIds(locationId: number): Promise<number[]> {
   return ids;
 }
 
+async function getLocationFields(locationId: number | null | undefined) {
+  const fields = {
+    district: null as string | null,
+    constituency: null as string | null,
+    area: null as string | null,
+    street: null as string | null,
+  };
+  if (!locationId) return fields;
+
+  let currentId = locationId;
+  while (true) {
+    const loc = await (prisma as any).location.findUnique({
+      where: { id: currentId },
+      select: { id: true, name: true, type: true, parentId: true }
+    });
+    if (!loc) break;
+    if (loc.type === 'DISTRICT') fields.district = loc.name;
+    else if (loc.type === 'TALUK') fields.constituency = loc.name;
+    else if (loc.type === 'AREA') fields.area = loc.name;
+    else if (loc.type === 'STREET') fields.street = loc.name;
+
+    if (!loc.parentId) break;
+    currentId = loc.parentId;
+  }
+  return fields;
+}
+
 // Helper to validate location targeting based on user role and assigned location
 // SUPER_ADMIN  → can target ANY location (full Tamil Nadu or specific street)
 // ADMIN        → can target their assigned location OR any child under it
@@ -211,7 +238,7 @@ async function autoJoinCommunities(memberId: number, professionName: string | un
 
 function userToMemberShape(user: any) {
   return {
-    id: -Number(user.id),
+    id: 1000000 + Number(user.id),
     name: user.name,
     surname: user.surname,
     phone: user.phone,
@@ -231,7 +258,11 @@ function userToMemberShape(user: any) {
     approvedById: null,
     createdAt: user.createdAt,
     createdBy: null,
-    createdById: user.parentId
+    createdById: user.parentId,
+    district: user.district || null,
+    constituency: user.constituency || null,
+    area: user.area || null,
+    street: user.street || null
   };
 }
 
@@ -470,7 +501,10 @@ export const resolvers = {
         })
       ]);
 
-      return [...members, ...users.map(userToMemberShape)]
+      const combined = [...members, ...users.map(userToMemberShape)];
+      const uniqueMembers = Array.from(new Map(combined.map(item => [item.phone, item])).values());
+
+      return uniqueMembers
         .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
         .slice(offset, offset + limit)
         .map((m: any) => {
@@ -700,7 +734,13 @@ export const resolvers = {
       }
 
       const promises: Promise<any[]>[] = [];
-      const shouldQuery = (t: string) => !type || type === t;
+      const shouldQuery = (t: string) => {
+        if (!type) return true;
+        if (type === 'APPROVAL') {
+          return t === 'MEMBER' || t === 'ADMIN' || t === 'SUB_ADMIN';
+        }
+        return type === t;
+      };
       const takeLimit = limit + offset;
 
       if (shouldQuery('EVENT')) {
@@ -762,13 +802,23 @@ export const resolvers = {
         );
       }
 
-      if (shouldQuery('APPROVAL')) {
+      if (shouldQuery('MEMBER')) {
+        let memberApprovalSearch = { ...approvalSearch };
+        
+        if (search) {
+          // Member table allows string contains on 'role'
+          memberApprovalSearch.OR = [
+             ...(memberApprovalSearch.OR || []),
+             { role: { contains: search, mode: 'insensitive' } }
+          ];
+        }
+
         promises.push(
           (prisma as any).member.findMany({
             where: {
               ...filter,
               approvalStatus: 'APPROVED',
-              ...approvalSearch,
+              ...memberApprovalSearch,
               ...dateFilter,
               OR: [
                 { approvedById: { not: null } },
@@ -783,7 +833,7 @@ export const resolvers = {
             const actionText = m.approvedById ? 'approved' : 'added';
             return {
               id: m.id,
-              activityType: 'APPROVAL',
+              activityType: 'MEMBER',
               title: m.approvedById ? 'Member Approved' : 'Member Added',
               description: `Member request ${actionText} for ${m.name} ${m.surname || ''} by ${approvedByName}`,
               createdAt: m.createdAt instanceof Date ? m.createdAt.toISOString() : new Date(m.createdAt).toISOString(),
@@ -796,6 +846,101 @@ export const resolvers = {
               location: m.location ? {
                 id: m.location.id,
                 name: m.location.name
+              } : null
+            };
+          }))
+        );
+      }
+
+      if (shouldQuery('ADMIN')) {
+        let userApprovalSearch = { ...approvalSearch };
+        
+        if (search) {
+          const searchUpper = search.toUpperCase();
+          const matchingRoles = ['SUPER_ADMIN', 'ADMIN'].filter(r => r.includes(searchUpper));
+          if (matchingRoles.length > 0) {
+            userApprovalSearch.OR = [
+               ...(userApprovalSearch.OR || []),
+               { role: { in: matchingRoles } }
+            ];
+          }
+        }
+
+        promises.push(
+          (prisma as any).user.findMany({
+            where: {
+              ...filter,
+              approvalStatus: 'APPROVED',
+              role: { in: ['SUPER_ADMIN', 'ADMIN'] },
+              ...userApprovalSearch,
+              ...dateFilter
+            },
+            take: takeLimit,
+            orderBy: { createdAt: 'desc' },
+            include: { location: true }
+          }).then((users: any[]) => users.map((u: any) => {
+            return {
+              id: u.id,
+              activityType: 'ADMIN',
+              title: u.role === 'ADMIN' ? 'Admin Added' : 'Super Admin Added',
+              description: `${u.role.replace('_', ' ')} ${u.name} ${u.surname || ''} added`,
+              createdAt: u.createdAt instanceof Date ? u.createdAt.toISOString() : new Date(u.createdAt).toISOString(),
+              member: {
+                id: u.id,
+                name: u.name,
+                phone: u.phone,
+                role: u.role
+              },
+              location: u.location ? {
+                id: u.location.id,
+                name: u.location.name
+              } : null
+            };
+          }))
+        );
+      }
+
+      if (shouldQuery('SUB_ADMIN')) {
+        let userApprovalSearch = { ...approvalSearch };
+        
+        if (search) {
+          const searchUpper = search.toUpperCase();
+          if ('SUB_ADMIN'.includes(searchUpper)) {
+            userApprovalSearch.OR = [
+               ...(userApprovalSearch.OR || []),
+               { role: 'SUB_ADMIN' }
+            ];
+          }
+        }
+
+        promises.push(
+          (prisma as any).user.findMany({
+            where: {
+              ...filter,
+              approvalStatus: 'APPROVED',
+              role: 'SUB_ADMIN',
+              ...userApprovalSearch,
+              ...dateFilter
+            },
+            take: takeLimit,
+            orderBy: { createdAt: 'desc' },
+            include: { location: true }
+          }).then((users: any[]) => users.map((u: any) => {
+            return {
+              id: u.id,
+              activityType: 'SUB_ADMIN',
+              title: 'Sub Admin Added',
+              description: `Sub Admin ${u.name} ${u.surname || ''} added`,
+              createdAt: u.createdAt instanceof Date ? u.createdAt.toISOString() : new Date(u.createdAt).toISOString(),
+              member: {
+                id: u.id,
+                name: u.name,
+                phone: u.phone,
+                role: u.role
+              },
+              location: u.location ? {
+                id: u.location.id,
+                name: u.location.name
               } : null
             };
           }))
@@ -989,13 +1134,17 @@ export const resolvers = {
       });
     },
 
-    getEventList: async (_: any, { locationId, status }: any) => {
+    getEventList: async (_: any, { locationId, status, eventId }: any) => {
       const where: any = {};
-      if (locationId) {
-        const allLocationIds = [locationId, ...(await getChildLocationIds(locationId))];
-        where.locationId = { in: allLocationIds };
+      if (eventId) {
+        where.id = eventId;
+      } else {
+        if (locationId) {
+          const allLocationIds = [locationId, ...(await getChildLocationIds(locationId))];
+          where.locationId = { in: allLocationIds };
+        }
+        if (status) where.status = status;
       }
-      if (status) where.status = status;
       
       return (prisma as any).event.findMany({
         where,
@@ -1331,7 +1480,13 @@ export const resolvers = {
         }
       } else {
         // ADMIN / SUB_ADMIN – scope to their own location subtree
-        const scopeId = locationId || user.locationId;
+        let scopeId = user.locationId;
+        if (locationId && user.locationId) {
+          const allowedIds = [user.locationId, ...(await getChildLocationIds(user.locationId))];
+          if (allowedIds.includes(Number(locationId))) {
+            scopeId = Number(locationId);
+          }
+        }
         if (scopeId) {
           const childIds = await getChildLocationIds(Number(scopeId));
           where.locationId = { in: [Number(scopeId), ...childIds] };
@@ -1440,6 +1595,8 @@ export const resolvers = {
         finalLocationId = creatorUser?.locationId;
       }
 
+      const locFields = await getLocationFields(finalLocationId);
+
       // 1. Handle Profession
       let professionId = null;
       if (professionName) {
@@ -1510,6 +1667,8 @@ export const resolvers = {
       if (!finalLocationId) {
         throw new Error(I18nService.translate("location_required", context?.language));
       }
+
+      const locFields = await getLocationFields(finalLocationId);
 
       // 2. Handle Profession (Find or Create)
       let professionId = null;
@@ -1583,6 +1742,8 @@ export const resolvers = {
       const finalLocationId = streetId || areaId || talukId || districtId || locationId;
       if (finalLocationId) {
         updateData.locationId = finalLocationId;
+        const locFields = await getLocationFields(finalLocationId);
+        Object.assign(updateData, locFields);
       }
 
       // Handle Profession update if name provided
@@ -2687,6 +2848,15 @@ export const resolvers = {
           });
         }
       }
+
+      // Add AuditLog for Role Change
+      await (prisma as any).auditLog.create({
+        data: {
+          userId: dbUser ? dbUser.id : dbMember!.id,
+          action: 'role_change',
+          details: 'Role changed to ' + targetRole
+        }
+      });
 
       return true;
     },

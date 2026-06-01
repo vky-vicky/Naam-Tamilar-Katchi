@@ -37,6 +37,12 @@ export const typeDefs = gql`
     RESOLVED
   }
 
+  enum RSVPStatus {
+    GOING
+    MAYBE
+    NOT_GOING
+  }
+
   enum BroadcastScope {
     STATE
     DISTRICT
@@ -79,6 +85,13 @@ export const typeDefs = gql`
     isActive: Boolean!
     createdAt: String
     addedBy: String!
+    bloodGroup: String
+    dateOfBirth: String
+    gender: String
+    district: String
+    constituency: String
+    area: String
+    street: String
   }
 
   type Profession {
@@ -92,6 +105,8 @@ export const typeDefs = gql`
     surname: String
     phone: String
     image: String
+    dateOfBirth: String
+    gender: String
     bloodGroup: String
     allergies: String
     conditions: String
@@ -107,6 +122,10 @@ export const typeDefs = gql`
     activityHistory: [Activity!]!
     createdBy: User
     addedBy: String!
+    district: String
+    constituency: String
+    area: String
+    street: String
   }
 
 
@@ -360,7 +379,7 @@ export const typeDefs = gql`
     getPollList(locationId: Int, communityId: Int): [Poll!]!
     getPollDetails(id: Int!): Poll
     notifications(locationId: Int): [Notification!]!
-    getEventList(locationId: Int, status: EventStatus): [Event!]!
+    getEventList(locationId: Int, status: EventStatus, eventId: Int): [Event!]!
     getEmergencyRequestList(locationId: Int, status: RequestStatus): [EmergencyRequest!]!
     getCommunities: [Community!]!
     getCommunityPosts(communityId: Int!, category: String): [CommunityPost!]!
@@ -390,6 +409,9 @@ export const typeDefs = gql`
       areaId: Int
       streetId: Int
       professionName: String
+      bloodGroup: String
+      dateOfBirth: String
+      gender: String
     ): User
     addMember(
       name: String!
@@ -397,6 +419,8 @@ export const typeDefs = gql`
       phone: String!
       password: String
       image: String
+      dateOfBirth: String
+      gender: String
       bloodGroup: String
       allergies: String
       conditions: String
@@ -417,6 +441,8 @@ export const typeDefs = gql`
       phone: String
       password: String
       image: String
+      dateOfBirth: String
+      gender: String
       bloodGroup: String
       allergies: String
       conditions: String
@@ -599,6 +625,9 @@ export const typeDefs = gql`
     APPROVAL
     ROLE_CHANGE
     BROADCAST
+    ADMIN
+    SUB_ADMIN
+    MEMBER
   }
 
   type RecentActivity {

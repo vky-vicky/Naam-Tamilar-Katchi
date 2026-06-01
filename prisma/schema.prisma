@@ -38,6 +38,8 @@ model Member {
   phone              String              @unique
   password           String?
   image              String?
+  dateOfBirth        String?
+  gender             String?
   bloodGroup         String?
   allergies          String?
   conditions         String?
@@ -64,6 +66,10 @@ model Member {
   emergencyResponses EmergencyResponse[]
   polls              Poll[]
   pollVotes          PollVote[]
+  district           String?
+  constituency       String?
+  area               String?
+  street             String?
 
   @@index([locationId])
   @@index([professionId])
@@ -100,10 +106,17 @@ model User {
   approvedMembers Member[]           @relation("MemberApprover")
   fcmToken        String?
   image           String?
+  dateOfBirth     String?
+  gender          String?
+  bloodGroup      String?
   location        Location?          @relation(fields: [locationId], references: [id])
   communityPosts  CommunityPost[]
   broadcasts      Broadcast[]
   polls           Poll[]
+  district        String?
+  constituency    String?
+  area            String?
+  street          String?
 
   @@index([role])
   @@index([approvalStatus])
