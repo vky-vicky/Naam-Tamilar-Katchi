@@ -340,7 +340,9 @@ async function assertCommunityReadAccess(communityId: number, context: any) {
   });
   if (!community) throw new Error("Community not found");
 
-  if (context.user.type === 'member' || context.user.role === 'MEMBER') {
+  const isAdmin = isCommunityAdmin(context.user.role);
+
+  if (!isAdmin && (context.user.type === 'member' || context.user.role === 'MEMBER')) {
     const membership = await (prisma as any).communityMember.findUnique({
       where: {
         communityId_memberId: {
@@ -373,7 +375,9 @@ async function assertCommunityWriteAccess(communityId: number, context: any) {
     }
   }
 
-  if (user.type === 'member' || user.role === 'MEMBER') {
+  const isAdmin = isCommunityAdmin(user.role);
+
+  if (!isAdmin && (user.type === 'member' || user.role === 'MEMBER')) {
     const membership = await (prisma as any).communityMember.findUnique({
       where: {
         communityId_memberId: {
@@ -391,7 +395,7 @@ async function assertCommunityWriteAccess(communityId: number, context: any) {
     if (!community.allowMemberMessages) {
       throw new Error("Only admin can message");
     }
-  } else if (!isCommunityAdmin(user.role)) {
+  } else if (!isAdmin) {
     throw new Error("Only community members can message");
   }
 

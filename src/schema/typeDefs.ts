@@ -480,11 +480,11 @@ export const typeDefs = gql`
     respondToEvent(
       eventId: Int!
       memberId: Int!
-      status: String!
+      status: RSVPStatus!
     ): EventResponse!
     respondToEmergency(
       emergencyRequestId: Int!
-      status: String!
+      status: RSVPStatus!
     ): EmergencyResponse!
     createEmergencyRequest(
       title: String!
