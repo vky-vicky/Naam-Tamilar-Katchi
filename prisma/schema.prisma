@@ -454,6 +454,7 @@ model CommunityMessage {
   mediaUrl         String?
   mediaType        String?
   fileName         String?
+  metadata         Json?
   status           String                     @default("SENT")
   replyToMessageId Int?
   editedAt         DateTime?

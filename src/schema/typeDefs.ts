@@ -213,6 +213,7 @@ export const typeDefs = gql`
     mediaUrl: String
     mediaType: String
     fileName: String
+    metadata: String
     status: String!
     replyToMessageId: Int
     replyTo: CommunityMessage
@@ -505,6 +506,7 @@ export const typeDefs = gql`
       locationId: Int!
     ): Notification!
     updateFcmToken(token: String!): Boolean!
+    logout: Boolean!
     createCommunity(
       name: String!
       description: String
@@ -536,6 +538,7 @@ export const typeDefs = gql`
       mediaUrl: String
       mediaType: String
       fileName: String
+    metadata: String
     ): CommunityMessage!
     editCommunityMessage(
       id: Int!

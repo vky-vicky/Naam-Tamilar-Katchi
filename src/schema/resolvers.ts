@@ -1988,6 +1988,24 @@ export const resolvers = {
       // Push Notification
       if (communityId) {
          sendNotificationToCommunity(Number(communityId), "New Poll", question, { type: 'ALERT', pollId: poll.id }).catch(e => console.error(e));
+         
+         // Also inject it into the community chat stream
+         const chatMsg = await (prisma as any).communityMessage.create({
+           data: {
+             communityId: Number(communityId),
+             senderId: createdById || memberId || 1,
+             senderType: createdById ? 'USER' : 'MEMBER',
+             message: question,
+             messageType: 'POLL',
+             metadata: { pollId: poll.id }
+           },
+           include: { replyTo: true, reactions: true }
+         });
+         const io = (global as any).io;
+         if (io) {
+           const payload = await formatCommunityMessage(chatMsg);
+           io.to(`community:${communityId}`).emit('communityMessage', payload);
+         }
       } else if (locationId) {
          sendNotificationToLocation(Number(locationId), "New Poll", question, { type: 'ALERT', pollId: poll.id }).catch(e => console.error(e));
       }
@@ -2097,6 +2115,17 @@ export const resolvers = {
         });
       }
       
+      return true;
+    },
+
+    logout: async (_: any, __: any, context: any) => {
+      if (!context.user) return true;
+      const id = Number(context.user.id);
+      if (context.user.role === 'MEMBER') {
+        await (prisma as any).member.update({ where: { id }, data: { fcmToken: null } });
+      } else {
+        await (prisma as any).user.update({ where: { id }, data: { fcmToken: null } });
+      }
       return true;
     },
 
@@ -2255,7 +2284,7 @@ export const resolvers = {
       };
     },
 
-    sendCommunityMessage: async (_: any, { communityId, message, replyToMessageId, messageType = 'TEXT', mediaUrl, mediaType, fileName }: any, context: any) => {
+    sendCommunityMessage: async (_: any, { communityId, message, replyToMessageId, messageType = 'TEXT', mediaUrl, mediaType, fileName, metadata }: any, context: any) => {
       await assertCommunityWriteAccess(Number(communityId), context);
       const user = context.user;
       const trimmedMessage = String(message || '').trim();
