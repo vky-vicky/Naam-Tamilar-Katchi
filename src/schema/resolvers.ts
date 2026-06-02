@@ -453,8 +453,10 @@ export const resolvers = {
     me: async (_: any, __: any, context: any) => {
       if (!context.user) return null;
       
-      // If it's a Member, return them as a User-compatible object
-      if (context.user.type === 'member' || context.user.role === 'MEMBER') {
+      // Use context.user.type to decide which table — NOT role
+      // type='member' → Member table, type='admin' → User table
+      // (A user added via addMember/addAdmin is in User table, type='admin')
+      if (context.user.type === 'member') {
         const member = await (prisma as any).member.findUnique({
           where: { id: context.user.id },
           include: { location: true }
@@ -468,14 +470,14 @@ export const resolvers = {
         return null;
       }
 
-      // If it's an Admin (User table)
+      // User table (Admin, SubAdmin, SuperAdmin, or MEMBER added via admin flow)
       const user = await (prisma as any).user.findUnique({
         where: { id: context.user.id },
         include: { location: true }
       });
       if (user) {
         return {
-          ...user,
+          ...userToMemberShape(user),
           role: user.role === 'Member' ? 'MEMBER' : user.role
         };
       }
