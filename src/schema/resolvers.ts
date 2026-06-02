@@ -2175,22 +2175,97 @@ export const resolvers = {
       return true;
     },
 
-    respondToEvent: async (_: any, { eventId, memberId, status }: any) => {
+    respondToEvent: async (_: any, { eventId, memberId, status }: any, context: any) => {
+      let finalMemberId = Number(memberId);
+      
+      const isMappedUser = finalMemberId >= 1000000;
+      const targetUserId = isMappedUser ? (finalMemberId - 1000000) : null;
+      const user = context?.user;
+      
+      let phone: string | null = null;
+      let userRec = null;
+      
+      if (targetUserId) {
+        userRec = await (prisma as any).user.findUnique({ where: { id: targetUserId } });
+      } else if (user && user.type === 'admin') {
+        userRec = await (prisma as any).user.findUnique({ where: { id: Number(user.id) } });
+      }
+      
+      if (userRec) {
+        phone = userRec.phone;
+      } else {
+        const u = await (prisma as any).user.findUnique({ where: { id: finalMemberId } });
+        if (u) {
+          phone = u.phone;
+          userRec = u;
+        }
+      }
+      
+      if (phone && userRec) {
+        let member = await (prisma as any).member.findUnique({ where: { phone } });
+        if (!member) {
+          member = await (prisma as any).member.create({
+            data: {
+              name: userRec.name,
+              surname: userRec.surname,
+              phone: userRec.phone,
+              role: userRec.role === 'SUPER_ADMIN' ? 'ADMIN' : (userRec.role === 'SUB_ADMIN' ? 'SUB_ADMIN' : 'Member'),
+              locationId: userRec.locationId || 1,
+              approvalStatus: 'APPROVED',
+              isActive: true,
+              district: userRec.district,
+              constituency: userRec.constituency,
+              area: userRec.area,
+              street: userRec.street
+            }
+          });
+        }
+        finalMemberId = member.id;
+      }
+
       return (prisma as any).eventResponse.upsert({
-        where: { eventId_memberId: { eventId, memberId } },
+        where: { eventId_memberId: { eventId, memberId: finalMemberId } },
         update: { status },
-        create: { eventId, memberId, status },
+        create: { eventId, memberId: finalMemberId, status },
         include: { member: true }
       });
     },
 
     respondToEmergency: async (_: any, { emergencyRequestId, status }: any, context: any) => {
       if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", context?.language));
-      if (context.user.role !== 'MEMBER') {
-        throw new Error("Only members can respond to emergencies");
+      
+      let memberId: number;
+      if (context.user.type === 'member') {
+        memberId = Number(context.user.id);
+      } else {
+        const userRec = await (prisma as any).user.findUnique({
+          where: { id: Number(context.user.id) }
+        });
+        if (!userRec) {
+          throw new Error("User record not found");
+        }
+        let member = await (prisma as any).member.findUnique({ where: { phone: userRec.phone } });
+        if (!member) {
+          member = await (prisma as any).member.create({
+            data: {
+              name: userRec.name,
+              surname: userRec.surname,
+              phone: userRec.phone,
+              role: userRec.role === 'SUPER_ADMIN' ? 'ADMIN' : (userRec.role === 'SUB_ADMIN' ? 'SUB_ADMIN' : 'Member'),
+              locationId: userRec.locationId || 1,
+              approvalStatus: 'APPROVED',
+              isActive: true,
+              district: userRec.district,
+              constituency: userRec.constituency,
+              area: userRec.area,
+              street: userRec.street
+            }
+          });
+        }
+        memberId = member.id;
       }
-      const memberId = Number(context.user.id);
-      const normalizedStatus = status.toUpperCase(); // GOING, MAYBE, NOT_GOING
+      
+      const normalizedStatus = status.toUpperCase();
 
       return (prisma as any).emergencyResponse.upsert({
         where: {
