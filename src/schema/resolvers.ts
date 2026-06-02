@@ -1583,7 +1583,9 @@ export const resolvers = {
 
     adminLogin: safeResolver(async (_: any, { phone, password }: any, context: any) => {
       const lang = context?.language || 'en';
-      if (!phone || !password) return { error: I18nService.translate("provide_phone_password", lang) };
+      if (!phone || !password) {
+        throw new Error("provide_phone_password");
+      }
 
       // 1. Find User (Admin/SuperAdmin/SubAdmin) or Member
       let user = await (prisma as any).user.findFirst({
@@ -1599,11 +1601,13 @@ export const resolvers = {
       }
 
       const finalUser = user || member;
-      if (!finalUser) return { error: I18nService.translate("user_not_found", lang) };
+      if (!finalUser) {
+        throw new Error("user_not_found");
+      }
 
       // 2. Verify Password
       if (finalUser.password !== password && password !== 'admin123') {
-        return { error: I18nService.translate("invalid_password", lang) };
+        throw new Error("invalid_password");
       }
 
       // 3. Auto-detect role from database (no role selection needed)
