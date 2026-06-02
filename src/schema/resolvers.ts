@@ -439,6 +439,7 @@ async function formatCommunityMessage(message: any) {
       createdAt: reaction.createdAt instanceof Date ? reaction.createdAt.toISOString() : new Date(reaction.createdAt).toISOString()
     }))),
     readByCount,
+    metadata: message.metadata ? (typeof message.metadata === 'string' ? message.metadata : JSON.stringify(message.metadata)) : null,
     editedAt: message.editedAt ? (message.editedAt instanceof Date ? message.editedAt.toISOString() : new Date(message.editedAt).toISOString()) : null,
     deletedAt: message.deletedAt ? (message.deletedAt instanceof Date ? message.deletedAt.toISOString() : new Date(message.deletedAt).toISOString()) : null,
     createdAt: message.createdAt instanceof Date ? message.createdAt.toISOString() : new Date(message.createdAt).toISOString()
@@ -2683,6 +2684,16 @@ export const resolvers = {
         if (!replyTo) throw new Error("Reply message not found in this community");
       }
 
+      let parsedMetadata = null;
+      if (metadata) {
+        try {
+          parsedMetadata = typeof metadata === 'string' ? JSON.parse(metadata) : metadata;
+        } catch (e) {
+          console.error('[sendCommunityMessage] Error parsing metadata JSON:', e);
+          parsedMetadata = { raw: metadata };
+        }
+      }
+
       const createdMessage = await (prisma as any).communityMessage.create({
         data: {
           communityId: Number(communityId),
@@ -2693,6 +2704,7 @@ export const resolvers = {
           mediaUrl,
           mediaType,
           fileName,
+          metadata: parsedMetadata,
           replyToMessageId: replyToMessageId ? Number(replyToMessageId) : null
         },
         include: { replyTo: true, reactions: true }
