@@ -3495,6 +3495,13 @@ export const resolvers = {
   },
 
   Community: {
+    image: (parent: any) => {
+      const img = parent.image;
+      if (!img || img === 'null' || img === 'undefined') {
+        return `https://avatar.iran.liara.run/username?username=${encodeURIComponent(parent.name)}`;
+      }
+      return img;
+    },
     allowMemberMessages: (parent: any) => parent.allowMemberMessages ?? true,
     isMuted: (parent: any) => parent.isMuted ?? false,
     mutedUntil: (parent: any) => {
