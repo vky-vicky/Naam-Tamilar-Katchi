@@ -107,6 +107,46 @@ async function getAncestorLocationIds(locationId: number): Promise<number[]> {
   return ids;
 }
 
+async function findParentLocationOfType(locationId: number, targetType: string): Promise<number | null> {
+  const ancestorIds = await getAncestorLocationIds(locationId);
+  for (const aId of ancestorIds) {
+    const loc = await (prisma as any).location.findUnique({
+      where: { id: aId },
+      select: { id: true, type: true }
+    });
+    if (loc?.type === targetType) {
+      return loc.id;
+    }
+  }
+  return null;
+}
+
+// Helper to calculate location proximity scores for AI Feed
+async function getUserLocationScoreMap(locationId: number | null | undefined): Promise<Map<number, number>> {
+  const scores = new Map<number, number>();
+  if (!locationId) return scores;
+
+  let currentId = locationId;
+  while (true) {
+    const loc = await (prisma as any).location.findUnique({
+      where: { id: currentId },
+      select: { id: true, type: true, parentId: true }
+    });
+    if (!loc) break;
+    
+    if (loc.type === 'STREET') scores.set(loc.id, 100);
+    else if (loc.type === 'AREA') scores.set(loc.id, 80);
+    else if (loc.type === 'TALUK') scores.set(loc.id, 60);
+    else if (loc.type === 'DISTRICT') scores.set(loc.id, 40);
+    else if (loc.type === 'STATE') scores.set(loc.id, 20);
+    else scores.set(loc.id, 10); // Fallback
+
+    if (!loc.parentId) break;
+    currentId = loc.parentId;
+  }
+  return scores;
+}
+
 async function getLocationFields(locationId: number | null | undefined) {
   const fields = {
     district: null as string | null,
@@ -139,12 +179,22 @@ async function sendSystemNotification({
   message,
   type,
   locationId,
+  createdById,
+  purpose,
+  entityType,
+  entityId,
+  metadata,
   data = {}
 }: {
   title: string;
   message: string;
   type: string;
   locationId: number;
+  createdById?: number | null;
+  purpose?: string | null;
+  entityType?: string | null;
+  entityId?: number | null;
+  metadata?: any;
   data?: any;
 }) {
   const notification = await (prisma as any).notification.create({
@@ -153,6 +203,11 @@ async function sendSystemNotification({
       message,
       type,
       locationId,
+      createdById: createdById || null,
+      purpose: purpose || null,
+      entityType: entityType || type,
+      entityId: entityId || null,
+      metadata: metadata || null,
       time: 'Just now'
     }
   });
@@ -169,6 +224,172 @@ async function sendSystemNotification({
   }).catch(e => console.error('[FCM] Error sending push notification:', e));
 
   return notification;
+}
+
+function toIsoString(value: any) {
+  if (!value) return null;
+  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
+
+function parseJsonInput(value: any) {
+  if (!value) return null;
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return { raw: value };
+  }
+}
+
+function normalizeEmergencyResponseStatus(status: string) {
+  const normalized = String(status || '').trim().toUpperCase().replace(/[\s-]+/g, '_');
+  const aliases: Record<string, string> = {
+    IM_COMING: 'COMING',
+    I_AM_COMING: 'COMING',
+    DONATE_BLOOD: 'COMING',
+    VOLUNTEER: 'COMING',
+    NOT_AVAILABLE: 'UNABLE',
+    UNABLE_TO_COME: 'UNABLE',
+    CONTACT_ME: 'CONTACT_REQUESTED',
+  };
+  return aliases[normalized] || normalized;
+}
+
+function buildEmergencyResponseStats(responses: any[] = []) {
+  const count = (status: string) => responses.filter((r: any) => r.status === status).length;
+  return {
+    total: responses.length,
+    going: count('GOING'),
+    maybe: count('MAYBE'),
+    notGoing: count('NOT_GOING'),
+    coming: count('COMING') + count('GOING'),
+    onTheWay: count('ON_THE_WAY'),
+    reached: count('REACHED'),
+    unable: count('UNABLE') + count('NOT_GOING'),
+    contactRequested: count('CONTACT_REQUESTED'),
+  };
+}
+
+async function buildLocationScope(locationId: number) {
+  const scope = {
+    state: null as string | null,
+    district: null as string | null,
+    constituency: null as string | null,
+    area: null as string | null,
+    street: null as string | null,
+    label: ''
+  };
+
+  const names: string[] = [];
+  let currentId: number | null = locationId;
+  while (currentId) {
+    const loc: { name: string; type: string; parentId: number | null } | null = await (prisma as any).location.findUnique({
+      where: { id: currentId },
+      select: { name: true, type: true, parentId: true }
+    });
+    if (!loc) break;
+    names.unshift(loc.name);
+    if (loc.type === 'STATE') scope.state = loc.name;
+    else if (loc.type === 'DISTRICT') scope.district = loc.name;
+    else if (loc.type === 'TALUK') scope.constituency = loc.name;
+    else if (loc.type === 'AREA') scope.area = loc.name;
+    else if (loc.type === 'STREET') scope.street = loc.name;
+    currentId = loc.parentId;
+  }
+
+  scope.label = names.join(' -> ') || 'All locations';
+  return scope;
+}
+
+function buildNotificationActions(type: string, entity: any) {
+  const normalizedType = String(type || '').toUpperCase();
+  if (normalizedType === 'EMERGENCY' || normalizedType === 'ALERT' || normalizedType === 'REQUEST') {
+    const isBlood = String(entity?.type || entity?.title || '').toUpperCase().includes('BLOOD');
+    return [
+      { key: 'COMING', label: isBlood ? 'ரத்த தானம் செய்ய வருகிறேன்' : "I'm Coming", style: 'success' },
+      { key: 'ON_THE_WAY', label: 'வழியில் இருக்கிறேன்', style: 'warning' },
+      { key: 'REACHED', label: 'இடத்தை அடைந்துவிட்டேன்', style: 'info' },
+      { key: 'UNABLE', label: 'வர முடியாது', style: 'danger' },
+      { key: 'CALL_NOW', label: 'Call Now', style: 'primary' },
+      { key: 'WHATSAPP', label: 'WhatsApp', style: 'primary' },
+      { key: 'OPEN_LOCATION', label: 'Open Location', style: 'secondary' },
+      { key: 'SHARE_ALERT', label: 'Share Alert', style: 'secondary' },
+    ];
+  }
+  if (normalizedType === 'EVENT') {
+    return [
+      { key: 'RSVP_GOING', label: 'Attend', style: 'success' },
+      { key: 'ADD_CALENDAR', label: 'Add To Calendar', style: 'primary' },
+      { key: 'OPEN_LOCATION', label: 'Open Location', style: 'secondary' },
+      { key: 'SHARE_EVENT', label: 'Share Event', style: 'secondary' },
+    ];
+  }
+  if (normalizedType === 'MEMBER_REQUEST') {
+    return [
+      { key: 'APPROVE', label: 'Approve', style: 'success' },
+      { key: 'REJECT', label: 'Reject', style: 'danger' },
+      { key: 'VIEW_PROFILE', label: 'View Member Profile', style: 'secondary' },
+    ];
+  }
+  return [{ key: 'SHARE', label: 'Share', style: 'secondary' }];
+}
+
+async function getBroadcastListForContext({ locationId, scope, broadcastId, isActive }: any, context: any) {
+  const user = context.user;
+  if (!user) return [];
+  const role = user.role;
+  const userLocId = user.locationId;
+
+  let visibleLocationIds: number[] = [];
+  if (role === 'SUPER_ADMIN') {
+    visibleLocationIds = [];
+  } else if (role === 'ADMIN' || role === 'SUB_ADMIN') {
+    if (!userLocId) return [];
+    const childIds = await getChildLocationIds(userLocId);
+    visibleLocationIds = [userLocId, ...childIds];
+  } else {
+    if (!userLocId) return [];
+    const ancestorIds = await getAncestorLocationIds(userLocId);
+    visibleLocationIds = ancestorIds;
+  }
+
+  const where: any = {};
+  if (broadcastId) {
+    where.id = Number(broadcastId);
+  } else if (locationId !== undefined && locationId !== null) {
+    const selectedLocationIds = [Number(locationId), ...(await getChildLocationIds(Number(locationId)))];
+    if (visibleLocationIds.length > 0) {
+      where.locationId = { in: selectedLocationIds.filter(id => visibleLocationIds.includes(id)) };
+    } else {
+      where.locationId = { in: selectedLocationIds };
+    }
+  } else if (visibleLocationIds.length > 0) {
+    where.locationId = { in: visibleLocationIds };
+  }
+
+  if (scope) where.scope = scope;
+  if (isActive !== undefined && isActive !== null) where.isActive = Boolean(isActive);
+
+  const broadcasts = await (prisma as any).broadcast.findMany({
+    where,
+    include: { location: true, createdBy: true },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  const authorizedBroadcasts = broadcastId && visibleLocationIds.length > 0
+    ? broadcasts.filter((broadcast: any) => visibleLocationIds.includes(broadcast.locationId))
+    : broadcasts;
+
+  return Promise.all(
+    authorizedBroadcasts.map(async (broadcast: any) => {
+      const targetIds = await getChildLocationIds(broadcast.locationId);
+      const allIds = [broadcast.locationId, ...targetIds];
+      const recipientCount = await (prisma as any).member.count({
+        where: { locationId: { in: allIds }, isActive: true },
+      });
+      return { ...broadcast, recipientCount };
+    })
+  );
 }
 
 // Helper to validate location targeting based on user role and assigned location
@@ -1082,31 +1303,78 @@ export const resolvers = {
       const where: any = {};
       const user = context?.user;
 
-      if (locationId) {
-        const allLocationIds = [locationId, ...(await getChildLocationIds(locationId))];
-        where.locationId = { in: allLocationIds };
-      } else if (user) {
-        if (user.role === 'MEMBER') {
-          if (user.locationId) {
-            const ancestorIds = await getAncestorLocationIds(user.locationId);
-            where.locationId = { in: ancestorIds };
-          } else {
-            where.locationId = -1;
+      let fetchRootId = null;
+      let targetLocationId = locationId || user?.locationId;
+      
+      if (targetLocationId) {
+        const ancestorIds = await getAncestorLocationIds(targetLocationId);
+        // Find the STATE level location ID in the ancestors
+        for (const aId of ancestorIds) {
+          const loc = await (prisma as any).location.findUnique({ where: { id: aId }, select: { type: true } });
+          if (loc?.type === 'STATE') {
+            fetchRootId = aId;
+            break;
           }
-        } else if (user.role === 'ADMIN' || user.role === 'SUB_ADMIN') {
-          if (user.locationId) {
-            const childIds = await getChildLocationIds(user.locationId);
-            where.locationId = { in: [user.locationId, ...childIds] };
-          } else {
-            where.locationId = -1;
-          }
+        }
+        if (!fetchRootId) {
+          // Fallback to topmost ancestor
+          fetchRootId = ancestorIds[ancestorIds.length - 1] || targetLocationId;
+        }
+      } else {
+        // Fallback to the first STATE location in the database
+        const stateLoc = await (prisma as any).location.findFirst({ where: { type: 'STATE' } });
+        if (stateLoc) {
+          fetchRootId = stateLoc.id;
         }
       }
 
-      return (prisma as any).post.findMany({
+      if (fetchRootId) {
+        const childIds = await getChildLocationIds(fetchRootId);
+        where.locationId = { in: [fetchRootId, ...childIds] };
+      }
+
+      // 1. Fetch recent posts (limit 200 to keep ranking fast)
+      const posts = await (prisma as any).post.findMany({
         where,
+        take: 200,
+        include: { comments: { select: { id: true } } },
         orderBy: { createdAt: 'desc' },
       });
+
+      // 2. AI Scoring
+      const targetScoreLocationId = locationId || user?.locationId;
+      const userScoreMap = await getUserLocationScoreMap(targetScoreLocationId);
+      const locationAncestorsCache = new Map<number, number[]>();
+
+      const scoredPosts = await Promise.all(posts.map(async (post: any) => {
+        let postAncestors = locationAncestorsCache.get(post.locationId);
+        if (!postAncestors) {
+          postAncestors = await getAncestorLocationIds(post.locationId);
+          locationAncestorsCache.set(post.locationId, postAncestors);
+        }
+
+        // Location Score
+        let locationScore = 0;
+        for (const pId of postAncestors) {
+          if (userScoreMap.has(pId)) {
+            locationScore = Math.max(locationScore, userScoreMap.get(pId)!);
+          }
+        }
+
+        // Engagement Score (Like = +1, Comment = +3)
+        const engagementScore = (post.likes || 0) + ((post.comments?.length || 0) * 3);
+        
+        // Final Score
+        const feedScore = locationScore + engagementScore;
+
+        return {
+          ...post,
+          feedScore
+        };
+      }));
+
+      // Sort descending by feedScore
+      return scoredPosts.sort((a, b) => b.feedScore - a.feedScore);
     },
 
     getPollList: async (_: any, { locationId, communityId }: any, context: any) => {
@@ -1144,6 +1412,30 @@ export const resolvers = {
     getPollDetails: async (_: any, { id }: any) => {
       return (prisma as any).poll.findUnique({
         where: { id }
+      });
+    },
+
+    getEmergencyRequestDetails: async (_: any, { id }: any) => {
+      return (prisma as any).emergencyRequest.findUnique({
+        where: { id: Number(id) }
+      });
+    },
+
+    getEventDetails: async (_: any, { id }: any) => {
+      return (prisma as any).event.findUnique({
+        where: { id: Number(id) }
+      });
+    },
+
+    getBroadcastDetails: async (_: any, { id }: any) => {
+      return (prisma as any).broadcast.findUnique({
+        where: { id: Number(id) }
+      });
+    },
+
+    getPostDetails: async (_: any, { id }: any) => {
+      return (prisma as any).post.findUnique({
+        where: { id: Number(id) }
       });
     },
 
@@ -1189,8 +1481,128 @@ export const resolvers = {
 
       return (prisma as any).notification.findMany({
         where,
+        include: { location: true, createdBy: true },
         orderBy: { createdAt: 'desc' }
       });
+    },
+
+    getNotificationDetails: async (_: any, { id }: any, context: any) => {
+      if (!context?.user) {
+        throw new Error(I18nService.translate("unauthorized_login", context?.language));
+      }
+
+      const notification = await (prisma as any).notification.findUnique({
+        where: { id: Number(id) },
+        include: { location: true, createdBy: true }
+      });
+      if (!notification) return null;
+
+      const role = context.user.role;
+      const userLocId = context.user.locationId;
+      if (role === 'ADMIN' || role === 'SUB_ADMIN') {
+        if (!userLocId) throw new Error('Unauthorized notification scope');
+        const allowedIds = [userLocId, ...(await getChildLocationIds(userLocId))];
+        if (!allowedIds.includes(notification.locationId)) throw new Error('Unauthorized notification scope');
+      } else if (role === 'MEMBER') {
+        if (!userLocId) throw new Error('Unauthorized notification scope');
+        const ancestorIds = await getAncestorLocationIds(userLocId);
+        if (!ancestorIds.includes(notification.locationId)) throw new Error('Unauthorized notification scope');
+      }
+
+      const entityType = String(notification.entityType || notification.type || '').toUpperCase();
+      const entityId = notification.entityId ? Number(notification.entityId) : null;
+      let emergency = null;
+      let broadcast = null;
+      let event = null;
+      let communityPost = null;
+      let memberRequest = null;
+
+      if (entityId && ['EMERGENCY', 'ALERT', 'REQUEST', 'BLOOD_REQUIRED'].includes(entityType)) {
+        emergency = await (prisma as any).emergencyRequest.findUnique({
+          where: { id: entityId },
+          include: {
+            location: true,
+            createdBy: true,
+            member: true,
+            responses: { include: { member: true }, orderBy: { updatedAt: 'desc' } }
+          }
+        });
+      } else if (entityId && entityType === 'BROADCAST') {
+        broadcast = await (prisma as any).broadcast.findUnique({
+          where: { id: entityId },
+          include: { location: true, createdBy: true }
+        });
+      } else if (entityId && entityType === 'EVENT') {
+        event = await (prisma as any).event.findUnique({
+          where: { id: entityId },
+          include: { location: true, createdBy: true, responses: { include: { member: true } } }
+        });
+      } else if (entityId && ['COMMUNITY', 'COMMUNITY_POST'].includes(entityType)) {
+        communityPost = await (prisma as any).communityPost.findUnique({
+          where: { id: entityId },
+          include: { community: true, createdBy: true, comments: true }
+        });
+      } else if (entityId && ['MEMBER_REQUEST', 'MEMBER_APPROVAL'].includes(entityType)) {
+        memberRequest = await (prisma as any).member.findUnique({
+          where: { id: entityId },
+          include: { location: true, createdBy: true, approvedBy: true }
+        });
+      }
+
+      const primaryEntity = emergency || broadcast || event || communityPost || memberRequest || notification;
+      const responseSummary = emergency ? buildEmergencyResponseStats(emergency.responses || []) : null;
+      const locationScope = await buildLocationScope(primaryEntity.locationId || notification.locationId);
+      const activityHistory = [
+        {
+          title: 'Notification Created',
+          description: notification.purpose || notification.message,
+          actorName: notification.createdBy?.name || emergency?.createdBy?.name || broadcast?.createdBy?.name || event?.createdBy?.name || communityPost?.createdBy?.name || memberRequest?.createdBy?.name || 'System',
+          status: notification.status,
+          createdAt: toIsoString(notification.createdAt)
+        },
+        ...(emergency?.responses || []).map((response: any) => ({
+          title: 'Member Responded',
+          description: `${response.member?.name || 'Member'} - ${response.status}`,
+          actorName: response.member?.name || 'Member',
+          status: response.status,
+          createdAt: toIsoString(response.updatedAt || response.createdAt)
+        }))
+      ].filter((item: any) => item.createdAt);
+
+      let deliveryStats = null;
+      if (broadcast) {
+        const targetIds = await getChildLocationIds(broadcast.locationId);
+        const allIds = [broadcast.locationId, ...targetIds];
+        const totalRecipients = await (prisma as any).member.count({
+          where: { locationId: { in: allIds }, isActive: true }
+        });
+        deliveryStats = {
+          totalRecipients,
+          readCount: 0,
+          unreadCount: totalRecipients,
+          deliveredCount: totalRecipients
+        };
+      }
+
+      return {
+        notification,
+        notificationId: notification.id,
+        notificationTypeBadge: notification.type,
+        statusBadge: notification.status || primaryEntity.status || 'ACTIVE',
+        purpose: notification.purpose,
+        createdBy: notification.createdBy || emergency?.createdBy || broadcast?.createdBy || event?.createdBy || communityPost?.createdBy || memberRequest?.createdBy || null,
+        locationScope,
+        responseRequired: emergency?.collectResponse ?? false,
+        responseSummary,
+        deliveryStats,
+        activityHistory,
+        availableActions: buildNotificationActions(notification.type, primaryEntity),
+        emergency,
+        broadcast,
+        event,
+        communityPost,
+        memberRequest
+      };
     },
 
     getEventList: async (_: any, { locationId, status, eventId }: any) => {
@@ -1462,7 +1874,14 @@ export const resolvers = {
       return [];
     },
 
-    getBroadcasts: async (_: any, { locationId, scope }: any, context: any) => {
+    getBroadcastList: async (_: any, args: any, context: any) => {
+      return getBroadcastListForContext(args, context);
+    },
+
+    getBroadcasts: async (_: any, { locationId, scope, broadcastId, isActive }: any, context: any) => {
+      if (broadcastId || isActive !== undefined) {
+        return getBroadcastListForContext({ locationId, scope, broadcastId, isActive }, context);
+      }
       // Only return broadcasts that the user is authorized to see
       const user = context.user;
       if (!user) return [];
@@ -1961,6 +2380,10 @@ export const resolvers = {
           message: `${description || 'A new event has been scheduled.'} Date: ${new Date(date).toLocaleDateString()}`,
           type: 'EVENT',
           locationId: Number(locationId),
+          createdById: Number(creatorId),
+          purpose: 'Inform members about a scheduled event and collect RSVP responses.',
+          entityType: 'EVENT',
+          entityId: event.id,
           data: { eventId: event.id }
         });
 
@@ -2127,6 +2550,10 @@ export const resolvers = {
         message: message,
         type: 'BROADCAST',
         locationId: Number(locationId),
+        createdById: Number(user.id),
+        purpose: 'Broadcast an important message to the selected location scope.',
+        entityType: 'BROADCAST',
+        entityId: broadcast.id,
         data: { broadcastId: broadcast.id }
       }).catch(e => console.error(e));
 
@@ -2237,7 +2664,7 @@ export const resolvers = {
       });
     },
 
-    respondToEmergency: async (_: any, { emergencyRequestId, status }: any, context: any) => {
+    respondToEmergency: async (_: any, { emergencyRequestId, status, note }: any, context: any) => {
       if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", context?.language));
       
       let memberId: number;
@@ -2271,7 +2698,7 @@ export const resolvers = {
         memberId = member.id;
       }
       
-      const normalizedStatus = status.toUpperCase();
+      const normalizedStatus = normalizeEmergencyResponseStatus(status);
 
       return (prisma as any).emergencyResponse.upsert({
         where: {
@@ -2280,11 +2707,12 @@ export const resolvers = {
             memberId
           }
         },
-        update: { status: normalizedStatus },
+        update: { status: normalizedStatus, note: note || null },
         create: {
           emergencyRequestId: Number(emergencyRequestId),
           memberId,
-          status: normalizedStatus
+          status: normalizedStatus,
+          note: note || null
         },
         include: { member: true }
       });
@@ -2297,8 +2725,10 @@ export const resolvers = {
 
       let createdById = null;
       let memberId = null;
+      const isMember = userRole === 'MEMBER';
+      const initialStatus = isMember ? 'PENDING_SUB_ADMIN' : 'PENDING';
 
-      if (userRole === 'MEMBER') {
+      if (isMember) {
         memberId = userId;
       } else {
         createdById = userId;
@@ -2317,6 +2747,7 @@ export const resolvers = {
           description,
           type,
           locationId: Number(locationId),
+          status: initialStatus as any,
           audience,
           contactName,
           contactPhone,
@@ -2328,14 +2759,40 @@ export const resolvers = {
         include: { location: true, createdBy: true, member: true }
       });
       
-      // Push Notification, DB Notification, and Socket.IO
-      await sendSystemNotification({
-        title: "Emergency Request: " + title,
-        message: description || "Urgent help needed in your area",
-        type: 'EMERGENCY',
-        locationId: Number(locationId),
-        data: { requestId: request.id }
-      }).catch(e => console.error(e));
+      if (isMember) {
+        // Send a notification specifically for reviewing the new request
+        await sendSystemNotification({
+          title: "New Blood Request Review",
+          message: `${title} pending Sub Admin review. Location: ${request.location.name}`,
+          type: 'MEMBER_REQUEST', // Shows up as a pending review request for admins
+          locationId: Number(locationId),
+          createdById: null,
+          purpose: 'New emergency request pending Sub Admin review.',
+          entityType: 'EMERGENCY',
+          entityId: request.id
+        }).catch(e => console.error(e));
+      } else {
+        // Push Notification, DB Notification, and Socket.IO for standard admin creation
+        await sendSystemNotification({
+          title: "Emergency Request: " + title,
+          message: description || "Urgent help needed in your area",
+          type: 'EMERGENCY',
+          locationId: Number(locationId),
+          createdById,
+          purpose: type?.toUpperCase?.().includes('BLOOD')
+            ? 'Find blood donors and track who is coming, on the way, or reached the hospital.'
+            : 'Collect urgent volunteer responses for an emergency request.',
+          entityType: 'EMERGENCY',
+          entityId: request.id,
+          metadata: {
+            contactName,
+            contactPhone,
+            audience,
+            responseRequired: collectResponse !== undefined ? collectResponse : true
+          },
+          data: { requestId: request.id }
+        }).catch(e => console.error(e));
+      }
       
       return request;
     },
@@ -2348,8 +2805,184 @@ export const resolvers = {
       });
     },
 
-    createPost: async (_: any, args: any) => {
+    reviewEmergencyRequest: async (_: any, { id, action, rejectReason }: any, context: any) => {
+      const lang = context?.language || 'en';
+      if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", lang));
+      
+      const request = await (prisma as any).emergencyRequest.findUnique({
+        where: { id: Number(id) },
+        include: { location: true, member: true }
+      });
+      if (!request) throw new Error("Request not found");
+
+      const userRole = context.user.role;
+      const currentStatus = request.status;
+
+      if (action === 'REJECT') {
+        const updatedRequest = await (prisma as any).emergencyRequest.update({
+          where: { id: request.id },
+          data: { 
+            status: 'REJECTED',
+            description: rejectReason ? `${request.description || ''} (Rejected: ${rejectReason})` : request.description
+          },
+          include: { location: true, createdBy: true, member: true }
+        });
+        return updatedRequest;
+      }
+
+      if (currentStatus === 'PENDING_SUB_ADMIN') {
+        if (userRole !== 'SUB_ADMIN' && userRole !== 'ADMIN' && userRole !== 'SUPER_ADMIN') {
+          throw new Error("Only Sub Admin or above can review this request");
+        }
+
+        if (action === 'ACCEPT') {
+          const updated = await (prisma as any).emergencyRequest.update({
+            where: { id: request.id },
+            data: { status: 'APPROVED_SUB_ADMIN' },
+            include: { location: true, createdBy: true, member: true }
+          });
+
+          await sendSystemNotification({
+            title: "Urgent: " + request.title,
+            message: request.description || "Urgent help needed in your area",
+            type: 'EMERGENCY',
+            locationId: request.locationId,
+            purpose: 'Collect volunteer responses for an emergency request.',
+            entityType: 'EMERGENCY',
+            entityId: request.id,
+            metadata: {
+              contactName: request.contactName,
+              contactPhone: request.contactPhone,
+              collectResponse: true
+            }
+          });
+
+          return updated;
+        }
+
+        if (action === 'FORWARD') {
+          const updated = await (prisma as any).emergencyRequest.update({
+            where: { id: request.id },
+            data: { status: 'PENDING_ADMIN' },
+            include: { location: true, createdBy: true, member: true }
+          });
+
+          const talukId = await findParentLocationOfType(request.locationId, 'TALUK');
+          const targetNotifyLocationId = talukId || request.locationId;
+
+          await sendSystemNotification({
+            title: "Blood Request Escalate to Admin",
+            message: `Blood request pending Admin review: ${request.title}`,
+            type: 'MEMBER_REQUEST',
+            locationId: targetNotifyLocationId,
+            purpose: 'Forwarded emergency blood request pending admin review.',
+            entityType: 'EMERGENCY',
+            entityId: request.id
+          });
+
+          return updated;
+        }
+      }
+
+      if (currentStatus === 'PENDING_ADMIN') {
+        if (userRole !== 'ADMIN' && userRole !== 'SUPER_ADMIN') {
+          throw new Error("Only Admin or above can review this request");
+        }
+
+        if (action === 'ACCEPT') {
+          const talukId = await findParentLocationOfType(request.locationId, 'TALUK');
+          const targetLocationId = talukId || request.locationId;
+
+          const updated = await (prisma as any).emergencyRequest.update({
+            where: { id: request.id },
+            data: { status: 'APPROVED_ADMIN' },
+            include: { location: true, createdBy: true, member: true }
+          });
+
+          await sendSystemNotification({
+            title: "Urgent: " + request.title,
+            message: request.description || "Urgent help needed in your Taluk",
+            type: 'EMERGENCY',
+            locationId: targetLocationId,
+            purpose: 'Collect volunteer responses for an emergency request.',
+            entityType: 'EMERGENCY',
+            entityId: request.id,
+            metadata: {
+              contactName: request.contactName,
+              contactPhone: request.contactPhone,
+              collectResponse: true
+            }
+          });
+
+          return updated;
+        }
+
+        if (action === 'FORWARD') {
+          const updated = await (prisma as any).emergencyRequest.update({
+            where: { id: request.id },
+            data: { status: 'PENDING_SUPER_ADMIN' },
+            include: { location: true, createdBy: true, member: true }
+          });
+
+          const stateId = await findParentLocationOfType(request.locationId, 'STATE');
+          const targetNotifyLocationId = stateId || request.locationId;
+
+          await sendSystemNotification({
+            title: "Blood Request Escalate to Super Admin",
+            message: `Blood request pending Super Admin review: ${request.title}`,
+            type: 'MEMBER_REQUEST',
+            locationId: targetNotifyLocationId,
+            purpose: 'Forwarded emergency blood request pending Super Admin review.',
+            entityType: 'EMERGENCY',
+            entityId: request.id
+          });
+
+          return updated;
+        }
+      }
+
+      if (currentStatus === 'PENDING_SUPER_ADMIN') {
+        if (userRole !== 'SUPER_ADMIN') {
+          throw new Error("Only Super Admin can review this request");
+        }
+
+        if (action === 'ACCEPT') {
+          const stateId = await findParentLocationOfType(request.locationId, 'STATE');
+          const targetLocationId = stateId || request.locationId;
+
+          const updated = await (prisma as any).emergencyRequest.update({
+            where: { id: request.id },
+            data: { status: 'APPROVED_STATE' },
+            include: { location: true, createdBy: true, member: true }
+          });
+
+          await sendSystemNotification({
+            title: "Urgent Alert: " + request.title,
+            message: request.description || "Urgent alert Tamil Nadu wide",
+            type: 'EMERGENCY',
+            locationId: targetLocationId,
+            purpose: 'Collect volunteer responses for an emergency request.',
+            entityType: 'EMERGENCY',
+            entityId: request.id,
+            metadata: {
+              contactName: request.contactName,
+              contactPhone: request.contactPhone,
+              collectResponse: true
+            }
+          });
+
+          return updated;
+        }
+      }
+
+      throw new Error("Invalid review action or request status");
+    },
+
+    createPost: async (_: any, args: any, context: any) => {
       const postImages = args.images || (args.image ? [args.image] : []);
+      const createdById = context?.user ? Number(context.user.id) : null;
+      const createdByType = context?.user?.type || null;
+
       const post = await (prisma as any).post.create({
         data: {
           content: args.content,
@@ -2357,7 +2990,9 @@ export const resolvers = {
           images: postImages,
           authorName: args.authorName,
           authorRole: args.authorRole,
-          locationId: args.locationId
+          locationId: args.locationId,
+          createdById,
+          createdByType
         }
       });
       
@@ -2367,6 +3002,70 @@ export const resolvers = {
       }
       
       return post;
+    },
+
+    editPost: async (_: any, { id, content, images }: any, context: any) => {
+      const lang = context?.language || 'en';
+      if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", lang));
+
+      const post = await (prisma as any).post.findUnique({
+        where: { id: Number(id) }
+      });
+      if (!post) throw new Error("Post not found");
+
+      const isOwner = post.createdById === Number(context.user.id) && post.createdByType === context.user.type;
+      const isLegacyOwner = !post.createdById && post.authorName === context.user.name;
+
+      if (!isOwner && !isLegacyOwner) {
+        throw new Error("Unauthorized: Only the creator of the post can edit it.");
+      }
+
+      return (prisma as any).post.update({
+        where: { id: post.id },
+        data: {
+          content,
+          images: images || post.images
+        }
+      });
+    },
+
+    deletePost: async (_: any, { id }: any, context: any) => {
+      const lang = context?.language || 'en';
+      if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", lang));
+
+      const post = await (prisma as any).post.findUnique({
+        where: { id: Number(id) }
+      });
+      if (!post) throw new Error("Post not found");
+
+      const user = context.user;
+      const isOwner = post.createdById === Number(user.id) && post.createdByType === user.type;
+      const isLegacyOwner = !post.createdById && post.authorName === user.name;
+
+      let isAuthorized = isOwner || isLegacyOwner || user.role === 'SUPER_ADMIN';
+
+      if (!isAuthorized && (user.role === 'ADMIN' || user.role === 'SUB_ADMIN')) {
+        try {
+          await validateLocationTargeting(Number(user.id), user.role, user.locationId, post.locationId, lang);
+          isAuthorized = true;
+        } catch {
+          isAuthorized = false;
+        }
+      }
+
+      if (!isAuthorized) {
+        throw new Error("Unauthorized: You do not have permission to delete this post.");
+      }
+
+      await (prisma as any).comment.deleteMany({
+        where: { postId: post.id }
+      });
+
+      await (prisma as any).post.delete({
+        where: { id: post.id }
+      });
+
+      return true;
     },
 
     createPoll: async (_: any, { question, options, durationDays, locationId, communityId }: any, context: any) => {
@@ -2551,9 +3250,21 @@ export const resolvers = {
       return comment;
     },
 
-    createNotification: async (_: any, args: any) => {
+    createNotification: async (_: any, args: any, context: any) => {
       const notification = await (prisma as any).notification.create({
-        data: args
+        data: {
+          title: args.title,
+          message: args.message,
+          type: args.type,
+          locationId: Number(args.locationId),
+          purpose: args.purpose || null,
+          entityType: args.entityType || args.type,
+          entityId: args.entityId ? Number(args.entityId) : null,
+          status: args.status || 'ACTIVE',
+          metadata: parseJsonInput(args.metadata),
+          createdById: context?.user?.type === 'admin' ? Number(context.user.id) : null,
+          time: 'Just now'
+        }
       });
       const io = (global as any).io;
       if (io) {
@@ -2696,6 +3407,15 @@ export const resolvers = {
                 message: content,
                 type: 'COMMUNITY',
                 locationId: m.member.locationId,
+                createdById: Number(context.user.id),
+                purpose: 'Share a community post with members in this group.',
+                entityType: 'COMMUNITY_POST',
+                entityId: post.id,
+                status: 'ACTIVE',
+                metadata: {
+                  communityId: Number(communityId),
+                  category: category || "Information"
+                },
                 time: 'Just now'
               }
             });
@@ -2706,7 +3426,7 @@ export const resolvers = {
             Number(communityId),
             `${community.name}: ${title}`,
             content,
-            { type: 'COMMUNITY', communityId: Number(communityId) }
+            { type: 'COMMUNITY', communityId: Number(communityId), postId: post.id }
           ).catch(e => console.error(e));
         } catch (error) {
           console.error("Error sending community broadcast notifications:", error);
@@ -3321,6 +4041,8 @@ export const resolvers = {
 
   EmergencyResponse: {
     member: (parent: any) => (prisma as any).member.findUnique({ where: { id: parent.memberId } }),
+    createdAt: (parent: any) => toIsoString(parent.createdAt),
+    updatedAt: (parent: any) => toIsoString(parent.updatedAt),
   },
 
   EmergencyRequest: {
@@ -3338,11 +4060,7 @@ export const resolvers = {
     responses: (parent: any) => (prisma as any).emergencyResponse.findMany({ where: { emergencyRequestId: parent.id }, include: { member: true } }),
     stats: async (parent: any) => {
       const responses = await (prisma as any).emergencyResponse.findMany({ where: { emergencyRequestId: parent.id } });
-      return {
-        going: responses.filter((r: any) => r.status === 'GOING').length,
-        maybe: responses.filter((r: any) => r.status === 'MAYBE').length,
-        notGoing: responses.filter((r: any) => r.status === 'NOT_GOING').length,
-      };
+      return buildEmergencyResponseStats(responses);
     },
   },
 
@@ -3423,7 +4141,12 @@ export const resolvers = {
     createdAt: (parent: any) => {
       if (!parent.createdAt) return null;
       return parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString();
-    }
+    },
+    updatedAt: (parent: any) => {
+      if (!parent.updatedAt) return null;
+      return parent.updatedAt instanceof Date ? parent.updatedAt.toISOString() : new Date(parent.updatedAt).toISOString();
+    },
+    isActive: (parent: any) => parent.isActive ?? true,
   },
 
   Comment: {
@@ -3577,8 +4300,14 @@ export const resolvers = {
     createdAt: (parent: any) => {
       if (!parent.createdAt) return null;
       return parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString();
-    }
+    },
+    status: (parent: any) => parent.status || 'ACTIVE',
+    metadata: (parent: any) => parent.metadata ? (typeof parent.metadata === 'string' ? parent.metadata : JSON.stringify(parent.metadata)) : null,
+    location: (parent: any) => parent.location || (prisma as any).location.findUnique({ where: { id: parent.locationId } }),
+    createdBy: (parent: any) => {
+      if (parent.createdBy) return parent.createdBy;
+      if (!parent.createdById) return null;
+      return (prisma as any).user.findUnique({ where: { id: parent.createdById } });
+    },
   },
 };
-
-

@@ -35,12 +35,25 @@ export const typeDefs = gql`
     IN_PROGRESS
     COMPLETED
     RESOLVED
+    CREATED
+    PENDING_SUB_ADMIN
+    APPROVED_SUB_ADMIN
+    PENDING_ADMIN
+    APPROVED_ADMIN
+    PENDING_SUPER_ADMIN
+    APPROVED_STATE
+    REJECTED
   }
 
   enum RSVPStatus {
     GOING
     MAYBE
     NOT_GOING
+    COMING
+    ON_THE_WAY
+    REACHED
+    UNABLE
+    CONTACT_REQUESTED
   }
 
   enum BroadcastScope {
@@ -160,7 +173,22 @@ export const typeDefs = gql`
     emergencyRequestId: Int!
     memberId: Int!
     status: String!
+    note: String
     member: Member!
+    createdAt: String!
+    updatedAt: String!
+  }
+
+  type EmergencyResponseStats {
+    total: Int!
+    going: Int!
+    maybe: Int!
+    notGoing: Int!
+    coming: Int!
+    onTheWay: Int!
+    reached: Int!
+    unable: Int!
+    contactRequested: Int!
   }
 
   type EmergencyRequest {
@@ -179,7 +207,7 @@ export const typeDefs = gql`
     collectResponse: Boolean!
     createdAt: String!
     responses: [EmergencyResponse!]!
-    stats: EventStats!
+    stats: EmergencyResponseStats!
   }
 
   type Broadcast {
@@ -190,7 +218,9 @@ export const typeDefs = gql`
     location: Location!
     scope: BroadcastScope!
     createdBy: User!
+    isActive: Boolean!
     createdAt: String!
+    updatedAt: String!
     recipientCount: Int!
   }
 
@@ -275,9 +305,65 @@ export const typeDefs = gql`
     title: String!
     message: String!
     type: String!
+    purpose: String
+    entityType: String
+    entityId: Int
+    status: String!
+    metadata: String
     locationId: Int!
     location: Location
+    createdBy: User
     createdAt: String!
+  }
+
+  type LocationScope {
+    state: String
+    district: String
+    constituency: String
+    area: String
+    street: String
+    label: String!
+  }
+
+  type NotificationActivity {
+    title: String!
+    description: String
+    actorName: String
+    status: String
+    createdAt: String!
+  }
+
+  type NotificationAction {
+    key: String!
+    label: String!
+    style: String!
+  }
+
+  type NotificationDeliveryStats {
+    totalRecipients: Int!
+    readCount: Int!
+    unreadCount: Int!
+    deliveredCount: Int!
+  }
+
+  type NotificationDetails {
+    notification: Notification!
+    notificationId: Int!
+    notificationTypeBadge: String!
+    statusBadge: String!
+    purpose: String
+    createdBy: User
+    locationScope: LocationScope!
+    responseRequired: Boolean!
+    responseSummary: EmergencyResponseStats
+    deliveryStats: NotificationDeliveryStats
+    activityHistory: [NotificationActivity!]!
+    availableActions: [NotificationAction!]!
+    emergency: EmergencyRequest
+    broadcast: Broadcast
+    event: Event
+    communityPost: CommunityPost
+    memberRequest: Member
   }
 
   type Campaign {
@@ -303,6 +389,9 @@ export const typeDefs = gql`
     comments: [Comment!]!
     commentCount: Int!
     createdAt: String!
+    feedScore: Float
+    createdById: Int
+    createdByType: String
   }
 
   type PollOption {
@@ -378,7 +467,12 @@ export const typeDefs = gql`
     communityFeed(locationId: Int): [Post!]!
     getPollList(locationId: Int, communityId: Int): [Poll!]!
     getPollDetails(id: Int!): Poll
+    getEmergencyRequestDetails(id: Int!): EmergencyRequest
+    getEventDetails(id: Int!): Event
+    getBroadcastDetails(id: Int!): Broadcast
+    getPostDetails(id: Int!): Post
     notifications(locationId: Int): [Notification!]!
+    getNotificationDetails(id: Int!): NotificationDetails
     getEventList(locationId: Int, status: EventStatus, eventId: Int): [Event!]!
     getEmergencyRequestList(locationId: Int, status: RequestStatus): [EmergencyRequest!]!
     getCommunities: [Community!]!
@@ -387,7 +481,8 @@ export const typeDefs = gql`
     getCommunityUnreadCount(communityId: Int!): Int!
     getCommunityMembers(communityId: Int!): [CommunityMemberDetail!]!
     getTargetableLocations(parentId: Int): [Location!]!
-    getBroadcasts(locationId: Int, scope: BroadcastScope): [Broadcast!]!
+    getBroadcastList(locationId: Int, scope: BroadcastScope, broadcastId: Int, isActive: Boolean): [Broadcast!]!
+    getBroadcasts(locationId: Int, scope: BroadcastScope, broadcastId: Int, isActive: Boolean): [Broadcast!]!
     pendingMembers(locationId: Int): [Member!]!
     bloodGroups: [String!]!
     dashboardStats(locationId: Int): DashboardStats!
@@ -485,6 +580,7 @@ export const typeDefs = gql`
     respondToEmergency(
       emergencyRequestId: Int!
       status: RSVPStatus!
+      note: String
     ): EmergencyResponse!
     createEmergencyRequest(
       title: String!
@@ -501,6 +597,11 @@ export const typeDefs = gql`
       id: Int!
       status: RequestStatus!
     ): EmergencyRequest!
+    reviewEmergencyRequest(
+      id: Int!
+      action: String!
+      rejectReason: String
+    ): EmergencyRequest!
     createPost(
       content: String!
       category: String
@@ -510,6 +611,14 @@ export const typeDefs = gql`
       authorRole: String!
       locationId: Int!
     ): Post!
+    editPost(
+      id: Int!
+      content: String!
+      images: [String!]
+    ): Post!
+    deletePost(
+      id: Int!
+    ): Boolean!
     createPoll(
       question: String!
       options: [String!]!
@@ -530,6 +639,11 @@ export const typeDefs = gql`
       message: String!
       type: String!
       locationId: Int!
+      purpose: String
+      entityType: String
+      entityId: Int
+      status: String
+      metadata: String
     ): Notification!
     updateFcmToken(token: String!): Boolean!
     logout: Boolean!

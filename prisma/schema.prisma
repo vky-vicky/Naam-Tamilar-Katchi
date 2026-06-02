@@ -114,6 +114,7 @@ model User {
   communityPosts  CommunityPost[]
   broadcasts      Broadcast[]
   polls           Poll[]
+  notifications   Notification[]
   district        String?
   constituency    String?
   area            String?
@@ -235,6 +236,7 @@ model EmergencyResponse {
   memberId           Int
   member             Member           @relation(fields: [memberId], references: [id], onDelete: Cascade)
   status             RSVPStatus
+  note               String?
   createdAt          DateTime         @default(now())
   updatedAt          DateTime         @updatedAt
 
@@ -242,17 +244,19 @@ model EmergencyResponse {
 }
 
 model Post {
-  id         Int       @id @default(autoincrement())
-  content    String
-  category   String?   @default("Discussion")
-  images     String[]
-  authorName String
-  authorRole String?
-  likes      Int       @default(0)
-  locationId Int
-  location   Location  @relation(fields: [locationId], references: [id])
-  comments   Comment[]
-  createdAt  DateTime  @default(now())
+  id            Int       @id @default(autoincrement())
+  content       String
+  category      String?   @default("Discussion")
+  images        String[]
+  authorName    String
+  authorRole    String?
+  likes         Int       @default(0)
+  locationId    Int
+  location      Location  @relation(fields: [locationId], references: [id])
+  comments      Comment[]
+  createdAt     DateTime  @default(now())
+  createdById   Int?
+  createdByType String?
 }
 
 model Poll {
@@ -308,14 +312,25 @@ model Comment {
 }
 
 model Notification {
-  id         Int      @id @default(autoincrement())
-  title      String
-  message    String
-  type       String // "EVENT", "REQUEST", "ALERT"
-  time       String? // e.g. "2h ago"
-  locationId Int
-  location   Location @relation(fields: [locationId], references: [id])
-  createdAt  DateTime @default(now())
+  id          Int       @id @default(autoincrement())
+  title       String
+  message     String
+  type        String // "EVENT", "REQUEST", "ALERT", "BROADCAST", "COMMUNITY", "MEMBER_REQUEST"
+  time        String? // e.g. "2h ago"
+  purpose     String?
+  entityType  String?
+  entityId    Int?
+  status      String    @default("ACTIVE")
+  metadata    Json?
+  locationId  Int
+  location    Location  @relation(fields: [locationId], references: [id])
+  createdById Int?
+  createdBy   User?     @relation(fields: [createdById], references: [id])
+  createdAt   DateTime  @default(now())
+
+  @@index([locationId])
+  @@index([type])
+  @@index([entityType, entityId])
 }
 
 enum LocationType {
@@ -341,12 +356,25 @@ enum RequestStatus {
   PENDING
   IN_PROGRESS
   COMPLETED
+  CREATED
+  PENDING_SUB_ADMIN
+  APPROVED_SUB_ADMIN
+  PENDING_ADMIN
+  APPROVED_ADMIN
+  PENDING_SUPER_ADMIN
+  APPROVED_STATE
+  REJECTED
 }
 
 enum RSVPStatus {
   GOING
   MAYBE
   NOT_GOING
+  COMING
+  ON_THE_WAY
+  REACHED
+  UNABLE
+  CONTACT_REQUESTED
 }
 
 enum UserRole {
