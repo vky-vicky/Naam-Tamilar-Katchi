@@ -2352,11 +2352,40 @@ export const resolvers = {
         throw new Error(I18nService.translate("unauthorized_login", context?.language));
       }
       
-      if (context.user.type !== 'member' && context.user.role !== 'MEMBER') {
-        throw new Error("Only members can vote in polls");
+      let memberId: number;
+      if (context.user.type === 'member') {
+        memberId = Number(context.user.id);
+      } else {
+        const userRec = await (prisma as any).user.findUnique({
+          where: { id: Number(context.user.id) }
+        });
+        if (!userRec) {
+          throw new Error("User record not found");
+        }
+
+        let member = await (prisma as any).member.findUnique({
+          where: { phone: userRec.phone }
+        });
+
+        if (!member) {
+          member = await (prisma as any).member.create({
+            data: {
+              name: userRec.name,
+              surname: userRec.surname,
+              phone: userRec.phone,
+              role: userRec.role === 'SUPER_ADMIN' ? 'ADMIN' : (userRec.role === 'SUB_ADMIN' ? 'SUB_ADMIN' : 'Member'),
+              locationId: userRec.locationId || 1,
+              approvalStatus: 'APPROVED',
+              isActive: true,
+              district: userRec.district,
+              constituency: userRec.constituency,
+              area: userRec.area,
+              street: userRec.street
+            }
+          });
+        }
+        memberId = member.id;
       }
-      
-      const memberId = Number(context.user.id);
       
       const pollCheck = await (prisma as any).poll.findUnique({
         where: { id: pollId }
