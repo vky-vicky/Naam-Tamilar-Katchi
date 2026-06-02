@@ -109,6 +109,7 @@ model User {
   dateOfBirth     String?
   gender          String?
   bloodGroup      String?
+  profession      String?
   location        Location?          @relation(fields: [locationId], references: [id])
   communityPosts  CommunityPost[]
   broadcasts      Broadcast[]

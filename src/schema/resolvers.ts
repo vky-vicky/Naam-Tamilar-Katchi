@@ -289,7 +289,7 @@ function userToMemberShape(user: any) {
     role: user.role,
     locationId: user.locationId,
     location: user.location,
-    profession: null,
+    profession: user.profession || null,
     professionId: null,
     approvalStatus: user.approvalStatus,
     isActive: user.isActive,
@@ -1667,13 +1667,21 @@ export const resolvers = {
 
       const userData: any = {
         name: rest.name,
-        ...(rest.surname ? { surname: rest.surname } : {}),
         phone: rest.phone,
         password: rest.password,
         role: rest.role,
         approvalStatus: 'APPROVED',
-        image: rest.image || null
+        image: rest.image || null,
+        bloodGroup: rest.bloodGroup || null,
+        dateOfBirth: rest.dateOfBirth || null,
+        gender: rest.gender || null,
+        profession: professionName || null,
+        ...locFields
       };
+
+      if (rest.surname) {
+        userData.surname = rest.surname;
+      }
 
       if (creatorId) {
         userData.parent = { connect: { id: creatorId } };
@@ -1743,6 +1751,7 @@ export const resolvers = {
       const isAdminAdding = context?.user?.role === 'SUPER_ADMIN' || context?.user?.role === 'ADMIN' || context?.user?.role === 'SUB_ADMIN';
       const memberData: any = {
         ...rest,
+        ...locFields,
         approvalStatus: isAdminAdding ? 'APPROVED' : 'PENDING',
         approvedById: isAdminAdding && creatorId ? creatorId : null,
         locationId: finalLocationId,
