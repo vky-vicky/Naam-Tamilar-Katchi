@@ -344,7 +344,9 @@ async function assertCommunityReadAccess(communityId: number, context: any) {
 
   const isAdmin = isCommunityAdmin(context.user.role);
 
-  if (!isAdmin && (context.user.type === 'member' || context.user.role === 'MEMBER')) {
+  // Only check CommunityMember table for type='member' (Member table users)
+  // Users in User table (type='admin') with MEMBER role are NOT in CommunityMember
+  if (!isAdmin && context.user.type === 'member') {
     const membership = await (prisma as any).communityMember.findUnique({
       where: {
         communityId_memberId: {
@@ -379,7 +381,9 @@ async function assertCommunityWriteAccess(communityId: number, context: any) {
 
   const isAdmin = isCommunityAdmin(user.role);
 
-  if (!isAdmin && (user.type === 'member' || user.role === 'MEMBER')) {
+  // Only check CommunityMember table for type='member' (Member table users)
+  // Users in User table (type='admin') with MEMBER role are NOT in CommunityMember
+  if (!isAdmin && user.type === 'member') {
     const membership = await (prisma as any).communityMember.findUnique({
       where: {
         communityId_memberId: {
@@ -397,7 +401,7 @@ async function assertCommunityWriteAccess(communityId: number, context: any) {
     if (!community.allowMemberMessages) {
       throw new Error("Only admin can message");
     }
-  } else if (!isAdmin) {
+  } else if (!isAdmin && user.type !== 'admin') {
     throw new Error("Only community members can message");
   }
 
