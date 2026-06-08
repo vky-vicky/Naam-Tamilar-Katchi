@@ -70,6 +70,9 @@ model Member {
   constituency       String?
   area               String?
   street             String?
+  enrollments        MemberPlanEnrollment[]
+  payments           ContributionPayment[]
+  contributionProfile ContributionProfile?
 
   @@index([locationId])
   @@index([professionId])
@@ -544,4 +547,102 @@ model CommunityMessageRead {
 
   @@unique([messageId, readerId, readerType])
   @@index([messageId])
+}
+
+model ContributionPlan {
+  id               Int                    @id @default(autoincrement())
+  name             String
+  description      String?
+  monthlyAmount    Float
+  startDate        DateTime
+  isActive         Boolean                @default(true)
+  autoRenewEnabled Boolean                @default(true)
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+  enrollments      MemberPlanEnrollment[]
+
+  @@index([isActive])
+}
+
+model MemberPlanEnrollment {
+  id          Int                  @id @default(autoincrement())
+  memberId    Int
+  member      Member               @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  planId      Int
+  plan        ContributionPlan     @relation(fields: [planId], references: [id], onDelete: Cascade)
+  joinedAt    DateTime             @default(now())
+  autoRenew   Boolean              @default(true)
+  status      EnrollmentStatus     @default(ACTIVE)
+  updatedAt   DateTime             @updatedAt
+  payments    ContributionPayment[]
+
+  @@unique([memberId, planId])
+  @@index([memberId])
+  @@index([planId])
+  @@index([status])
+}
+
+model ContributionPayment {
+  id            Int                  @id @default(autoincrement())
+  enrollmentId  Int?
+  enrollment    MemberPlanEnrollment? @relation(fields: [enrollmentId], references: [id], onDelete: SetNull)
+  memberId      Int
+  member        Member               @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  amount        Float
+  month         Int
+  year          Int
+  status        PaymentStatus        @default(PENDING)
+  orderId       String?              @unique
+  transactionId String?              @unique
+  paymentMethod String?
+  paidAt        DateTime?
+  receiptNumber String?              @unique
+  receiptUrl    String?
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  @@unique([memberId, month, year])
+  @@index([memberId])
+  @@index([status])
+  @@index([month, year])
+}
+
+model ContributionProfile {
+  id                Int               @id @default(autoincrement())
+  memberId          Int               @unique
+  member            Member            @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  totalPaidMonths   Int               @default(0)
+  currentStreak     Int               @default(0)
+  totalContribution Float             @default(0)
+  badge             ContributionBadge @default(BRONZE)
+  contributionRank  Int?
+  updatedAt         DateTime          @updatedAt
+
+  @@index([badge])
+  @@index([totalContribution(sort: Desc)])
+}
+
+enum EnrollmentStatus {
+  ACTIVE
+  PAUSED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  PAID
+  PENDING
+  FAILED
+}
+
+enum ContributionBadge {
+  BRONZE
+  SILVER
+  GOLD
+  PLATINUM
+}
+
+enum ReminderNotificationType {
+  PUSH
+  SMS
+  WHATSAPP
 }

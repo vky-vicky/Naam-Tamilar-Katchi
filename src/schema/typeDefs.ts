@@ -93,6 +93,7 @@ export const typeDefs = gql`
     role: Role!
     phone: String
     image: String
+    profilePicture: String
     locationId: Int
     location: Location
     approvalStatus: ApprovalStatus!
@@ -119,6 +120,7 @@ export const typeDefs = gql`
     surname: String
     phone: String
     image: String
+    profilePicture: String
     dateOfBirth: String
     gender: String
     bloodGroup: String
@@ -497,6 +499,16 @@ export const typeDefs = gql`
     pendingMembers(locationId: Int): [Member!]!
     bloodGroups: [String!]!
     dashboardStats(locationId: Int): DashboardStats!
+    getContributionPlans(isActive: Boolean): [ContributionPlan!]!
+    getContributionPlanDetails(id: Int!): ContributionPlan
+    myContributionPlan: MemberPlanEnrollment
+    getPaymentHistory(month: Int, year: Int, status: PaymentStatus): [ContributionPayment!]!
+    downloadReceipt(paymentId: Int!): ReceiptDetails!
+    getContributionProfile(memberId: Int): ContributionProfile!
+    getContributionDashboard(state: String, district: String, constituency: String, area: String): ContributionDashboardStats!
+    getContributionAnalytics: ContributionAnalytics!
+    getPendingPayments(district: String, constituency: String, area: String): [PendingPayment!]!
+    getContributionLeaderboard: ContributionLeaderboard!
   }
 
   type Mutation {
@@ -547,6 +559,7 @@ export const typeDefs = gql`
       phone: String
       password: String
       image: String
+      profilePicture: String
       dateOfBirth: String
       gender: String
       bloodGroup: String
@@ -737,6 +750,44 @@ export const typeDefs = gql`
       phone: String!
       role: String!
     ): Boolean!
+    createContributionPlan(
+      name: String!
+      description: String
+      monthlyAmount: Float!
+      startDate: String!
+      autoRenewEnabled: Boolean
+    ): ContributionPlan!
+    editContributionPlan(
+      id: Int!
+      name: String
+      description: String
+      monthlyAmount: Float
+      isActive: Boolean
+      autoRenewEnabled: Boolean
+    ): ContributionPlan!
+    joinContributionPlan(
+      planId: Int!
+      autoRenew: Boolean
+    ): MemberPlanEnrollment!
+    updateAutoRenew(
+      planId: Int!
+      autoRenew: Boolean!
+    ): MemberPlanEnrollment!
+    cancelContributionPlan(
+      planId: Int!
+    ): MemberPlanEnrollment!
+    createContributionOrder(
+      planId: Int!
+    ): RazorpayOrderResponse!
+    verifyContributionPayment(
+      razorpay_order_id: String!
+      razorpay_payment_id: String!
+      razorpay_signature: String!
+    ): PaymentVerificationResponse!
+    sendContributionReminder(
+      memberId: Int!
+      type: ReminderNotificationType!
+    ): Boolean!
   }
 
   type AuthPayload {
@@ -796,5 +847,168 @@ export const typeDefs = gql`
     role: String!
     isGroupAdmin: Boolean!
     isMuted: Boolean!
+  }
+
+  # ============================================================
+  # CONTRIBUTION MANAGEMENT SYSTEM — TYPE DEFINITIONS
+  # ============================================================
+
+  enum EnrollmentStatus {
+    ACTIVE
+    PAUSED
+    CANCELLED
+  }
+
+  enum PaymentStatus {
+    PENDING
+    PAID
+    FAILED
+    REFUNDED
+  }
+
+  enum ContributionBadge {
+    BRONZE
+    SILVER
+    GOLD
+    PLATINUM
+  }
+
+  enum ReminderNotificationType {
+    SEVEN_DAYS
+    THREE_DAYS
+    ONE_DAY
+    OVERDUE
+  }
+
+  type ContributionPlan {
+    id: Int!
+    name: String!
+    description: String
+    monthlyAmount: Float!
+    startDate: String!
+    isActive: Boolean!
+    autoRenewEnabled: Boolean!
+    createdAt: String!
+    enrolledCount: Int
+  }
+
+  type MemberPlanEnrollment {
+    id: Int!
+    memberId: Int!
+    planId: Int!
+    joinedAt: String!
+    autoRenew: Boolean!
+    status: EnrollmentStatus!
+    plan: ContributionPlan
+  }
+
+  type ContributionPayment {
+    id: Int!
+    memberId: Int!
+    enrollmentId: Int!
+    planId: Int!
+    month: Int!
+    year: Int!
+    amount: Float!
+    status: PaymentStatus!
+    paidAt: String
+    razorpayOrderId: String
+    razorpayPaymentId: String
+    createdAt: String!
+  }
+
+  type RazorpayOrderResponse {
+    orderId: String!
+    amount: Float!
+    currency: String!
+    keyId: String!
+  }
+
+  type PaymentVerificationResponse {
+    success: Boolean!
+    payment: ContributionPayment
+    message: String
+  }
+
+  type ReceiptDetails {
+    receiptId: String!
+    memberName: String!
+    amount: Float!
+    month: Int!
+    year: Int!
+    planName: String!
+    paidAt: String!
+    razorpayPaymentId: String
+  }
+
+  type ContributionProfile {
+    memberId: Int!
+    totalPaidMonths: Int!
+    currentStreak: Int!
+    totalContribution: Float!
+    badge: ContributionBadge!
+    contributionRank: Int
+    member: Member
+  }
+
+  type ContributionDashboardStats {
+    locationName: String!
+    totalMembers: Int!
+    paidMembers: Int!
+    pendingMembers: Int!
+    totalCollection: Float!
+    monthlyTarget: Float!
+    monthlyAchieved: Float!
+    collectionPercentage: Float!
+  }
+
+  type MonthlyTrendPoint {
+    label: String!
+    amount: Float!
+  }
+
+  type LocationCollection {
+    name: String!
+    amount: Float!
+  }
+
+  type TopContributorItem {
+    memberId: Int!
+    memberName: String!
+    totalContribution: Float!
+    badge: ContributionBadge!
+  }
+
+  type ContributionAnalytics {
+    monthlyCollectionTrend: [MonthlyTrendPoint!]!
+    districtWiseCollection: [LocationCollection!]!
+    constituencyWiseCollection: [LocationCollection!]!
+    areaWiseCollection: [LocationCollection!]!
+    paymentSuccessRate: Float!
+    topContributors: [TopContributorItem!]!
+    topLocations: [String!]!
+  }
+
+  type LeaderboardContributor {
+    memberName: String!
+    amount: Float!
+    badge: ContributionBadge!
+  }
+
+  type ContributionLeaderboard {
+    topContributors: [LeaderboardContributor!]!
+    topDistricts: [LocationCollection!]!
+    topConstituencies: [LocationCollection!]!
+    topAreas: [LocationCollection!]!
+    topCollectionAmount: Float!
+  }
+
+  type PendingPayment {
+    memberId: Int!
+    memberName: String!
+    phone: String!
+    location: String!
+    dueAmount: Float!
+    pendingMonths: Int!
   }
 `;

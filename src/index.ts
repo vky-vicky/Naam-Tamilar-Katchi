@@ -10,6 +10,7 @@ import { resolvers } from './schema/resolvers.js';
 import * as dotenv from 'dotenv';
 import { Server } from 'socket.io';
 import prisma from './db.js';
+import { CronService } from './services/cron.service.js';
 
 dotenv.config();
 
@@ -158,6 +159,7 @@ async function startServer() {
   const PORT = process.env.PORT || 4000;
   await new Promise<void>((resolve) => httpServer.listen({ port: PORT }, resolve));
   console.log(`🚀 Server ready at http://localhost:${PORT}/graphql`);
+  CronService.startBillingScheduler();
 }
 
 startServer().catch((error) => {

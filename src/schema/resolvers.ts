@@ -3,6 +3,8 @@ import prisma from '../db.js';
 import { whatsappService } from '../services/whatsapp.service.js';
 import { I18nService } from '../services/i18n.service.js';
 import { sendNotificationToLocation, sendNotificationToCommunity, sendNotificationToToken } from '../services/fcm.service.js';
+import { ContributionService } from '../services/contribution.service.js';
+import { RazorpayService } from '../services/razorpay.service.js';
 
 function getReadableError(err: any, lang: string = 'en') {
   const prismaCode = err?.code;
@@ -549,7 +551,7 @@ function userToMemberShape(user: any) {
     allergies: null,
     conditions: null,
     emergencyContact: null,
-    role: user.role,
+    role: user.role ? user.role.toUpperCase() : user.role,
     locationId: user.locationId,
     location: user.location,
     profession: user.profession || null,
@@ -570,6 +572,33 @@ function userToMemberShape(user: any) {
 
 const ADMIN_ROLES = ['SUPER_ADMIN', 'ADMIN', 'SUB_ADMIN'];
 const NAME_REGEX = /^[a-zA-Z\u0B80-\u0BFF\s]+$/;
+
+// Normalize blood group: accepts both 'O+' and 'O_POSITIVE' formats
+function normalizeBloodGroup(value: string | null | undefined): string | null {
+  if (!value || String(value).trim() === '' || String(value).trim().toLowerCase() === 'select') return null;
+  const map: Record<string, string> = {
+    'A+': 'A_POSITIVE', 'A_POSITIVE': 'A_POSITIVE',
+    'A-': 'A_NEGATIVE', 'A_NEGATIVE': 'A_NEGATIVE',
+    'B+': 'B_POSITIVE', 'B_POSITIVE': 'B_POSITIVE',
+    'B-': 'B_NEGATIVE', 'B_NEGATIVE': 'B_NEGATIVE',
+    'AB+': 'AB_POSITIVE', 'AB_POSITIVE': 'AB_POSITIVE',
+    'AB-': 'AB_NEGATIVE', 'AB_NEGATIVE': 'AB_NEGATIVE',
+    'O+': 'O_POSITIVE',  'O_POSITIVE': 'O_POSITIVE',
+    'O-': 'O_NEGATIVE',  'O_NEGATIVE': 'O_NEGATIVE',
+    // Legacy formats stored in older records
+    '0+': 'O_POSITIVE', '0+VE': 'O_POSITIVE', 'O+VE': 'O_POSITIVE',
+    '0-': 'O_NEGATIVE', 'O-VE': 'O_NEGATIVE',
+  };
+  return map[String(value).trim().toUpperCase()] || String(value).trim();
+}
+
+function toIST(dateInput: any) {
+  if (!dateInput) return new Date().toISOString();
+  const d = new Date(dateInput);
+  const istOffset = 5.5 * 60 * 60 * 1000;
+  const istTime = new Date(d.getTime() + istOffset);
+  return istTime.toISOString().replace('Z', '+05:30');
+}
 
 function isCommunityAdmin(role: string | undefined) {
   return !!role && ADMIN_ROLES.includes(role);
@@ -775,9 +804,13 @@ export const resolvers = {
     getMemberList: async (_: any, { locationId, professionName, bloodGroup, role, search, limit = 50, offset = 0, approvalStatus }: any, context: any) => {
       let filter: any = {};
       let userFilter: any = {};
-      
-      if (approvalStatus) filter.approvalStatus = approvalStatus;
-      if (approvalStatus) userFilter.approvalStatus = approvalStatus;
+
+      // Default: show only APPROVED members (consistent with dashboard totalMembers count)
+      // Admins can pass approvalStatus=PENDING to see pending members
+      const effectiveApprovalStatus = approvalStatus || 'APPROVED';
+      filter.approvalStatus = effectiveApprovalStatus;
+      userFilter.approvalStatus = effectiveApprovalStatus;
+
       if (professionName) {
         filter.profession = { name: professionName };
       }
@@ -804,14 +837,18 @@ export const resolvers = {
         userFilter.locationId = { in: allLocationIds };
       }
 
+      const takeLimit = limit + offset;
+
       const [members, users] = await Promise.all([
         (prisma as any).member.findMany({
-        where: filter,
-        include: { location: true, profession: true },
-        orderBy: { createdAt: 'desc' },
+          where: filter,
+          take: takeLimit,
+          include: { location: true, profession: true },
+          orderBy: { createdAt: 'desc' },
         }),
         professionName || bloodGroup ? [] : (prisma as any).user.findMany({
           where: userFilter,
+          take: takeLimit,
           include: { location: true },
           orderBy: { createdAt: 'desc' },
         })
@@ -827,40 +864,37 @@ export const resolvers = {
           const canSeePhone = context?.user?.role === 'SUPER_ADMIN' || (context?.user?.role === 'ADMIN' && context?.user?.locationId === m.locationId);
           return {
             ...m,
+            role: m.role ? m.role.toUpperCase() : m.role,
             phone: canSeePhone ? m.phone : null,
           };
         });
     },
 
     dashboardStats: async (_: any, { locationId }: any, context: any) => {
-      let filter: any = {};
-      let locationFilter: any = {};
-      let userFilter: any = { approvalStatus: 'APPROVED' };
-      let locationName = "Tamil Nadu";
+      let locationName = 'Tamil Nadu';
 
-      // Use context user's locationId if no locationId argument provided (strict location scoping)
       const contextUser = context?.user;
-      const effectiveLocationId = locationId ?? (contextUser?.locationId ?? null);
+      const effectiveLocationId: number | null = locationId ?? (contextUser?.locationId ?? null);
 
+      // Pre-compute all location IDs ONCE before any queries
+      let dashLocationIds: number[] | null = null;
       if (effectiveLocationId) {
         const loc = await (prisma as any).location.findUnique({ where: { id: effectiveLocationId }, select: { name: true } });
         if (loc) locationName = loc.name;
-
-        const allLocationIds = [effectiveLocationId, ...(await getChildLocationIds(effectiveLocationId))];
-        filter.locationId = { in: allLocationIds };
-        locationFilter.id = { in: allLocationIds };
-        userFilter.locationId = { in: allLocationIds };
+        const childIds = await getChildLocationIds(effectiveLocationId);
+        dashLocationIds = [effectiveLocationId, ...childIds];
       }
 
-      // Today's date range (midnight to end of day)
+      // Helper: member locationId filter
+      const memberLocFilter = dashLocationIds ? { locationId: { in: dashLocationIds } } : {};
+      // Helper: location id filter (for location table queries)
+      const locationIdFilter = dashLocationIds ? { id: { in: dashLocationIds } } : {};
+
+      // Today's date range
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
       const todayEnd = new Date();
       todayEnd.setHours(23, 59, 59, 999);
-
-      const memberUserFilter = effectiveLocationId
-        ? { role: 'MEMBER', locationId: { in: [effectiveLocationId, ...(await getChildLocationIds(effectiveLocationId))] } }
-        : { role: 'MEMBER' };
 
       const [
         allMembers,
@@ -876,35 +910,61 @@ export const resolvers = {
         emergencyRequests,
         activeBroadcasts
       ] = await Promise.all([
-        // Fetch all approved members and users for deduplication
+        // All APPROVED members (for role count)
         (prisma as any).member.findMany({
-          where: { ...filter, approvalStatus: 'APPROVED' },
+          where: { approvalStatus: 'APPROVED', ...memberLocFilter },
           select: { phone: true, role: true }
         }),
+        // All APPROVED users (for role count)
         (prisma as any).user.findMany({
-          where: { ...userFilter, approvalStatus: 'APPROVED' },
+          where: { approvalStatus: 'APPROVED', ...memberLocFilter },
           select: { phone: true, role: true }
         }),
-        // PENDING from Member table - TODAY only
-        (prisma as any).member.count({ where: { ...filter, approvalStatus: 'PENDING', createdAt: { gte: todayStart, lte: todayEnd } } }),
-        // PENDING from User table (MEMBER role) - TODAY only
-        (prisma as any).user.count({ where: { ...memberUserFilter, approvalStatus: 'PENDING', createdAt: { gte: todayStart, lte: todayEnd } } }),
-        // New members today from Member table - TODAY only
-        (prisma as any).member.count({ where: { ...filter, createdAt: { gte: todayStart, lte: todayEnd } } }),
-        // New members today from User table (MEMBER role) - TODAY only
-        (prisma as any).user.count({ where: { ...memberUserFilter, createdAt: { gte: todayStart, lte: todayEnd } } }),
-        // Approved today from Member table - TODAY only
-        (prisma as any).member.count({ where: { ...filter, approvalStatus: 'APPROVED', updatedAt: { gte: todayStart, lte: todayEnd } } }),
-        (prisma as any).location.count({ where: { ...locationFilter, type: 'AREA' } }),
-        (prisma as any).location.count({ where: { ...locationFilter, type: 'STREET' } }),
-        (prisma as any).event.count({ where: { ...filter, status: 'ACTIVE' } }),
-        // Emergency requests - TODAY only (PENDING status created today)
-        (prisma as any).emergencyRequest.count({ where: { ...filter, status: 'PENDING', createdAt: { gte: todayStart, lte: todayEnd } } }),
-        // Active broadcasts - TODAY only (created today and isActive)
-        (prisma as any).broadcast.count({ where: { ...filter, isActive: true, createdAt: { gte: todayStart, lte: todayEnd } } }),
+        // ALL pending from Member table
+        (prisma as any).member.count({
+          where: { approvalStatus: 'PENDING', ...memberLocFilter }
+        }),
+        // ALL pending from User table (MEMBER role)
+        (prisma as any).user.count({
+          where: { role: 'MEMBER', approvalStatus: 'PENDING', ...memberLocFilter }
+        }),
+        // New members today from Member table
+        (prisma as any).member.count({
+          where: { createdAt: { gte: todayStart, lte: todayEnd }, ...memberLocFilter }
+        }),
+        // New members today from User table
+        (prisma as any).user.count({
+          where: { role: 'MEMBER', createdAt: { gte: todayStart, lte: todayEnd }, ...memberLocFilter }
+        }),
+        // Approved today from Member table
+        (prisma as any).member.count({
+          where: { approvalStatus: 'APPROVED', updatedAt: { gte: todayStart, lte: todayEnd }, ...memberLocFilter }
+        }),
+        // Total Towns (AREA)
+        (prisma as any).location.count({
+          where: { type: 'AREA', ...locationIdFilter }
+        }),
+        // Total Streets
+        (prisma as any).location.count({
+          where: { type: 'STREET', ...locationIdFilter }
+        }),
+        // Active Events
+        (prisma as any).event.count({
+          where: { status: 'ACTIVE', ...memberLocFilter }
+        }),
+        // Emergency requests pending today
+        (prisma as any).emergencyRequest.count({
+          where: { status: 'PENDING', createdAt: { gte: todayStart, lte: todayEnd }, ...memberLocFilter }
+        }),
+        // Active broadcasts today
+        (prisma as any).broadcast.count({
+          where: { isActive: true, createdAt: { gte: todayStart, lte: todayEnd }, ...memberLocFilter }
+        }),
       ]);
 
-      // Combine and deduplicate globally by phone to match list behavior
+      // Combine and deduplicate globally by phone
+      // Member table gets PRIORITY over User table
+      // (some people exist in both — Member table role is the ground truth)
       const formattedMembers = allMembers.map((m: any) => ({
         phone: m.phone,
         role: m.role ? m.role.toUpperCase() : 'MEMBER'
@@ -915,7 +975,8 @@ export const resolvers = {
         role: u.role === 'Member' ? 'MEMBER' : (u.role ? u.role.toUpperCase() : 'MEMBER')
       }));
 
-      const combined = [...formattedMembers, ...formattedUsers];
+      // User table first, Member table second → Member table overwrites (priority)
+      const combined = [...formattedUsers, ...formattedMembers];
       const uniquePeople = Array.from(new Map(combined.map(item => [item.phone, item])).values());
 
       const totalAdmins = uniquePeople.filter(p => p.role === 'ADMIN' || p.role === 'SUPER_ADMIN').length;
@@ -964,10 +1025,14 @@ export const resolvers = {
         return user ? userToMemberShape(user) : null;
       }
 
-      return (prisma as any).member.findUnique({
+      const memberRecord = await (prisma as any).member.findUnique({
         where: { id },
         include: { location: true, profession: true }
       });
+      if (memberRecord && memberRecord.role) {
+        memberRecord.role = memberRecord.role.toUpperCase();
+      }
+      return memberRecord;
     },
 
     recentActivity: async (_: any, { locationId, limit = 10, offset = 0, search, type, fromDate, toDate }: any, context: any) => {
@@ -1094,7 +1159,7 @@ export const resolvers = {
             activityType: 'EVENT',
             title: e.title,
             description: e.description,
-            createdAt: e.createdAt instanceof Date ? e.createdAt.toISOString() : new Date(e.createdAt).toISOString(),
+            createdAt: toIST(e.createdAt),
             member: e.createdBy ? {
               id: e.createdBy.id,
               name: e.createdBy.name,
@@ -1121,7 +1186,7 @@ export const resolvers = {
             activityType: 'EMERGENCY',
             title: r.title,
             description: r.description,
-            createdAt: r.createdAt instanceof Date ? r.createdAt.toISOString() : new Date(r.createdAt).toISOString(),
+            createdAt: toIST(r.createdAt),
             member: r.member ? {
               id: r.member.id,
               name: r.member.name,
@@ -1190,7 +1255,7 @@ export const resolvers = {
                 activityType: 'MEMBER',
                 title: m.approvedById ? 'Member Approved' : 'Member Added',
                 description: `Member request ${actionText} for ${m.name} ${m.surname || ''} by ${approvedByName}`,
-                createdAt: m.createdAt instanceof Date ? m.createdAt.toISOString() : new Date(m.createdAt).toISOString(),
+                createdAt: toIST(m.createdAt),
                 member: {
                   id: m.id,
                   name: m.name,
@@ -1211,7 +1276,7 @@ export const resolvers = {
                 activityType: 'MEMBER',
                 title: 'Member Added',
                 description: `Member ${u.name} ${u.surname || ''} added by ${addedByName}`,
-                createdAt: u.createdAt instanceof Date ? u.createdAt.toISOString() : new Date(u.createdAt).toISOString(),
+                createdAt: toIST(u.createdAt),
                 member: {
                   id: 1000000 + u.id,
                   name: u.name,
@@ -1265,7 +1330,7 @@ export const resolvers = {
               activityType: 'ADMIN',
               title: u.role === 'ADMIN' ? 'Admin Added' : 'Super Admin Added',
               description: `${u.role.replace('_', ' ')} ${u.name} ${u.surname || ''} added by ${addedByName}`,
-              createdAt: u.createdAt instanceof Date ? u.createdAt.toISOString() : new Date(u.createdAt).toISOString(),
+              createdAt: toIST(u.createdAt),
               member: {
                 id: u.id,
                 name: u.name,
@@ -1313,7 +1378,7 @@ export const resolvers = {
               activityType: 'SUB_ADMIN',
               title: 'Sub Admin Added',
               description: `Sub Admin ${u.name} ${u.surname || ''} added by ${addedByName}`,
-              createdAt: u.createdAt instanceof Date ? u.createdAt.toISOString() : new Date(u.createdAt).toISOString(),
+              createdAt: toIST(u.createdAt),
               member: {
                 id: u.id,
                 name: u.name,
@@ -1341,7 +1406,7 @@ export const resolvers = {
             activityType: 'BROADCAST',
             title: b.title,
             description: b.message,
-            createdAt: b.createdAt instanceof Date ? b.createdAt.toISOString() : new Date(b.createdAt).toISOString(),
+            createdAt: toIST(b.createdAt),
             member: b.createdBy ? {
               id: b.createdBy.id,
               name: b.createdBy.name,
@@ -1357,13 +1422,28 @@ export const resolvers = {
       }
 
       if (shouldQuery('ROLE_CHANGE')) {
-        let auditFilter: any = { action: { contains: 'role', mode: 'insensitive' } };
+        // Build audit where carefully — merge user filters without spread conflict
+        const auditUserFilter: any = {};
         if (targetLocationId) {
-          auditFilter.user = { locationId: { in: allLocationIds } };
+          auditUserFilter.locationId = { in: allLocationIds };
         }
+        if (search) {
+          auditUserFilter.name = { contains: search, mode: 'insensitive' };
+        }
+
+        const auditWhere: any = {
+          action: { contains: 'role', mode: 'insensitive' },
+          ...(Object.keys(auditUserFilter).length > 0 ? { user: auditUserFilter } : {}),
+          ...(search ? { OR: [
+            { action: { contains: search, mode: 'insensitive' } },
+            { details: { contains: search, mode: 'insensitive' } },
+          ]} : {}),
+          ...dateFilter
+        };
+
         promises.push(
           (prisma as any).auditLog.findMany({
-            where: { ...auditFilter, ...auditSearch, ...dateFilter },
+            where: auditWhere,
             take: takeLimit,
             orderBy: { createdAt: 'desc' },
             include: { user: { include: { location: true } } }
@@ -1372,7 +1452,7 @@ export const resolvers = {
             activityType: 'ROLE_CHANGE',
             title: 'Role Changed',
             description: l.details || `Role changed for user ${l.user.name}`,
-            createdAt: l.createdAt instanceof Date ? l.createdAt.toISOString() : new Date(l.createdAt).toISOString(),
+            createdAt: toIST(l.createdAt),
             member: {
               id: l.user.id,
               name: l.user.name,
@@ -2187,7 +2267,8 @@ export const resolvers = {
       if (rest.surname && rest.surname.trim() !== '' && !NAME_REGEX.test(rest.surname)) {
         throw new Error("invalid_surname_format");
       }
-      if (!rest.bloodGroup || String(rest.bloodGroup).trim() === '' || String(rest.bloodGroup).trim().toLowerCase() === 'select') {
+      const normalizedBloodGroup = normalizeBloodGroup(rest.bloodGroup);
+      if (!normalizedBloodGroup) {
         throw new Error("please_select_blood_group");
       }
       if (!professionName || String(professionName).trim() === '' || String(professionName).trim().toLowerCase() === 'select') {
@@ -2233,7 +2314,7 @@ export const resolvers = {
         role: rest.role,
         approvalStatus: 'APPROVED',
         image: rest.image || null,
-        bloodGroup: rest.bloodGroup || null,
+        bloodGroup: normalizedBloodGroup || null,
         dateOfBirth: rest.dateOfBirth || null,
         gender: rest.gender || null,
         profession: professionName || null,
@@ -2267,7 +2348,8 @@ export const resolvers = {
       if (rest.surname && rest.surname.trim() !== '' && !NAME_REGEX.test(rest.surname)) {
         throw new Error("invalid_surname_format");
       }
-      if (!rest.bloodGroup || String(rest.bloodGroup).trim() === '' || String(rest.bloodGroup).trim().toLowerCase() === 'select') {
+      const normalizedBloodGroupMember = normalizeBloodGroup(rest.bloodGroup);
+      if (!normalizedBloodGroupMember) {
         throw new Error("please_select_blood_group");
       }
       if (!professionName || String(professionName).trim() === '' || String(professionName).trim().toLowerCase() === 'select') {
@@ -2326,6 +2408,7 @@ export const resolvers = {
       const memberData: any = {
         ...rest,
         ...locFields,
+        bloodGroup: normalizedBloodGroupMember || rest.bloodGroup || null,
         approvalStatus: isAdminAdding ? 'APPROVED' : 'PENDING',
         approvedById: isAdminAdding && creatorId ? creatorId : null,
         locationId: finalLocationId,
@@ -2443,7 +2526,19 @@ export const resolvers = {
       if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", context?.language));
 
       const { id, professionName, streetId, areaId, talukId, districtId, locationId, ...rest } = args;
+
+      // Validation for Edit Profile fields
+      if (rest.name && !NAME_REGEX.test(rest.name)) {
+        throw new Error("invalid_name_format");
+      }
+      if (rest.surname && rest.surname.trim() !== '' && !NAME_REGEX.test(rest.surname)) {
+        throw new Error("invalid_surname_format");
+      }
+      if (rest.phone && !/^\d{10}$/.test(rest.phone)) {
+        throw new Error("invalid_phone_format");
+      }
       
+
       const isUserTable = Number(id) < 0 || Number(id) >= 1000000;
       const targetId = isUserTable 
         ? (Number(id) < 0 ? Math.abs(Number(id)) : (Number(id) - 1000000))
@@ -2456,6 +2551,12 @@ export const resolvers = {
       }
 
       let updateData: any = { ...rest };
+
+      if (updateData.profilePicture !== undefined) {
+        updateData.image = updateData.profilePicture;
+        delete updateData.profilePicture;
+      }
+
 
       // Determine the most specific location ID
       const finalLocationId = streetId || areaId || talukId || districtId || locationId;
@@ -4346,6 +4447,7 @@ export const resolvers = {
       const fields = await getLocationFields(parent.locationId);
       return fields.street;
     },
+    profilePicture: (parent: any) => parent.image,
   },
 
   User: {
@@ -4378,6 +4480,7 @@ export const resolvers = {
       const fields = await getLocationFields(parent.locationId);
       return fields.street;
     },
+    profilePicture: (parent: any) => parent.image,
   },
 
   Location: {
@@ -4797,5 +4900,344 @@ export const resolvers = {
       if (!parent.createdById) return null;
       return (prisma as any).user.findUnique({ where: { id: parent.createdById } });
     },
+  },
+
+  // ============================================================
+  // CONTRIBUTION MANAGEMENT SYSTEM — QUERY RESOLVERS
+  // ============================================================
+  ContributionPlan: {
+    createdAt: (parent: any) =>
+      parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString(),
+    startDate: (parent: any) =>
+      parent.startDate instanceof Date ? parent.startDate.toISOString() : new Date(parent.startDate).toISOString(),
+    enrolledCount: async (parent: any) => {
+      return (prisma as any).memberPlanEnrollment.count({
+        where: { planId: parent.id, status: 'ACTIVE' }
+      });
+    }
+  },
+
+  MemberPlanEnrollment: {
+    joinedAt: (parent: any) =>
+      parent.joinedAt instanceof Date ? parent.joinedAt.toISOString() : new Date(parent.joinedAt).toISOString(),
+    plan: async (parent: any) => {
+      if (parent.plan) return parent.plan;
+      return (prisma as any).contributionPlan.findUnique({ where: { id: parent.planId } });
+    }
+  },
+
+  ContributionPayment: {
+    createdAt: (parent: any) =>
+      parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString(),
+    paidAt: (parent: any) =>
+      parent.paidAt ? (parent.paidAt instanceof Date ? parent.paidAt.toISOString() : new Date(parent.paidAt).toISOString()) : null,
+  },
+
+  ContributionProfile: {
+    member: async (parent: any) => {
+      if (parent.member) return parent.member;
+      return (prisma as any).member.findUnique({ where: { id: parent.memberId } });
+    }
+  },
+};
+
+// ============================================================
+// Attach Contribution Resolvers to Query & Mutation
+// ============================================================
+(resolvers as any).Query = {
+  ...(resolvers as any).Query,
+
+  getContributionPlans: async (_: any, args: { isActive?: boolean }, context: any) => {
+    const where: any = {};
+    if (args.isActive !== undefined && args.isActive !== null) {
+      where.isActive = args.isActive;
+    }
+    return (prisma as any).contributionPlan.findMany({ where, orderBy: { createdAt: 'desc' } });
+  },
+
+  getContributionPlanDetails: async (_: any, args: { id: number }, context: any) => {
+    return (prisma as any).contributionPlan.findUnique({ where: { id: args.id } });
+  },
+
+  myContributionPlan: async (_: any, __: any, context: any) => {
+    if (!context.user) throw new Error('Unauthorized');
+    const memberId = context.user.memberId || context.user.id;
+    return (prisma as any).memberPlanEnrollment.findFirst({
+      where: { memberId, status: 'ACTIVE' },
+      include: { plan: true },
+      orderBy: { joinedAt: 'desc' }
+    });
+  },
+
+  getPaymentHistory: async (_: any, args: { month?: number; year?: number; status?: string }, context: any) => {
+    if (!context.user) throw new Error('Unauthorized');
+    const memberId = context.user.memberId || context.user.id;
+    const where: any = { memberId };
+    if (args.month) where.month = args.month;
+    if (args.year) where.year = args.year;
+    if (args.status) where.status = args.status;
+    return (prisma as any).contributionPayment.findMany({
+      where,
+      orderBy: [{ year: 'desc' }, { month: 'desc' }]
+    });
+  },
+
+  downloadReceipt: async (_: any, args: { paymentId: number }, context: any) => {
+    if (!context.user) throw new Error('Unauthorized');
+    const payment = await (prisma as any).contributionPayment.findUnique({
+      where: { id: args.paymentId },
+      include: { member: true, enrollment: { include: { plan: true } } }
+    });
+    if (!payment) throw new Error('Payment not found');
+    const memberName = `${payment.member.name} ${payment.member.surname || ''}`.trim();
+    return {
+      receiptId: `RCP-${payment.id}-${payment.year}${String(payment.month).padStart(2, '0')}`,
+      memberName,
+      amount: payment.amount,
+      month: payment.month,
+      year: payment.year,
+      planName: payment.enrollment?.plan?.name || 'Contribution Plan',
+      paidAt: payment.paidAt ? new Date(payment.paidAt).toISOString() : new Date().toISOString(),
+      razorpayPaymentId: payment.razorpayPaymentId || null
+    };
+  },
+
+  getContributionProfile: async (_: any, args: { memberId?: number }, context: any) => {
+    if (!context.user) throw new Error('Unauthorized');
+    const memberId = args.memberId || context.user.memberId || context.user.id;
+    let profile = await (prisma as any).contributionProfile.findUnique({
+      where: { memberId },
+      include: { member: true }
+    });
+    if (!profile) {
+      // Return default profile if member has not contributed yet
+      const member = await (prisma as any).member.findUnique({ where: { id: memberId } });
+      return {
+        memberId,
+        totalPaidMonths: 0,
+        currentStreak: 0,
+        totalContribution: 0,
+        badge: 'BRONZE',
+        contributionRank: null,
+        member
+      };
+    }
+    return profile;
+  },
+
+  getContributionDashboard: async (_: any, args: { state?: string; district?: string; constituency?: string; area?: string }, context: any) => {
+    if (!context.user) throw new Error('Unauthorized');
+    const roles = ['SUPER_ADMIN', 'ADMIN', 'SUB_ADMIN'];
+    if (!roles.includes(context.user.role)) throw new Error('Access denied');
+    return ContributionService.getContributionDashboard(args.state, args.district, args.constituency, args.area);
+  },
+
+  getContributionAnalytics: async (_: any, __: any, context: any) => {
+    if (!context.user) throw new Error('Unauthorized');
+    if (!['SUPER_ADMIN', 'ADMIN'].includes(context.user.role)) throw new Error('Access denied');
+    return ContributionService.getContributionAnalytics();
+  },
+
+  getPendingPayments: async (_: any, args: { district?: string; constituency?: string; area?: string }, context: any) => {
+    if (!context.user) throw new Error('Unauthorized');
+    if (!['SUPER_ADMIN', 'ADMIN', 'SUB_ADMIN'].includes(context.user.role)) throw new Error('Access denied');
+    return ContributionService.getPendingPayments(args.district, args.constituency, args.area);
+  },
+
+  getContributionLeaderboard: async (_: any, __: any, context: any) => {
+    if (!context.user) throw new Error('Unauthorized');
+    return ContributionService.getContributionLeaderboard();
+  },
+};
+
+(resolvers as any).Mutation = {
+  ...(resolvers as any).Mutation,
+
+  createContributionPlan: async (_: any, args: any, context: any) => {
+    if (!context.user) throw new Error('Unauthorized');
+    if (!['SUPER_ADMIN', 'ADMIN'].includes(context.user.role)) throw new Error('Access denied');
+    const plan = await (prisma as any).contributionPlan.create({
+      data: {
+        name: args.name,
+        description: args.description || null,
+        monthlyAmount: args.monthlyAmount,
+        startDate: new Date(args.startDate),
+        isActive: true,
+        autoRenewEnabled: args.autoRenewEnabled !== undefined ? args.autoRenewEnabled : true
+      }
+    });
+    return plan;
+  },
+
+  editContributionPlan: async (_: any, args: any, context: any) => {
+    if (!context.user) throw new Error('Unauthorized');
+    if (!['SUPER_ADMIN', 'ADMIN'].includes(context.user.role)) throw new Error('Access denied');
+    const data: any = {};
+    if (args.name !== undefined) data.name = args.name;
+    if (args.description !== undefined) data.description = args.description;
+    if (args.monthlyAmount !== undefined) data.monthlyAmount = args.monthlyAmount;
+    if (args.isActive !== undefined) data.isActive = args.isActive;
+    if (args.autoRenewEnabled !== undefined) data.autoRenewEnabled = args.autoRenewEnabled;
+    return (prisma as any).contributionPlan.update({ where: { id: args.id }, data });
+  },
+
+  joinContributionPlan: async (_: any, args: any, context: any) => {
+    if (!context.user) throw new Error('Unauthorized');
+    const memberId = context.user.memberId || context.user.id;
+    // Check if already enrolled in this plan
+    const existing = await (prisma as any).memberPlanEnrollment.findFirst({
+      where: { memberId, planId: args.planId, status: 'ACTIVE' }
+    });
+    if (existing) throw new Error('Already enrolled in this plan');
+    const plan = await (prisma as any).contributionPlan.findUnique({ where: { id: args.planId } });
+    if (!plan || !plan.isActive) throw new Error('Plan not found or inactive');
+    const enrollment = await (prisma as any).memberPlanEnrollment.create({
+      data: {
+        memberId,
+        planId: args.planId,
+        autoRenew: args.autoRenew !== undefined ? args.autoRenew : plan.autoRenewEnabled,
+        status: 'ACTIVE'
+      },
+      include: { plan: true }
+    });
+    // Create first monthly payment record
+    const now = new Date();
+    await (prisma as any).contributionPayment.create({
+      data: {
+        memberId,
+        enrollmentId: enrollment.id,
+        planId: args.planId,
+        month: now.getMonth() + 1,
+        year: now.getFullYear(),
+        amount: plan.monthlyAmount,
+        status: 'PENDING'
+      }
+    });
+    return enrollment;
+  },
+
+  updateAutoRenew: async (_: any, args: any, context: any) => {
+    if (!context.user) throw new Error('Unauthorized');
+    const memberId = context.user.memberId || context.user.id;
+    const enrollment = await (prisma as any).memberPlanEnrollment.findFirst({
+      where: { memberId, planId: args.planId }
+    });
+    if (!enrollment) throw new Error('Enrollment not found');
+    return (prisma as any).memberPlanEnrollment.update({
+      where: { id: enrollment.id },
+      data: { autoRenew: args.autoRenew },
+      include: { plan: true }
+    });
+  },
+
+  cancelContributionPlan: async (_: any, args: any, context: any) => {
+    if (!context.user) throw new Error('Unauthorized');
+    const memberId = context.user.memberId || context.user.id;
+    const enrollment = await (prisma as any).memberPlanEnrollment.findFirst({
+      where: { memberId, planId: args.planId, status: 'ACTIVE' }
+    });
+    if (!enrollment) throw new Error('Active enrollment not found');
+    return (prisma as any).memberPlanEnrollment.update({
+      where: { id: enrollment.id },
+      data: { status: 'CANCELLED' },
+      include: { plan: true }
+    });
+  },
+
+  createContributionOrder: async (_: any, args: any, context: any) => {
+    if (!context.user) throw new Error('Unauthorized');
+    const memberId = context.user.memberId || context.user.id;
+    const enrollment = await (prisma as any).memberPlanEnrollment.findFirst({
+      where: { memberId, planId: args.planId, status: 'ACTIVE' },
+      include: { plan: true }
+    });
+    if (!enrollment) throw new Error('No active enrollment found for this plan');
+    // Check if a pending payment already exists for this month
+    const now = new Date();
+    const currentMonth = now.getMonth() + 1;
+    const currentYear = now.getFullYear();
+    let payment = await (prisma as any).contributionPayment.findFirst({
+      where: { memberId, planId: args.planId, month: currentMonth, year: currentYear }
+    });
+    if (!payment) {
+      payment = await (prisma as any).contributionPayment.create({
+        data: {
+          memberId,
+          enrollmentId: enrollment.id,
+          planId: args.planId,
+          month: currentMonth,
+          year: currentYear,
+          amount: enrollment.plan.monthlyAmount,
+          status: 'PENDING'
+        }
+      });
+    } else if (payment.status === 'PAID') {
+      throw new Error('Payment for this month is already completed');
+    }
+    const orderResult = await RazorpayService.createOrder(args.planId, enrollment.plan.monthlyAmount);
+    // Store order ID on the payment
+    await (prisma as any).contributionPayment.update({
+      where: { id: payment.id },
+      data: { razorpayOrderId: orderResult.orderId }
+    });
+    return {
+      orderId: orderResult.orderId,
+      amount: orderResult.amount,
+      currency: orderResult.currency,
+      keyId: process.env.RAZORPAY_KEY_ID || 'rzp_test_mock'
+    };
+  },
+
+  verifyContributionPayment: async (_: any, args: any, context: any) => {
+    if (!context.user) throw new Error('Unauthorized');
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = args;
+    const isValid = RazorpayService.verifySignature(razorpay_order_id, razorpay_payment_id, razorpay_signature);
+    if (!isValid) {
+      return { success: false, payment: null, message: 'Payment signature verification failed' };
+    }
+    const payment = await (prisma as any).contributionPayment.findFirst({
+      where: { razorpayOrderId: razorpay_order_id }
+    });
+    if (!payment) {
+      return { success: false, payment: null, message: 'Payment record not found' };
+    }
+    const updated = await (prisma as any).contributionPayment.update({
+      where: { id: payment.id },
+      data: {
+        status: 'PAID',
+        razorpayPaymentId: razorpay_payment_id,
+        paidAt: new Date()
+      }
+    });
+    // Recalculate contribution profile asynchronously
+    ContributionService.updateContributionProfile(payment.memberId).catch((e: any) =>
+      console.error('[Contribution] Profile update error:', e)
+    );
+    return { success: true, payment: updated, message: 'Payment verified successfully' };
+  },
+
+  sendContributionReminder: async (_: any, args: any, context: any) => {
+    if (!context.user) throw new Error('Unauthorized');
+    if (!['SUPER_ADMIN', 'ADMIN', 'SUB_ADMIN'].includes(context.user.role)) throw new Error('Access denied');
+    const member = await (prisma as any).member.findUnique({
+      where: { id: args.memberId },
+      select: { id: true, name: true, fcmToken: true, locationId: true }
+    });
+    if (!member) throw new Error('Member not found');
+    const typeMessages: Record<string, string> = {
+      SEVEN_DAYS: 'Your monthly contribution is due in 7 days.',
+      THREE_DAYS: 'Your monthly contribution is due in 3 days.',
+      ONE_DAY: 'Your monthly contribution is due tomorrow.',
+      OVERDUE: 'Your monthly contribution is overdue. Please pay at your earliest convenience.'
+    };
+    const message = typeMessages[args.type] || 'Please make your monthly contribution.';
+    await ContributionService.createSystemNotification({
+      title: 'Contribution Reminder / பங்களிப்பு நினைவூட்டல்',
+      message,
+      type: 'NOTIFICATION',
+      purpose: 'Contribution Reminder',
+      memberId: member.id
+    });
+    return true;
   },
 };
