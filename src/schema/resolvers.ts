@@ -215,6 +215,45 @@ async function sendSystemNotification({
   const io = (global as any).io;
   if (io) {
     io.emit('newNotification', notification);
+    
+    // Emit specialized real-time events containing full entity details
+    if (type === 'BROADCAST' || entityType === 'BROADCAST') {
+      if (entityId) {
+        (prisma as any).broadcast.findUnique({
+          where: { id: Number(entityId) },
+          include: { location: true, createdBy: true }
+        }).then((broadcastObj: any) => {
+          if (broadcastObj) {
+            io.emit('newBroadcast', broadcastObj);
+            io.emit('broadcast', broadcastObj);
+          }
+        }).catch((err: any) => console.error('[Socket] Error fetching broadcast for emit:', err));
+      }
+    } else if (type === 'EMERGENCY' || entityType === 'EMERGENCY') {
+      if (entityId) {
+        (prisma as any).emergencyRequest.findUnique({
+          where: { id: Number(entityId) },
+          include: { location: true, createdBy: true, member: true }
+        }).then((emergencyObj: any) => {
+          if (emergencyObj) {
+            io.emit('newEmergencyRequest', emergencyObj);
+            io.emit('emergencyRequest', emergencyObj);
+          }
+        }).catch((err: any) => console.error('[Socket] Error fetching emergency for emit:', err));
+      }
+    } else if (type === 'EVENT' || entityType === 'EVENT') {
+      if (entityId) {
+        (prisma as any).event.findUnique({
+          where: { id: Number(entityId) },
+          include: { location: true, createdBy: true }
+        }).then((eventObj: any) => {
+          if (eventObj) {
+            io.emit('newEvent', eventObj);
+            io.emit('event', eventObj);
+          }
+        }).catch((err: any) => console.error('[Socket] Error fetching event for emit:', err));
+      }
+    }
   }
 
   await sendNotificationToLocation(locationId, title, message, {
@@ -319,6 +358,8 @@ function buildNotificationActions(type: string, entity: any) {
   if (normalizedType === 'EVENT') {
     return [
       { key: 'RSVP_GOING', label: 'Attend', style: 'success' },
+      { key: 'RSVP_MAYBE', label: 'Maybe', style: 'warning' },
+      { key: 'RSVP_NOT_GOING', label: 'Not Attend', style: 'danger' },
       { key: 'ADD_CALENDAR', label: 'Add To Calendar', style: 'primary' },
       { key: 'OPEN_LOCATION', label: 'Open Location', style: 'secondary' },
       { key: 'SHARE_EVENT', label: 'Share Event', style: 'secondary' },
@@ -346,7 +387,8 @@ async function getBroadcastListForContext({ locationId, scope, broadcastId, isAc
   } else if (role === 'ADMIN' || role === 'SUB_ADMIN') {
     if (!userLocId) return [];
     const childIds = await getChildLocationIds(userLocId);
-    visibleLocationIds = [userLocId, ...childIds];
+    const ancestorIds = await getAncestorLocationIds(userLocId);
+    visibleLocationIds = Array.from(new Set([...ancestorIds, ...childIds]));
   } else {
     if (!userLocId) return [];
     const ancestorIds = await getAncestorLocationIds(userLocId);
@@ -687,9 +729,11 @@ export const resolvers = {
           include: { location: true }
         });
         if (member) {
+          const dbRole = member.role ? member.role.toUpperCase() : 'MEMBER';
+          const validRoles = ['SUPER_ADMIN', 'ADMIN', 'SUB_ADMIN', 'MEMBER'];
           return {
             ...member,
-            role: 'MEMBER'
+            role: validRoles.includes(dbRole) ? dbRole : 'MEMBER'
           };
         }
         return null;
@@ -818,10 +862,8 @@ export const resolvers = {
         : { role: 'MEMBER' };
 
       const [
-        totalAdmins,
-        totalSubAdmins,
-        membersFromMemberTable,
-        membersFromUserTable,
+        allMembers,
+        allUsers,
         pendingFromMemberTable,
         pendingFromUserTable,
         newMembersTodayFromMember,
@@ -833,13 +875,15 @@ export const resolvers = {
         emergencyRequests,
         activeBroadcasts
       ] = await Promise.all([
-        // Admins and Sub Admins from User table (all-time totals)
-        (prisma as any).user.count({ where: { ...userFilter, role: 'ADMIN' } }),
-        (prisma as any).user.count({ where: { ...userFilter, role: 'SUB_ADMIN' } }),
-        // APPROVED members from Member table (all-time totals)
-        (prisma as any).member.count({ where: { ...filter, approvalStatus: 'APPROVED' } }),
-        // MEMBER role users from User table (admin-added as User)
-        (prisma as any).user.count({ where: { ...memberUserFilter, approvalStatus: 'APPROVED' } }),
+        // Fetch all approved members and users for deduplication
+        (prisma as any).member.findMany({
+          where: { ...filter, approvalStatus: 'APPROVED' },
+          select: { phone: true, role: true }
+        }),
+        (prisma as any).user.findMany({
+          where: { ...userFilter, approvalStatus: 'APPROVED' },
+          select: { phone: true, role: true }
+        }),
         // PENDING from Member table - TODAY only
         (prisma as any).member.count({ where: { ...filter, approvalStatus: 'PENDING', createdAt: { gte: todayStart, lte: todayEnd } } }),
         // PENDING from User table (MEMBER role) - TODAY only
@@ -859,8 +903,24 @@ export const resolvers = {
         (prisma as any).broadcast.count({ where: { ...filter, isActive: true, createdAt: { gte: todayStart, lte: todayEnd } } }),
       ]);
 
-      // Combine both tables for unified counts
-      const totalMembers = membersFromMemberTable + membersFromUserTable;
+      // Combine and deduplicate globally by phone to match list behavior
+      const formattedMembers = allMembers.map((m: any) => ({
+        phone: m.phone,
+        role: m.role ? m.role.toUpperCase() : 'MEMBER'
+      }));
+
+      const formattedUsers = allUsers.map((u: any) => ({
+        phone: u.phone,
+        role: u.role === 'Member' ? 'MEMBER' : (u.role ? u.role.toUpperCase() : 'MEMBER')
+      }));
+
+      const combined = [...formattedMembers, ...formattedUsers];
+      const uniquePeople = Array.from(new Map(combined.map(item => [item.phone, item])).values());
+
+      const totalAdmins = uniquePeople.filter(p => p.role === 'ADMIN' || p.role === 'SUPER_ADMIN').length;
+      const totalSubAdmins = uniquePeople.filter(p => p.role === 'SUB_ADMIN').length;
+      const totalMembers = uniquePeople.filter(p => p.role === 'MEMBER').length;
+
       const pendingApprovals = pendingFromMemberTable + pendingFromUserTable;
       const newMembersToday = newMembersTodayFromMember + newMembersTodayFromUser;
       const approvedToday = approvedTodayFromMember;
@@ -1082,51 +1142,92 @@ export const resolvers = {
 
       if (shouldQuery('MEMBER')) {
         let memberApprovalSearch = { ...approvalSearch };
+        let userApprovalSearch = { ...approvalSearch };
         
         if (search) {
-          // Member table allows string contains on 'role'
           memberApprovalSearch.OR = [
              ...(memberApprovalSearch.OR || []),
              { role: { contains: search, mode: 'insensitive' } }
           ];
+          userApprovalSearch.OR = [
+             ...(userApprovalSearch.OR || []),
+             { name: { contains: search, mode: 'insensitive' } }
+          ];
         }
 
         promises.push(
-          (prisma as any).member.findMany({
-            where: {
-              ...filter,
-              approvalStatus: 'APPROVED',
-              ...memberApprovalSearch,
-              ...dateFilter,
-              OR: [
-                { approvedById: { not: null } },
-                { createdById: { not: null } }
-              ]
-            },
-            take: takeLimit,
-            orderBy: { createdAt: 'desc' },
-            include: { approvedBy: true, createdBy: true, location: true }
-          }).then((members: any[]) => members.map((m: any) => {
-            const approvedByName = m.approvedBy?.name || m.createdBy?.name || 'Admin';
-            const actionText = m.approvedById ? 'approved' : 'added';
-            return {
-              id: m.id,
-              activityType: 'MEMBER',
-              title: m.approvedById ? 'Member Approved' : 'Member Added',
-              description: `Member request ${actionText} for ${m.name} ${m.surname || ''} by ${approvedByName}`,
-              createdAt: m.createdAt instanceof Date ? m.createdAt.toISOString() : new Date(m.createdAt).toISOString(),
-              member: {
-                id: m.id,
-                name: m.name,
-                phone: m.phone,
-                role: m.role
+          Promise.all([
+            (prisma as any).member.findMany({
+              where: {
+                ...filter,
+                approvalStatus: 'APPROVED',
+                ...memberApprovalSearch,
+                ...dateFilter
               },
-              location: m.location ? {
-                id: m.location.id,
-                name: m.location.name
-              } : null
-            };
-          }))
+              take: takeLimit,
+              orderBy: { createdAt: 'desc' },
+              include: { approvedBy: true, createdBy: true, location: true }
+            }),
+            (prisma as any).user.findMany({
+              where: {
+                ...filter,
+                approvalStatus: 'APPROVED',
+                role: 'MEMBER',
+                ...userApprovalSearch,
+                ...dateFilter
+              },
+              take: takeLimit,
+              orderBy: { createdAt: 'desc' },
+              include: { location: true, parent: true }
+            })
+          ]).then(([members, users]) => {
+            const memberActivities = members.map((m: any) => {
+              const approvedByName = m.approvedBy?.name || m.createdBy?.name || 'Admin';
+              const actionText = m.approvedById ? 'approved' : 'added';
+              return {
+                id: m.id,
+                activityType: 'MEMBER',
+                title: m.approvedById ? 'Member Approved' : 'Member Added',
+                description: `Member request ${actionText} for ${m.name} ${m.surname || ''} by ${approvedByName}`,
+                createdAt: m.createdAt instanceof Date ? m.createdAt.toISOString() : new Date(m.createdAt).toISOString(),
+                member: {
+                  id: m.id,
+                  name: m.name,
+                  phone: m.phone,
+                  role: m.role
+                },
+                location: m.location ? {
+                  id: m.location.id,
+                  name: m.location.name
+                } : null
+              };
+            });
+
+            const userActivities = users.map((u: any) => {
+              const addedByName = u.parent?.name || 'Admin';
+              return {
+                id: 1000000 + u.id,
+                activityType: 'MEMBER',
+                title: 'Member Added',
+                description: `Member ${u.name} ${u.surname || ''} added by ${addedByName}`,
+                createdAt: u.createdAt instanceof Date ? u.createdAt.toISOString() : new Date(u.createdAt).toISOString(),
+                member: {
+                  id: 1000000 + u.id,
+                  name: u.name,
+                  phone: u.phone,
+                  role: 'MEMBER'
+                },
+                location: u.location ? {
+                  id: u.location.id,
+                  name: u.location.name
+                } : null
+              };
+            });
+
+            const combined = [...memberActivities, ...userActivities];
+            // Deduplicate by phone
+            return Array.from(new Map(combined.map(item => [item.member?.phone, item])).values());
+          })
         );
       }
 
@@ -1592,7 +1693,7 @@ export const resolvers = {
         purpose: notification.purpose,
         createdBy: notification.createdBy || emergency?.createdBy || broadcast?.createdBy || event?.createdBy || communityPost?.createdBy || memberRequest?.createdBy || null,
         locationScope,
-        responseRequired: emergency?.collectResponse ?? false,
+        responseRequired: (emergency?.collectResponse ?? false) || entityType === 'EVENT' || notification.type === 'EVENT',
         responseSummary,
         deliveryStats,
         activityHistory,
@@ -1614,7 +1715,26 @@ export const resolvers = {
           const allLocationIds = [locationId, ...(await getChildLocationIds(locationId))];
           where.locationId = { in: allLocationIds };
         }
-        if (status) where.status = status;
+        if (status) {
+          const now = new Date();
+          const oneDayFromNow = new Date(Date.now() + 24 * 60 * 60 * 1000);
+          
+          if (status === 'COMPLETED') {
+            where.OR = [
+              { status: 'COMPLETED' },
+              { date: { lt: now } }
+            ];
+            where.status = { notIn: ['CANCELLED', 'INACTIVE'] };
+          } else if (status === 'ACTIVE') {
+            where.status = 'ACTIVE';
+            where.date = { gte: now }; // active future events
+          } else if (status === 'UPCOMING') {
+            where.status = 'ACTIVE';
+            where.date = { gt: oneDayFromNow }; // upcoming events starting after 24 hours
+          } else {
+            where.status = status;
+          }
+        }
       }
       
       return (prisma as any).event.findMany({
@@ -1896,11 +2016,13 @@ export const resolvers = {
       } else if (role === 'ADMIN' || role === 'SUB_ADMIN') {
         if (!userLocId) return [];
         const childIds = await getChildLocationIds(userLocId);
-        visibleLocationIds = [userLocId, ...childIds];
+        const ancestorIds = await getAncestorLocationIds(userLocId);
+        visibleLocationIds = Array.from(new Set([...ancestorIds, ...childIds]));
       } else {
-        // Members cannot view broadcasts (or only those targeted at their exact location)
+        // Members see broadcasts targeted to their ancestor chain
         if (!userLocId) return [];
-        visibleLocationIds = [userLocId];
+        const ancestorIds = await getAncestorLocationIds(userLocId);
+        visibleLocationIds = ancestorIds;
       }
 
       const where: any = {};
@@ -2572,8 +2694,14 @@ export const resolvers = {
         throw new Error(I18nService.translate("unauthorized_recall_event", context?.language));
       }
 
-      // Delete associated responses first, then the event
+      // Delete associated responses and notifications first, then the event
       await (prisma as any).eventResponse.deleteMany({ where: { eventId: Number(id) } });
+      await (prisma as any).notification.deleteMany({
+        where: {
+          entityType: 'EVENT',
+          entityId: Number(id)
+        }
+      });
       await (prisma as any).event.delete({ where: { id: Number(id) } });
       
       return true;
@@ -2601,10 +2729,114 @@ export const resolvers = {
       if (!context.user) throw new Error('Unauthenticated');
       const broadcast = await (prisma as any).broadcast.findUnique({ where: { id: Number(id) } });
       if (!broadcast) throw new Error('Broadcast not found');
-      if (context.user.role !== 'SUPER_ADMIN' && Number(context.user.id) !== broadcast.createdById) {
+
+      // Allow if SUPER_ADMIN or creator
+      const isOwner = Number(context.user.id) === broadcast.createdById;
+      const isSuper = context.user.role === 'SUPER_ADMIN';
+
+      // Allow if Admin or Sub-Admin and request is within their location scope
+      let isWithinLocationScope = false;
+      if (context.user.locationId && (context.user.role === 'ADMIN' || context.user.role === 'SUB_ADMIN')) {
+        const childIds = await getChildLocationIds(Number(context.user.locationId));
+        const allowedLocationIds = [Number(context.user.locationId), ...childIds];
+        if (allowedLocationIds.includes(broadcast.locationId)) {
+          isWithinLocationScope = true;
+        }
+      }
+
+      if (!isOwner && !isSuper && !isWithinLocationScope) {
         throw new Error('Unauthorized');
       }
+
+      // Delete associated notifications first
+      await (prisma as any).notification.deleteMany({
+        where: {
+          entityType: 'BROADCAST',
+          entityId: Number(id)
+        }
+      });
+
       await (prisma as any).broadcast.delete({ where: { id: Number(id) } });
+      return true;
+    },
+
+    deleteBroadcast: async (_: any, { id }: any, context: any) => {
+      return resolvers.Mutation.recallBroadcast(_, { id }, context);
+    },
+
+    deleteEmergencyRequest: async (_: any, { id }: any, context: any) => {
+      if (!context?.user) throw new Error('Unauthenticated');
+      const request = await (prisma as any).emergencyRequest.findUnique({ where: { id: Number(id) } });
+      if (!request) throw new Error('Emergency request not found');
+
+      // Allow if SUPER_ADMIN, owner user (createdById), or owner member (memberId)
+      const isOwnerUser = request.createdById && Number(context.user.id) === request.createdById;
+      const isOwnerMember = request.memberId && Number(context.user.id) === request.memberId;
+      const isSuper = context.user.role === 'SUPER_ADMIN';
+
+      // Allow if Admin/Sub-Admin within location scope
+      let isWithinLocationScope = false;
+      if (context.user.locationId && (context.user.role === 'ADMIN' || context.user.role === 'SUB_ADMIN')) {
+        const childIds = await getChildLocationIds(Number(context.user.locationId));
+        const allowedLocationIds = [Number(context.user.locationId), ...childIds];
+        if (allowedLocationIds.includes(request.locationId)) {
+          isWithinLocationScope = true;
+        }
+      }
+
+      if (!isOwnerUser && !isOwnerMember && !isSuper && !isWithinLocationScope) {
+        throw new Error('Unauthorized');
+      }
+
+      // Delete associated responses and notifications first
+      await (prisma as any).emergencyResponse.deleteMany({ where: { emergencyRequestId: request.id } });
+      await (prisma as any).notification.deleteMany({
+        where: {
+          entityType: 'EMERGENCY',
+          entityId: request.id
+        }
+      });
+      // Delete the request
+      await (prisma as any).emergencyRequest.delete({ where: { id: request.id } });
+      return true;
+    },
+
+    deleteNotification: async (_: any, { id }: any, context: any) => {
+      if (!context?.user) throw new Error('Unauthenticated');
+      const notification = await (prisma as any).notification.findUnique({ where: { id: Number(id) } });
+      if (!notification) throw new Error('Notification not found');
+
+      const userRole = context.user.role;
+      const userLocId = context.user.locationId;
+
+      // Allow if SUPER_ADMIN
+      const isSuper = userRole === 'SUPER_ADMIN';
+
+      // Allow if Admin/Sub-Admin and notification matches their scope (including children)
+      let isAllowed = isSuper;
+      if (!isAllowed && userLocId && (userRole === 'ADMIN' || userRole === 'SUB_ADMIN')) {
+        const childIds = await getChildLocationIds(Number(userLocId));
+        const allowedLocationIds = [Number(userLocId), ...childIds];
+        if (allowedLocationIds.includes(notification.locationId)) {
+          isAllowed = true;
+        }
+      }
+
+      // Allow if Member and notification is within their location ancestors/descendants (scope chain)
+      if (!isAllowed && userLocId && userRole === 'MEMBER') {
+        const ancestors = await getAncestorLocationIds(Number(userLocId));
+        const children = await getChildLocationIds(Number(userLocId));
+        const allowedLocationIds = [Number(userLocId), ...ancestors, ...children];
+        if (allowedLocationIds.includes(notification.locationId)) {
+          isAllowed = true;
+        }
+      }
+
+      if (!isAllowed) {
+        throw new Error('Unauthorized');
+      }
+
+      await (prisma as any).notification.delete({ where: { id: Number(id) } });
       return true;
     },
 
@@ -2656,12 +2888,27 @@ export const resolvers = {
         finalMemberId = member.id;
       }
 
-      return (prisma as any).eventResponse.upsert({
+      const response = await (prisma as any).eventResponse.upsert({
         where: { eventId_memberId: { eventId, memberId: finalMemberId } },
         update: { status },
         create: { eventId, memberId: finalMemberId, status },
         include: { member: true }
       });
+
+      // Emit socket.io real-time event for counts synchronization
+      const io = (global as any).io;
+      if (io) {
+        const updatedEvent = await (prisma as any).event.findUnique({
+          where: { id: eventId },
+          include: { location: true, createdBy: true }
+        });
+        if (updatedEvent) {
+          io.emit('eventResponseUpdated', { eventId, response });
+          io.emit('event', updatedEvent);
+        }
+      }
+
+      return response;
     },
 
     respondToEmergency: async (_: any, { emergencyRequestId, status, note }: any, context: any) => {
@@ -2700,7 +2947,7 @@ export const resolvers = {
       
       const normalizedStatus = normalizeEmergencyResponseStatus(status);
 
-      return (prisma as any).emergencyResponse.upsert({
+      const response = await (prisma as any).emergencyResponse.upsert({
         where: {
           emergencyRequestId_memberId: {
             emergencyRequestId: Number(emergencyRequestId),
@@ -2716,9 +2963,24 @@ export const resolvers = {
         },
         include: { member: true }
       });
+
+      // Emit socket.io real-time event for counts synchronization
+      const io = (global as any).io;
+      if (io) {
+        const updatedEmergency = await (prisma as any).emergencyRequest.findUnique({
+          where: { id: Number(emergencyRequestId) },
+          include: { location: true, createdBy: true, member: true }
+        });
+        if (updatedEmergency) {
+          io.emit('emergencyResponseUpdated', { emergencyRequestId: Number(emergencyRequestId), response });
+          io.emit('emergencyRequest', updatedEmergency);
+        }
+      }
+
+      return response;
     },
 
-    createEmergencyRequest: async (_: any, { title, description, type, locationId, audience, contactName, contactPhone, expiryDate, collectResponse }: any, context: any) => {
+    createEmergencyRequest: async (_: any, { title, description, type, locationId, audience, contactName, contactPhone, expiryDate, collectResponse, bloodGroup, unitsRequired, hospitalName, patientCondition, disasterType, affectedArea, requiredSupport, volunteerType }: any, context: any) => {
       if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", context?.language));
       const userId = Number(context.user.id);
       const userRole = context.user.role;
@@ -2753,6 +3015,14 @@ export const resolvers = {
           contactPhone,
           expiryDate: expiryDateTime,
           collectResponse: collectResponse !== undefined ? collectResponse : true,
+          bloodGroup,
+          unitsRequired,
+          hospitalName,
+          patientCondition,
+          disasterType,
+          affectedArea,
+          requiredSupport,
+          volunteerType,
           createdById,
           memberId
         },
@@ -2797,12 +3067,49 @@ export const resolvers = {
       return request;
     },
 
-    updateRequestStatus: async (_: any, { id, status }: any) => {
-      return (prisma as any).emergencyRequest.update({
-        where: { id },
+    updateRequestStatus: async (_: any, { id, status }: any, context: any) => {
+      if (!context?.user) throw new Error('Unauthenticated');
+      const request = await (prisma as any).emergencyRequest.findUnique({ where: { id: Number(id) } });
+      if (!request) throw new Error('Emergency request not found');
+
+      // Allow if SUPER_ADMIN, owner user (createdById), or owner member (memberId)
+      const isOwnerUser = request.createdById && Number(context.user.id) === request.createdById;
+      const isOwnerMember = request.memberId && Number(context.user.id) === request.memberId;
+      const isSuper = context.user.role === 'SUPER_ADMIN';
+
+      // Allow if Admin/Sub-Admin within location scope (administrative chain)
+      let isWithinLocationScope = false;
+      if (context.user.locationId && (context.user.role === 'ADMIN' || context.user.role === 'SUB_ADMIN')) {
+        const childIds = await getChildLocationIds(Number(context.user.locationId));
+        const allowedLocationIds = [Number(context.user.locationId), ...childIds];
+        if (allowedLocationIds.includes(request.locationId)) {
+          isWithinLocationScope = true;
+        }
+      }
+
+      if (!isOwnerUser && !isOwnerMember && !isSuper && !isWithinLocationScope) {
+        throw new Error('Unauthorized to update this request');
+      }
+
+      const updated = await (prisma as any).emergencyRequest.update({
+        where: { id: Number(id) },
         data: { status },
         include: { location: true, createdBy: true, member: true }
       });
+
+      // Emit real-time Socket.IO updates
+      const io = (global as any).io;
+      if (io) {
+        io.emit('emergencyRequestUpdated', updated);
+        io.emit('emergencyRequest', updated);
+      }
+
+      return updated;
+    },
+
+    completeEmergencyRequest: async (_: any, { id }: any, context: any) => {
+      await resolvers.Mutation.updateRequestStatus(_, { id, status: 'COMPLETED' }, context);
+      return true;
     },
 
     reviewEmergencyRequest: async (_: any, { id, action, rejectReason }: any, context: any) => {
@@ -2863,7 +3170,11 @@ export const resolvers = {
         if (action === 'FORWARD') {
           const updated = await (prisma as any).emergencyRequest.update({
             where: { id: request.id },
-            data: { status: 'PENDING_ADMIN' },
+            data: { 
+              status: 'PENDING_ADMIN',
+              forwardedBy: 'Sub Admin',
+              forwardedAt: new Date()
+            },
             include: { location: true, createdBy: true, member: true }
           });
 
@@ -2920,7 +3231,11 @@ export const resolvers = {
         if (action === 'FORWARD') {
           const updated = await (prisma as any).emergencyRequest.update({
             where: { id: request.id },
-            data: { status: 'PENDING_SUPER_ADMIN' },
+            data: { 
+              status: 'PENDING_SUPER_ADMIN',
+              forwardedBy: 'Admin',
+              forwardedAt: new Date()
+            },
             include: { location: true, createdBy: true, member: true }
           });
 
@@ -3984,6 +4299,26 @@ export const resolvers = {
       const creator = await (prisma as any).user.findUnique({ where: { id: parent.createdById } });
       return creator ? creator.name : "Self";
     },
+    district: async (parent: any) => {
+      if (parent.district) return parent.district;
+      const fields = await getLocationFields(parent.locationId);
+      return fields.district;
+    },
+    constituency: async (parent: any) => {
+      if (parent.constituency) return parent.constituency;
+      const fields = await getLocationFields(parent.locationId);
+      return fields.constituency;
+    },
+    area: async (parent: any) => {
+      if (parent.area) return parent.area;
+      const fields = await getLocationFields(parent.locationId);
+      return fields.area;
+    },
+    street: async (parent: any) => {
+      if (parent.street) return parent.street;
+      const fields = await getLocationFields(parent.locationId);
+      return fields.street;
+    },
   },
 
   User: {
@@ -3995,7 +4330,27 @@ export const resolvers = {
     createdAt: (parent: any) => {
       if (!parent.createdAt) return null;
       return parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString();
-    }
+    },
+    district: async (parent: any) => {
+      if (parent.district) return parent.district;
+      const fields = await getLocationFields(parent.locationId);
+      return fields.district;
+    },
+    constituency: async (parent: any) => {
+      if (parent.constituency) return parent.constituency;
+      const fields = await getLocationFields(parent.locationId);
+      return fields.constituency;
+    },
+    area: async (parent: any) => {
+      if (parent.area) return parent.area;
+      const fields = await getLocationFields(parent.locationId);
+      return fields.area;
+    },
+    street: async (parent: any) => {
+      if (parent.street) return parent.street;
+      const fields = await getLocationFields(parent.locationId);
+      return fields.street;
+    },
   },
 
   Location: {
@@ -4014,6 +4369,21 @@ export const resolvers = {
   },
 
   Event: {
+    status: (parent: any) => {
+      if (parent.status === 'CANCELLED' || parent.status === 'INACTIVE') {
+        return parent.status;
+      }
+      const eventDate = parent.date instanceof Date ? parent.date : new Date(parent.date);
+      const now = new Date();
+      if (eventDate < now) {
+        return 'COMPLETED';
+      }
+      const diffMs = eventDate.getTime() - now.getTime();
+      if (diffMs <= 24 * 60 * 60 * 1000) {
+        return 'ACTIVE';
+      }
+      return 'UPCOMING';
+    },
     date: (parent: any) => {
       if (!parent.date) return null;
       return parent.date instanceof Date ? parent.date.toISOString() : new Date(parent.date).toISOString();
@@ -4022,8 +4392,50 @@ export const resolvers = {
       if (!parent.createdAt) return null;
       return parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString();
     },
-    responses: (parent: any) => (prisma as any).eventResponse.findMany({ where: { eventId: parent.id }, include: { member: true } }),
-    stats: async (parent: any) => {
+    responses: async (parent: any, _: any, context: any) => {
+      const user = context?.user;
+      if (!user) return [];
+
+      const isSuper = user.role === 'SUPER_ADMIN';
+      const isCreator = (user.role === 'ADMIN' || user.role === 'SUB_ADMIN') && parent.createdById === Number(user.id);
+
+      if (isSuper || isCreator) {
+        return (prisma as any).eventResponse.findMany({ where: { eventId: parent.id }, include: { member: true } });
+      }
+
+      // Normal member or non-creator admin: can only see their own response
+      if (user.type === 'member') {
+        return (prisma as any).eventResponse.findMany({
+          where: { eventId: parent.id, memberId: Number(user.id) },
+          include: { member: true }
+        });
+      } else {
+        const userRec = await (prisma as any).user.findUnique({ where: { id: Number(user.id) } });
+        if (userRec) {
+          const member = await (prisma as any).member.findUnique({ where: { phone: userRec.phone } });
+          if (member) {
+            return (prisma as any).eventResponse.findMany({
+              where: { eventId: parent.id, memberId: member.id },
+              include: { member: true }
+            });
+          }
+        }
+      }
+      return [];
+    },
+    stats: async (parent: any, _: any, context: any) => {
+      const user = context?.user;
+      if (!user) {
+        return { going: 0, maybe: 0, notGoing: 0 };
+      }
+
+      const isSuper = user.role === 'SUPER_ADMIN';
+      const isCreator = (user.role === 'ADMIN' || user.role === 'SUB_ADMIN') && parent.createdById === Number(user.id);
+
+      if (!isSuper && !isCreator) {
+        return { going: 0, maybe: 0, notGoing: 0 };
+      }
+
       const responses = await (prisma as any).eventResponse.findMany({ where: { eventId: parent.id } });
       return {
         going: responses.filter((r: any) => r.status === 'GOING').length,
@@ -4054,11 +4466,44 @@ export const resolvers = {
       if (!parent.expiryDate) return null;
       return parent.expiryDate instanceof Date ? parent.expiryDate.toISOString() : new Date(parent.expiryDate).toISOString();
     },
+    forwardedAt: (parent: any) => {
+      if (!parent.forwardedAt) return null;
+      return parent.forwardedAt instanceof Date ? parent.forwardedAt.toISOString() : new Date(parent.forwardedAt).toISOString();
+    },
     member: (parent: any) => parent.memberId ? (prisma as any).member.findUnique({ where: { id: parent.memberId } }) : null,
     createdBy: (parent: any) => parent.createdById ? (prisma as any).user.findUnique({ where: { id: parent.createdById } }) : null,
     location: (parent: any) => (prisma as any).location.findUnique({ where: { id: parent.locationId } }),
-    responses: (parent: any) => (prisma as any).emergencyResponse.findMany({ where: { emergencyRequestId: parent.id }, include: { member: true } }),
-    stats: async (parent: any) => {
+    responses: (parent: any, _: any, context: any) => {
+      const user = context?.user;
+      if (user?.role === 'MEMBER') {
+        return (prisma as any).emergencyResponse.findMany({
+          where: { 
+            emergencyRequestId: parent.id, 
+            memberId: Number(user.id) 
+          },
+          include: { member: true }
+        });
+      }
+      return (prisma as any).emergencyResponse.findMany({ 
+        where: { emergencyRequestId: parent.id }, 
+        include: { member: true } 
+      });
+    },
+    stats: async (parent: any, _: any, context: any) => {
+      const user = context?.user;
+      if (user?.role === 'MEMBER') {
+        return {
+          total: 0,
+          going: 0,
+          maybe: 0,
+          notGoing: 0,
+          coming: 0,
+          onTheWay: 0,
+          reached: 0,
+          unable: 0,
+          contactRequested: 0
+        };
+      }
       const responses = await (prisma as any).emergencyResponse.findMany({ where: { emergencyRequestId: parent.id } });
       return buildEmergencyResponseStats(responses);
     },
@@ -4147,6 +4592,22 @@ export const resolvers = {
       return parent.updatedAt instanceof Date ? parent.updatedAt.toISOString() : new Date(parent.updatedAt).toISOString();
     },
     isActive: (parent: any) => parent.isActive ?? true,
+    location: async (parent: any) => {
+      if (parent.location) return parent.location;
+      return (prisma as any).location.findUnique({ where: { id: parent.locationId } });
+    },
+    createdBy: async (parent: any) => {
+      if (parent.createdBy) return parent.createdBy;
+      return (prisma as any).user.findUnique({ where: { id: parent.createdById } });
+    },
+    recipientCount: async (parent: any) => {
+      if (parent.recipientCount !== undefined) return parent.recipientCount;
+      const targetIds = await getChildLocationIds(parent.locationId);
+      const allIds = [parent.locationId, ...targetIds];
+      return (prisma as any).member.count({
+        where: { locationId: { in: allIds }, isActive: true },
+      });
+    }
   },
 
   Comment: {

@@ -28,6 +28,7 @@ export const typeDefs = gql`
     INACTIVE
     COMPLETED
     CANCELLED
+    UPCOMING
   }
 
   enum RequestStatus {
@@ -205,6 +206,16 @@ export const typeDefs = gql`
     contactPhone: String
     expiryDate: String
     collectResponse: Boolean!
+    bloodGroup: String
+    unitsRequired: String
+    hospitalName: String
+    patientCondition: String
+    disasterType: String
+    affectedArea: String
+    requiredSupport: String
+    volunteerType: String
+    forwardedBy: String
+    forwardedAt: String
     createdAt: String!
     responses: [EmergencyResponse!]!
     stats: EmergencyResponseStats!
@@ -572,6 +583,10 @@ export const typeDefs = gql`
     recallEvent(id: Int!): Boolean!
     recallCampaign(id: Int!): Boolean!
     recallBroadcast(id: Int!): Boolean!
+    deleteBroadcast(id: Int!): Boolean!
+    deleteEmergencyRequest(id: Int!): Boolean!
+    completeEmergencyRequest(id: Int!): Boolean!
+    deleteNotification(id: Int!): Boolean!
     respondToEvent(
       eventId: Int!
       memberId: Int!
@@ -592,6 +607,14 @@ export const typeDefs = gql`
       contactPhone: String
       expiryDate: String
       collectResponse: Boolean
+      bloodGroup: String
+      unitsRequired: String
+      hospitalName: String
+      patientCondition: String
+      disasterType: String
+      affectedArea: String
+      requiredSupport: String
+      volunteerType: String
     ): EmergencyRequest!
     updateRequestStatus(
       id: Int!

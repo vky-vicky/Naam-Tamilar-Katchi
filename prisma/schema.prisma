@@ -220,13 +220,23 @@ model EmergencyRequest {
   createdById     Int?
   createdBy       User?               @relation(fields: [createdById], references: [id])
   audience        String? // Ex: "ALL_CAPTAINS", "STREET_MEMBERS"
-  contactName     String?
-  contactPhone    String?
-  expiryDate      DateTime?
-  collectResponse Boolean             @default(true)
-  createdAt       DateTime            @default(now())
-  updatedAt       DateTime            @updatedAt
-  responses       EmergencyResponse[]
+  contactName      String?
+  contactPhone     String?
+  expiryDate       DateTime?
+  collectResponse  Boolean             @default(true)
+  bloodGroup       String?
+  unitsRequired    String?
+  hospitalName     String?
+  patientCondition String?
+  disasterType     String?
+  affectedArea     String?
+  requiredSupport  String?
+  volunteerType    String?
+  forwardedBy      String?
+  forwardedAt      DateTime?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+  responses        EmergencyResponse[]
 }
 
 model EmergencyResponse {
