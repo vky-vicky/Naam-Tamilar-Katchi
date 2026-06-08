@@ -69,7 +69,7 @@ async function startServer() {
   app.use(
     '/graphql',
     cors<cors.CorsRequest>(),
-    express.json(),
+    express.json({ limit: '50mb' }),
     expressMiddleware(server, {
       context: async ({ req }) => {
         const language = req.headers['accept-language'] || 'en';

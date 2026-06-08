@@ -3116,7 +3116,15 @@ export const resolvers = {
       let createdById = null;
       let memberId = null;
       const isMember = userRole === 'MEMBER';
-      const initialStatus = isMember ? 'PENDING_SUB_ADMIN' : 'PENDING';
+      
+      let initialStatus = 'PENDING_SUB_ADMIN';
+      if (userRole === 'SUPER_ADMIN') {
+        initialStatus = 'APPROVED_STATE';
+      } else if (userRole === 'ADMIN') {
+        initialStatus = 'APPROVED_ADMIN';
+      } else if (userRole === 'SUB_ADMIN') {
+        initialStatus = 'APPROVED_SUB_ADMIN';
+      }
 
       if (isMember) {
         memberId = userId;
@@ -3265,7 +3273,7 @@ export const resolvers = {
         return updatedRequest;
       }
 
-      if (currentStatus === 'PENDING_SUB_ADMIN') {
+      if (currentStatus === 'PENDING_SUB_ADMIN' || currentStatus === 'PENDING') {
         if (userRole !== 'SUB_ADMIN' && userRole !== 'ADMIN' && userRole !== 'SUPER_ADMIN') {
           throw new Error("Only Sub Admin or above can review this request");
         }
