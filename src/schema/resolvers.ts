@@ -569,6 +569,7 @@ function userToMemberShape(user: any) {
 }
 
 const ADMIN_ROLES = ['SUPER_ADMIN', 'ADMIN', 'SUB_ADMIN'];
+const NAME_REGEX = /^[a-zA-Z\u0B80-\u0BFF\s]+$/;
 
 function isCommunityAdmin(role: string | undefined) {
   return !!role && ADMIN_ROLES.includes(role);
@@ -2180,6 +2181,19 @@ export const resolvers = {
     createUser: safeResolver(async (_: any, args: any, context: any) => {
       const { professionName, streetId, areaId, talukId, districtId, locationId, ...rest } = args;
 
+      if (!rest.name || !NAME_REGEX.test(rest.name)) {
+        throw new Error("invalid_name_format");
+      }
+      if (rest.surname && rest.surname.trim() !== '' && !NAME_REGEX.test(rest.surname)) {
+        throw new Error("invalid_surname_format");
+      }
+      if (!rest.bloodGroup || String(rest.bloodGroup).trim() === '' || String(rest.bloodGroup).trim().toLowerCase() === 'select') {
+        throw new Error("please_select_blood_group");
+      }
+      if (!professionName || String(professionName).trim() === '' || String(professionName).trim().toLowerCase() === 'select') {
+        throw new Error("please_select_profession");
+      }
+
       // 1. Creator Hierarchy logic
       let creatorId = context?.user?.id;
       if (!creatorId) {
@@ -2246,6 +2260,19 @@ export const resolvers = {
 
     addMember: safeResolver(async (_: any, args: any, context: any) => {
       const { professionName, password, streetId, areaId, talukId, districtId, locationId, ...rest } = args;
+
+      if (!rest.name || !NAME_REGEX.test(rest.name)) {
+        throw new Error("invalid_name_format");
+      }
+      if (rest.surname && rest.surname.trim() !== '' && !NAME_REGEX.test(rest.surname)) {
+        throw new Error("invalid_surname_format");
+      }
+      if (!rest.bloodGroup || String(rest.bloodGroup).trim() === '' || String(rest.bloodGroup).trim().toLowerCase() === 'select') {
+        throw new Error("please_select_blood_group");
+      }
+      if (!professionName || String(professionName).trim() === '' || String(professionName).trim().toLowerCase() === 'select') {
+        throw new Error("please_select_profession");
+      }
 
       // 1. Creator Fallback for testing
       let creatorId = context?.user?.id;

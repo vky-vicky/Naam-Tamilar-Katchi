@@ -84,6 +84,22 @@ const translations = {
   invalid_referenced_data: {
     en: 'Invalid referenced data (e.g. location or profession does not exist).',
     ta: 'தவறான குறிப்புத் தரவு (எ.கா. பகுதி அல்லது தொழில் இல்லை).'
+  },
+  please_select_blood_group: {
+    en: 'Please select Blood Group',
+    ta: 'தயவுசெய்து குருதிப் பிரிவைத் தேர்ந்தெடுக்கவும்'
+  },
+  please_select_profession: {
+    en: 'Please select Profession',
+    ta: 'தயவுசெய்து தொழிலைத் தேர்ந்தெடுக்கவும்'
+  },
+  invalid_name_format: {
+    en: 'Full Name must contain only English and Tamil letters with spaces.',
+    ta: 'முழு பெயர் ஆங்கிலம் மற்றும் தமிழ் எழுத்துக்கள் மற்றும் இடைவெளிகளை மட்டுமே கொண்டிருக்க வேண்டும்.'
+  },
+  invalid_surname_format: {
+    en: 'Surname must contain only English and Tamil letters with spaces.',
+    ta: 'குடும்ப பெயர் (இனிஷியல்/இண்டிகேஷன்) ஆங்கிலம் மற்றும் தமிழ் எழுத்துக்கள் மற்றும் இடைவெளிகளை மட்டுமே கொண்டிருக்க வேண்டும்.'
   }
 };
 
