@@ -401,7 +401,9 @@ async function getBroadcastListForContext({ locationId, scope, broadcastId, isAc
   if (broadcastId) {
     where.id = Number(broadcastId);
   } else if (locationId !== undefined && locationId !== null) {
-    const selectedLocationIds = [Number(locationId), ...(await getChildLocationIds(Number(locationId)))];
+    const ancestorIds = await getAncestorLocationIds(Number(locationId));
+    const childIds = await getChildLocationIds(Number(locationId));
+    const selectedLocationIds = [...ancestorIds, Number(locationId), ...childIds];
     if (visibleLocationIds.length > 0) {
       where.locationId = { in: selectedLocationIds.filter(id => visibleLocationIds.includes(id)) };
     } else {
@@ -1564,9 +1566,20 @@ export const resolvers = {
       const user = context?.user;
 
       if (communityId) {
-        where.communityId = communityId;
+        const community = await (prisma as any).community.findUnique({ where: { id: communityId } });
+        let allCommunityIds = [communityId];
+        if (community && community.locationId) {
+          const ancestorLocIds = await getAncestorLocationIds(community.locationId);
+          const childLocIds = await getChildLocationIds(community.locationId);
+          const allLocIds = [...ancestorLocIds, community.locationId, ...childLocIds];
+          const relatedCommunities = await (prisma as any).community.findMany({ where: { locationId: { in: allLocIds } } });
+          allCommunityIds = relatedCommunities.map((c: any) => c.id);
+        }
+        where.communityId = { in: allCommunityIds };
       } else if (locationId) {
-        const allLocationIds = [locationId, ...(await getChildLocationIds(locationId))];
+        const ancestorIds = await getAncestorLocationIds(locationId);
+        const childIds = await getChildLocationIds(locationId);
+        const allLocationIds = [...ancestorIds, locationId, ...childIds];
         where.locationId = { in: allLocationIds };
       } else if (user) {
         if (user.role === 'MEMBER') {
@@ -1793,7 +1806,9 @@ export const resolvers = {
         where.id = eventId;
       } else {
         if (locationId) {
-          const allLocationIds = [locationId, ...(await getChildLocationIds(locationId))];
+          const ancestorIds = await getAncestorLocationIds(locationId);
+          const childIds = await getChildLocationIds(locationId);
+          const allLocationIds = [...ancestorIds, locationId, ...childIds];
           where.locationId = { in: allLocationIds };
         }
         if (status) {
@@ -1828,7 +1843,9 @@ export const resolvers = {
     getEmergencyRequestList: async (_: any, { locationId, status }: any) => {
       const where: any = {};
       if (locationId) {
-        const allLocationIds = [locationId, ...(await getChildLocationIds(locationId))];
+        const ancestorIds = await getAncestorLocationIds(locationId);
+        const childIds = await getChildLocationIds(locationId);
+        const allLocationIds = [...ancestorIds, locationId, ...childIds];
         where.locationId = { in: allLocationIds };
       }
       if (status) where.status = status;
@@ -1888,7 +1905,16 @@ export const resolvers = {
     },
 
     getCommunityPosts: async (_: any, { communityId, category }: any) => {
-      const where: any = { communityId };
+      const community = await (prisma as any).community.findUnique({ where: { id: communityId } });
+      let allCommunityIds = [communityId];
+      if (community && community.locationId) {
+        const ancestorLocIds = await getAncestorLocationIds(community.locationId);
+        const childLocIds = await getChildLocationIds(community.locationId);
+        const allLocIds = [...ancestorLocIds, community.locationId, ...childLocIds];
+        const relatedCommunities = await (prisma as any).community.findMany({ where: { locationId: { in: allLocIds } } });
+        allCommunityIds = relatedCommunities.map((c: any) => c.id);
+      }
+      const where: any = { communityId: { in: allCommunityIds } };
       if (category) {
         where.category = category;
       }
@@ -2108,7 +2134,9 @@ export const resolvers = {
 
       const where: any = {};
       if (locationId !== undefined) {
-        const selectedLocationIds = [locationId, ...(await getChildLocationIds(locationId))];
+        const ancestorIds = await getAncestorLocationIds(locationId);
+        const childIds = await getChildLocationIds(locationId);
+        const selectedLocationIds = [...ancestorIds, locationId, ...childIds];
         if (visibleLocationIds.length > 0) {
           where.locationId = { in: selectedLocationIds.filter(id => visibleLocationIds.includes(id)) };
         } else {
@@ -3260,8 +3288,9 @@ export const resolvers = {
 
       const userRole = context.user.role;
       const currentStatus = request.status;
+      const normalizedAction = action.toUpperCase();
 
-      if (action === 'REJECT') {
+      if (normalizedAction === 'REJECT') {
         const updatedRequest = await (prisma as any).emergencyRequest.update({
           where: { id: request.id },
           data: { 
@@ -3278,7 +3307,7 @@ export const resolvers = {
           throw new Error("Only Sub Admin or above can review this request");
         }
 
-        if (action === 'ACCEPT') {
+        if (normalizedAction === 'ACCEPT' || normalizedAction === 'APPROVE') {
           const updated = await (prisma as any).emergencyRequest.update({
             where: { id: request.id },
             data: { status: 'APPROVED_SUB_ADMIN' },
@@ -3303,7 +3332,7 @@ export const resolvers = {
           return updated;
         }
 
-        if (action === 'FORWARD') {
+        if (normalizedAction === 'FORWARD') {
           const updated = await (prisma as any).emergencyRequest.update({
             where: { id: request.id },
             data: { 
@@ -3336,7 +3365,7 @@ export const resolvers = {
           throw new Error("Only Admin or above can review this request");
         }
 
-        if (action === 'ACCEPT') {
+        if (normalizedAction === 'ACCEPT' || normalizedAction === 'APPROVE') {
           const talukId = await findParentLocationOfType(request.locationId, 'TALUK');
           const targetLocationId = talukId || request.locationId;
 
@@ -3364,7 +3393,7 @@ export const resolvers = {
           return updated;
         }
 
-        if (action === 'FORWARD') {
+        if (normalizedAction === 'FORWARD') {
           const updated = await (prisma as any).emergencyRequest.update({
             where: { id: request.id },
             data: { 
@@ -3397,7 +3426,7 @@ export const resolvers = {
           throw new Error("Only Super Admin can review this request");
         }
 
-        if (action === 'ACCEPT') {
+        if (normalizedAction === 'ACCEPT' || normalizedAction === 'APPROVE') {
           const stateId = await findParentLocationOfType(request.locationId, 'STATE');
           const targetLocationId = stateId || request.locationId;
 
@@ -3426,7 +3455,7 @@ export const resolvers = {
         }
       }
 
-      throw new Error("Invalid review action or request status");
+      throw new Error(`Invalid review action ('${action}') or request status ('${currentStatus}')`);
     },
 
     createPost: async (_: any, args: any, context: any) => {
