@@ -268,8 +268,10 @@ async function sendSystemNotification({
 }
 
 function toIsoString(value: any) {
-  if (!value) return null;
-  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+  if (value === null || value === undefined) return null;
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return null;
+  return d.toISOString();
 }
 
 function parseJsonInput(value: any) {
@@ -575,6 +577,20 @@ function userToMemberShape(user: any) {
 const ADMIN_ROLES = ['SUPER_ADMIN', 'ADMIN', 'SUB_ADMIN'];
 const NAME_REGEX = /^[a-zA-Z\u0B80-\u0BFF\s]+$/;
 
+function translateLocationName(name: string | null | undefined, lang: string): string | null {
+  if (!name) return null;
+  if (lang.startsWith('ta')) {
+    const translations: Record<string, string> = {
+      'Tamil Nadu': 'தமிழ்நாடு',
+      'Nagapattinam': 'நாகப்பட்டினம்',
+      'Vedaranyam': 'வேதாரண்யம்',
+      'Pushpavanam': 'புஷ்பவனம்'
+    };
+    return translations[name] || name;
+  }
+  return name;
+}
+
 // Normalize blood group: accepts both 'O+' and 'O_POSITIVE' formats
 function normalizeBloodGroup(value: string | null | undefined): string | null {
   if (!value || String(value).trim() === '' || String(value).trim().toLowerCase() === 'select') return null;
@@ -595,8 +611,9 @@ function normalizeBloodGroup(value: string | null | undefined): string | null {
 }
 
 function toIST(dateInput: any) {
-  if (!dateInput) return new Date().toISOString();
+  if (dateInput === null || dateInput === undefined) return null;
   const d = new Date(dateInput);
+  if (isNaN(d.getTime())) return null;
   const istOffset = 5.5 * 60 * 60 * 1000;
   const istTime = new Date(d.getTime() + istOffset);
   return istTime.toISOString().replace('Z', '+05:30');
@@ -737,13 +754,13 @@ async function formatCommunityMessage(message: any) {
     reactions: await Promise.all(reactions.map(async (reaction: any) => ({
       ...reaction,
       reactorName: await getCommunityActorName(reaction.reactorId, reaction.reactorType),
-      createdAt: reaction.createdAt instanceof Date ? reaction.createdAt.toISOString() : new Date(reaction.createdAt).toISOString()
+      createdAt: toIsoString(reaction.createdAt)
     }))),
     readByCount,
     metadata: message.metadata ? (typeof message.metadata === 'string' ? message.metadata : JSON.stringify(message.metadata)) : null,
-    editedAt: message.editedAt ? (message.editedAt instanceof Date ? message.editedAt.toISOString() : new Date(message.editedAt).toISOString()) : null,
-    deletedAt: message.deletedAt ? (message.deletedAt instanceof Date ? message.deletedAt.toISOString() : new Date(message.deletedAt).toISOString()) : null,
-    createdAt: message.createdAt instanceof Date ? message.createdAt.toISOString() : new Date(message.createdAt).toISOString()
+    editedAt: toIsoString(message.editedAt),
+    deletedAt: toIsoString(message.deletedAt),
+    createdAt: toIsoString(message.createdAt)
   };
 }
 
@@ -1815,9 +1832,10 @@ export const resolvers = {
           const now = new Date();
           const oneDayFromNow = new Date(Date.now() + 24 * 60 * 60 * 1000);
           
-          if (status === 'COMPLETED') {
+          if (status === 'COMPLETED' || status === 'EXPIRED') {
             where.OR = [
               { status: 'COMPLETED' },
+              { status: 'EXPIRED' },
               { date: { lt: now } }
             ];
             where.status = { notIn: ['CANCELLED', 'INACTIVE'] };
@@ -1898,7 +1916,7 @@ export const resolvers = {
         results.push({
           ...community,
           memberCount,
-          createdAt: community.createdAt.toISOString()
+          createdAt: toIsoString(community.createdAt)
         });
       }
       return results;
@@ -1931,7 +1949,7 @@ export const resolvers = {
       });
       return posts.map((p: any) => ({
         ...p,
-        createdAt: p.createdAt.toISOString()
+        createdAt: toIsoString(p.createdAt)
       }));
     },
 
@@ -2210,9 +2228,7 @@ export const resolvers = {
 
       return pending.map((m: any) => ({
         ...m,
-        createdAt: m.createdAt instanceof Date
-          ? m.createdAt.toISOString()
-          : new Date(m.createdAt).toISOString(),
+        createdAt: toIsoString(m.createdAt),
       }));
     },
 
@@ -3816,22 +3832,31 @@ export const resolvers = {
       return {
         ...community,
         memberCount: 0,
-        createdAt: community.createdAt.toISOString()
+        createdAt: toIsoString(community.createdAt)
       };
     },
 
-    joinCommunity: async (_: any, { communityId, memberId }: any) => {
+    joinCommunity: async (_: any, { communityId, memberId }: any, context: any) => {
+      // Auto-detect memberId from context if not provided
+      let resolvedMemberId = memberId;
+      if (!resolvedMemberId && context?.user) {
+        resolvedMemberId = Number(context.user.id);
+      }
+      if (!resolvedMemberId) {
+        throw new Error('Member ID is required to join community');
+      }
+
       await (prisma as any).communityMember.upsert({
         where: {
           communityId_memberId: {
             communityId,
-            memberId
+            memberId: resolvedMemberId
           }
         },
         update: {},
         create: {
           communityId,
-          memberId
+          memberId: resolvedMemberId
         }
       });
       return true;
@@ -3915,7 +3940,7 @@ export const resolvers = {
 
       return {
         ...post,
-        createdAt: post.createdAt.toISOString(),
+        createdAt: toIsoString(post.createdAt),
         likes: 0,
         comments: []
       };
@@ -3936,7 +3961,7 @@ export const resolvers = {
         });
         return {
           ...post,
-          createdAt: post.createdAt.toISOString()
+          createdAt: toIsoString(post.createdAt)
         };
       } catch (err) {
         // Fallback for regular posts when the mobile app calls likeCommunityPost
@@ -3960,8 +3985,8 @@ export const resolvers = {
             createdById: 1,
             likes: updatedRegularPost.likes,
             comments: [],
-            createdAt: updatedRegularPost.createdAt.toISOString(),
-            updatedAt: updatedRegularPost.createdAt.toISOString()
+            createdAt: toIsoString(updatedRegularPost.createdAt),
+            updatedAt: toIsoString(updatedRegularPost.createdAt)
           };
         }
         throw err;
@@ -3988,7 +4013,7 @@ export const resolvers = {
 
       return {
         ...comment,
-        createdAt: comment.createdAt.toISOString()
+        createdAt: toIsoString(comment.createdAt)
       };
     },
 
@@ -4255,7 +4280,7 @@ export const resolvers = {
       return {
         ...community,
         memberCount: await (prisma as any).communityMember.count({ where: { communityId: Number(communityId) } }),
-        createdAt: community.createdAt.toISOString()
+        createdAt: toIsoString(community.createdAt)
       };
     },
 
@@ -4435,14 +4460,30 @@ export const resolvers = {
   },
 
   Member: {
-    createdAt: (parent: any) => {
-      if (!parent.createdAt) return null;
-      return parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString();
-    },
-    profession: async (parent: any) => {
-      if (!parent.professionId) return null;
-      const prof = await (prisma as any).profession.findUnique({ where: { id: parent.professionId } });
-      return prof?.name || null;
+    createdAt: (parent: any) => toIsoString(parent.createdAt),
+    profession: async (parent: any, _: any, context: any) => {
+      let name = null;
+      if (parent.professionId) {
+        const prof = await (prisma as any).profession.findUnique({ where: { id: parent.professionId } });
+        name = prof?.name || null;
+      } else if (parent.profession) {
+        name = parent.profession;
+      }
+
+      if (!name) return null;
+
+      const lang = context?.language || 'en';
+      if (lang.startsWith('ta')) {
+        const translations: Record<string, string> = {
+          'Doctor': 'மருத்துவர்',
+          'Lawyer': 'வழக்கறிஞர்',
+          'Farmer': 'விவசாயி',
+          'Engineer': 'பொறியாளர்',
+          'Student': 'மாணவர்'
+        };
+        return translations[name] || name;
+      }
+      return name;
     },
     activityHistory: async (parent: any) => {
       const [events, requests] = await Promise.all([
@@ -4464,25 +4505,21 @@ export const resolvers = {
       const creator = await (prisma as any).user.findUnique({ where: { id: parent.createdById } });
       return creator ? creator.name : "Self";
     },
-    district: async (parent: any) => {
-      if (parent.district) return parent.district;
-      const fields = await getLocationFields(parent.locationId);
-      return fields.district;
+    district: async (parent: any, _: any, context: any) => {
+      const name = parent.district || (await getLocationFields(parent.locationId)).district;
+      return translateLocationName(name, context?.language || 'en');
     },
-    constituency: async (parent: any) => {
-      if (parent.constituency) return parent.constituency;
-      const fields = await getLocationFields(parent.locationId);
-      return fields.constituency;
+    constituency: async (parent: any, _: any, context: any) => {
+      const name = parent.constituency || (await getLocationFields(parent.locationId)).constituency;
+      return translateLocationName(name, context?.language || 'en');
     },
-    area: async (parent: any) => {
-      if (parent.area) return parent.area;
-      const fields = await getLocationFields(parent.locationId);
-      return fields.area;
+    area: async (parent: any, _: any, context: any) => {
+      const name = parent.area || (await getLocationFields(parent.locationId)).area;
+      return translateLocationName(name, context?.language || 'en');
     },
-    street: async (parent: any) => {
-      if (parent.street) return parent.street;
-      const fields = await getLocationFields(parent.locationId);
-      return fields.street;
+    street: async (parent: any, _: any, context: any) => {
+      const name = parent.street || (await getLocationFields(parent.locationId)).street;
+      return translateLocationName(name, context?.language || 'en');
     },
     profilePicture: (parent: any) => parent.image,
   },
@@ -4493,34 +4530,30 @@ export const resolvers = {
       const parentUser = await (prisma as any).user.findUnique({ where: { id: parent.parentId } });
       return parentUser ? parentUser.name : "Self";
     },
-    createdAt: (parent: any) => {
-      if (!parent.createdAt) return null;
-      return parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString();
+    createdAt: (parent: any) => toIsoString(parent.createdAt),
+    district: async (parent: any, _: any, context: any) => {
+      const name = parent.district || (await getLocationFields(parent.locationId)).district;
+      return translateLocationName(name, context?.language || 'en');
     },
-    district: async (parent: any) => {
-      if (parent.district) return parent.district;
-      const fields = await getLocationFields(parent.locationId);
-      return fields.district;
+    constituency: async (parent: any, _: any, context: any) => {
+      const name = parent.constituency || (await getLocationFields(parent.locationId)).constituency;
+      return translateLocationName(name, context?.language || 'en');
     },
-    constituency: async (parent: any) => {
-      if (parent.constituency) return parent.constituency;
-      const fields = await getLocationFields(parent.locationId);
-      return fields.constituency;
+    area: async (parent: any, _: any, context: any) => {
+      const name = parent.area || (await getLocationFields(parent.locationId)).area;
+      return translateLocationName(name, context?.language || 'en');
     },
-    area: async (parent: any) => {
-      if (parent.area) return parent.area;
-      const fields = await getLocationFields(parent.locationId);
-      return fields.area;
-    },
-    street: async (parent: any) => {
-      if (parent.street) return parent.street;
-      const fields = await getLocationFields(parent.locationId);
-      return fields.street;
+    street: async (parent: any, _: any, context: any) => {
+      const name = parent.street || (await getLocationFields(parent.locationId)).street;
+      return translateLocationName(name, context?.language || 'en');
     },
     profilePicture: (parent: any) => parent.image,
   },
 
   Location: {
+    name: (parent: any, _: any, context: any) => {
+      return translateLocationName(parent.name, context?.language || 'en');
+    },
     parent: async (parent: any) => {
       if (!parent.parentId) return null;
       return (prisma as any).location.findUnique({ where: { id: parent.parentId } });
@@ -4535,6 +4568,23 @@ export const resolvers = {
     events: (parent: any) => (prisma as any).event.findMany({ where: { locationId: parent.id } }),
   },
 
+  Profession: {
+    name: (parent: any, _: any, context: any) => {
+      const lang = context?.language || 'en';
+      if (lang.startsWith('ta')) {
+        const translations: Record<string, string> = {
+          'Doctor': 'மருத்துவர்',
+          'Lawyer': 'வழக்கறிஞர்',
+          'Farmer': 'விவசாயி',
+          'Engineer': 'பொறியாளர்',
+          'Student': 'மாணவர்'
+        };
+        return translations[parent.name] || parent.name;
+      }
+      return parent.name;
+    }
+  },
+
   Event: {
     status: (parent: any) => {
       if (parent.status === 'CANCELLED' || parent.status === 'INACTIVE') {
@@ -4543,7 +4593,7 @@ export const resolvers = {
       const eventDate = parent.date instanceof Date ? parent.date : new Date(parent.date);
       const now = new Date();
       if (eventDate < now) {
-        return 'COMPLETED';
+        return 'EXPIRED';
       }
       const diffMs = eventDate.getTime() - now.getTime();
       if (diffMs <= 24 * 60 * 60 * 1000) {
@@ -4551,14 +4601,8 @@ export const resolvers = {
       }
       return 'UPCOMING';
     },
-    date: (parent: any) => {
-      if (!parent.date) return null;
-      return parent.date instanceof Date ? parent.date.toISOString() : new Date(parent.date).toISOString();
-    },
-    createdAt: (parent: any) => {
-      if (!parent.createdAt) return null;
-      return parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString();
-    },
+    date: (parent: any) => toIST(parent.date),
+    createdAt: (parent: any) => toIsoString(parent.createdAt),
     responses: async (parent: any, _: any, context: any) => {
       const user = context?.user;
       if (!user) return [];
@@ -4596,19 +4640,41 @@ export const resolvers = {
         return { going: 0, maybe: 0, notGoing: 0 };
       }
 
-      const isSuper = user.role === 'SUPER_ADMIN';
-      const isCreator = (user.role === 'ADMIN' || user.role === 'SUB_ADMIN') && parent.createdById === Number(user.id);
-
-      if (!isSuper && !isCreator) {
-        return { going: 0, maybe: 0, notGoing: 0 };
-      }
-
       const responses = await (prisma as any).eventResponse.findMany({ where: { eventId: parent.id } });
       return {
         going: responses.filter((r: any) => r.status === 'GOING').length,
         maybe: responses.filter((r: any) => r.status === 'MAYBE').length,
         notGoing: responses.filter((r: any) => r.status === 'NOT_GOING').length,
       };
+    },
+    userResponse: async (parent: any, _: any, context: any) => {
+      const user = context?.user;
+      if (!user) return null;
+
+      let finalMemberId = Number(user.id);
+      if (user.type === 'admin') {
+        const userRec = await (prisma as any).user.findUnique({ where: { id: Number(user.id) } });
+        if (userRec && userRec.phone) {
+          const member = await (prisma as any).member.findUnique({ where: { phone: userRec.phone } });
+          if (member) {
+            finalMemberId = member.id;
+          } else {
+            return null;
+          }
+        } else {
+          return null;
+        }
+      }
+
+      const response = await (prisma as any).eventResponse.findUnique({
+        where: {
+          eventId_memberId: {
+            eventId: parent.id,
+            memberId: finalMemberId
+          }
+        }
+      });
+      return response ? response.status : null;
     },
     createdBy: (parent: any) => (prisma as any).user.findUnique({ where: { id: parent.createdById } }),
     location: (parent: any) => (prisma as any).location.findUnique({ where: { id: parent.locationId } }),
@@ -4620,23 +4686,14 @@ export const resolvers = {
 
   EmergencyResponse: {
     member: (parent: any) => (prisma as any).member.findUnique({ where: { id: parent.memberId } }),
-    createdAt: (parent: any) => toIsoString(parent.createdAt),
-    updatedAt: (parent: any) => toIsoString(parent.updatedAt),
+    createdAt: (parent: any) => toIST(parent.createdAt),
+    updatedAt: (parent: any) => toIST(parent.updatedAt),
   },
 
   EmergencyRequest: {
-    createdAt: (parent: any) => {
-      if (!parent.createdAt) return null;
-      return parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString();
-    },
-    expiryDate: (parent: any) => {
-      if (!parent.expiryDate) return null;
-      return parent.expiryDate instanceof Date ? parent.expiryDate.toISOString() : new Date(parent.expiryDate).toISOString();
-    },
-    forwardedAt: (parent: any) => {
-      if (!parent.forwardedAt) return null;
-      return parent.forwardedAt instanceof Date ? parent.forwardedAt.toISOString() : new Date(parent.forwardedAt).toISOString();
-    },
+    createdAt: (parent: any) => toIST(parent.createdAt),
+    expiryDate: (parent: any) => toIST(parent.expiryDate),
+    forwardedAt: (parent: any) => toIST(parent.forwardedAt),
     member: (parent: any) => parent.memberId ? (prisma as any).member.findUnique({ where: { id: parent.memberId } }) : null,
     createdBy: (parent: any) => parent.createdById ? (prisma as any).user.findUnique({ where: { id: parent.createdById } }) : null,
     location: (parent: any) => (prisma as any).location.findUnique({ where: { id: parent.locationId } }),
@@ -4688,13 +4745,22 @@ export const resolvers = {
     image: (parent: any) => {
       return (parent.images && parent.images.length > 0) ? parent.images[0] : null;
     },
+    category: (parent: any, _: any, context: any) => {
+      const lang = context?.language || 'en';
+      if (lang.startsWith('ta')) {
+        const translations: Record<string, string> = {
+          'Discussion': 'கலந்துரையாடல்',
+          'Announcement': 'அறிவிப்பு',
+          'Event': 'நிகழ்வு'
+        };
+        return translations[parent.category] || parent.category;
+      }
+      return parent.category;
+    },
     comments: (parent: any) => (prisma as any).comment.findMany({ where: { postId: parent.id }, orderBy: { createdAt: 'desc' } }),
     commentCount: (parent: any) => (prisma as any).comment.count({ where: { postId: parent.id } }),
     location: (parent: any) => (prisma as any).location.findUnique({ where: { id: parent.locationId } }),
-    createdAt: (parent: any) => {
-      if (!parent.createdAt) return null;
-      return parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString();
-    }
+    createdAt: (parent: any) => toIsoString(parent.createdAt)
   },
 
   PollOption: {
@@ -4704,8 +4770,8 @@ export const resolvers = {
   },
 
   Poll: {
-    expiresAt: (parent: any) => parent.expiresAt instanceof Date ? parent.expiresAt.toISOString() : new Date(parent.expiresAt).toISOString(),
-    createdAt: (parent: any) => parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString(),
+    expiresAt: (parent: any) => toIST(parent.expiresAt),
+    createdAt: (parent: any) => toIsoString(parent.createdAt),
     options: async (parent: any) => {
       if (parent.options) return parent.options;
       return (prisma as any).pollOption.findMany({ where: { pollId: parent.id } });
@@ -4743,21 +4809,12 @@ export const resolvers = {
   },
 
   Campaign: {
-    createdAt: (parent: any) => {
-      if (!parent.createdAt) return null;
-      return parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString();
-    }
+    createdAt: (parent: any) => toIsoString(parent.createdAt)
   },
 
   Broadcast: {
-    createdAt: (parent: any) => {
-      if (!parent.createdAt) return null;
-      return parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString();
-    },
-    updatedAt: (parent: any) => {
-      if (!parent.updatedAt) return null;
-      return parent.updatedAt instanceof Date ? parent.updatedAt.toISOString() : new Date(parent.updatedAt).toISOString();
-    },
+    createdAt: (parent: any) => toIST(parent.createdAt),
+    updatedAt: (parent: any) => toIST(parent.updatedAt),
     isActive: (parent: any) => parent.isActive ?? true,
     location: async (parent: any) => {
       if (parent.location) return parent.location;
@@ -4778,15 +4835,24 @@ export const resolvers = {
   },
 
   Comment: {
-    createdAt: (parent: any) => {
-      if (!parent.createdAt) return null;
-      return parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString();
-    }
+    createdAt: (parent: any) => toIsoString(parent.createdAt)
   },
 
   CommunityPost: {
     image: (parent: any) => {
       return (parent.images && parent.images.length > 0) ? parent.images[0] : null;
+    },
+    category: (parent: any, _: any, context: any) => {
+      const lang = context?.language || 'en';
+      if (lang.startsWith('ta')) {
+        const translations: Record<string, string> = {
+          'Discussion': 'கலந்துரையாடல்',
+          'Announcement': 'அறிவிப்பு',
+          'Event': 'நிகழ்வு'
+        };
+        return translations[parent.category] || parent.category;
+      }
+      return parent.category;
     },
     authorName: async (parent: any) => {
       if (parent.createdBy?.name) return parent.createdBy.name;
@@ -4845,10 +4911,7 @@ export const resolvers = {
       }
       return null;
     },
-    createdAt: (parent: any) => {
-      if (!parent.createdAt) return null;
-      return parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString();
-    }
+    createdAt: (parent: any) => toIsoString(parent.createdAt)
   },
 
   Community: {
@@ -4861,10 +4924,7 @@ export const resolvers = {
     },
     allowMemberMessages: (parent: any) => parent.allowMemberMessages ?? true,
     isMuted: (parent: any) => parent.isMuted ?? false,
-    mutedUntil: (parent: any) => {
-      if (!parent.mutedUntil) return null;
-      return parent.mutedUntil instanceof Date ? parent.mutedUntil.toISOString() : new Date(parent.mutedUntil).toISOString();
-    },
+    mutedUntil: (parent: any) => toIsoString(parent.mutedUntil),
     pinnedMessage: async (parent: any) => {
       if (!parent.pinnedMessageId) return null;
       const message = await (prisma as any).communityMessage.findUnique({
@@ -4890,10 +4950,7 @@ export const resolvers = {
       if (!parent.locationId) return null;
       return (prisma as any).location.findUnique({ where: { id: parent.locationId } });
     },
-    createdAt: (parent: any) => {
-      if (!parent.createdAt) return null;
-      return parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString();
-    }
+    createdAt: (parent: any) => toIsoString(parent.createdAt)
   },
 
   CommunityMessage: {
@@ -4910,25 +4967,16 @@ export const resolvers = {
       });
       return replyTo ? formatCommunityMessage(replyTo) : null;
     },
-    createdAt: (parent: any) => {
-      if (!parent.createdAt) return null;
-      return parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString();
-    }
+    createdAt: (parent: any) => toIsoString(parent.createdAt)
   },
 
   CommunityMessageReaction: {
     reactorName: async (parent: any) => getCommunityActorName(parent.reactorId, parent.reactorType),
-    createdAt: (parent: any) => {
-      if (!parent.createdAt) return null;
-      return parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString();
-    }
+    createdAt: (parent: any) => toIsoString(parent.createdAt)
   },
 
   Notification: {
-    createdAt: (parent: any) => {
-      if (!parent.createdAt) return null;
-      return parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString();
-    },
+    createdAt: (parent: any) => toIsoString(parent.createdAt),
     status: (parent: any) => parent.status || 'ACTIVE',
     metadata: (parent: any) => parent.metadata ? (typeof parent.metadata === 'string' ? parent.metadata : JSON.stringify(parent.metadata)) : null,
     location: (parent: any) => parent.location || (prisma as any).location.findUnique({ where: { id: parent.locationId } }),
@@ -4943,10 +4991,8 @@ export const resolvers = {
   // CONTRIBUTION MANAGEMENT SYSTEM — QUERY RESOLVERS
   // ============================================================
   ContributionPlan: {
-    createdAt: (parent: any) =>
-      parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString(),
-    startDate: (parent: any) =>
-      parent.startDate instanceof Date ? parent.startDate.toISOString() : new Date(parent.startDate).toISOString(),
+    createdAt: (parent: any) => toIsoString(parent.createdAt),
+    startDate: (parent: any) => toIsoString(parent.startDate),
     enrolledCount: async (parent: any) => {
       return (prisma as any).memberPlanEnrollment.count({
         where: { planId: parent.id, status: 'ACTIVE' }
@@ -4955,8 +5001,7 @@ export const resolvers = {
   },
 
   MemberPlanEnrollment: {
-    joinedAt: (parent: any) =>
-      parent.joinedAt instanceof Date ? parent.joinedAt.toISOString() : new Date(parent.joinedAt).toISOString(),
+    joinedAt: (parent: any) => toIsoString(parent.joinedAt),
     plan: async (parent: any) => {
       if (parent.plan) return parent.plan;
       return (prisma as any).contributionPlan.findUnique({ where: { id: parent.planId } });
@@ -4964,10 +5009,8 @@ export const resolvers = {
   },
 
   ContributionPayment: {
-    createdAt: (parent: any) =>
-      parent.createdAt instanceof Date ? parent.createdAt.toISOString() : new Date(parent.createdAt).toISOString(),
-    paidAt: (parent: any) =>
-      parent.paidAt ? (parent.paidAt instanceof Date ? parent.paidAt.toISOString() : new Date(parent.paidAt).toISOString()) : null,
+    createdAt: (parent: any) => toIsoString(parent.createdAt),
+    paidAt: (parent: any) => toIsoString(parent.paidAt),
   },
 
   ContributionProfile: {

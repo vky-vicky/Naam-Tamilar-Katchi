@@ -29,6 +29,7 @@ export const typeDefs = gql`
     COMPLETED
     CANCELLED
     UPCOMING
+    EXPIRED
   }
 
   enum RequestStatus {
@@ -156,6 +157,7 @@ export const typeDefs = gql`
     createdAt: String!
     responses: [EventResponse!]!
     stats: EventStats!
+    userResponse: String
   }
 
   type EventStats {
@@ -691,7 +693,7 @@ export const typeDefs = gql`
     ): Community!
     joinCommunity(
       communityId: Int!
-      memberId: Int!
+      memberId: Int
     ): Boolean!
     createCommunityPost(
       communityId: Int!
