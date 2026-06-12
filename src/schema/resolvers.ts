@@ -2665,6 +2665,24 @@ export const resolvers = {
         finalLocationId = creatorUser?.locationId;
       }
 
+      if (context?.user) {
+        const requesterRole = context.user.role;
+        if (requesterRole === 'ADMIN' || requesterRole === 'SUB_ADMIN') {
+          if (rest.role === 'SUPER_ADMIN') {
+            throw new Error("Unauthorized: Non-Super Admin cannot create Super Admin");
+          }
+          if (finalLocationId) {
+            await validateLocationTargeting(
+              Number(context.user.id),
+              requesterRole,
+              context.user.locationId,
+              Number(finalLocationId),
+              context?.language
+            );
+          }
+        }
+      }
+
       const locFields = await getLocationFields(finalLocationId);
 
       // 1. Handle Profession
@@ -2758,6 +2776,21 @@ export const resolvers = {
 
       if (!finalLocationId) {
         throw new Error(I18nService.translate("location_required", context?.language));
+      }
+
+      if (context?.user) {
+        const requesterRole = context.user.role;
+        if (requesterRole === 'ADMIN' || requesterRole === 'SUB_ADMIN') {
+          if (finalLocationId) {
+            await validateLocationTargeting(
+              Number(context.user.id),
+              requesterRole,
+              context.user.locationId,
+              Number(finalLocationId),
+              context?.language
+            );
+          }
+        }
       }
 
       const locFields = await getLocationFields(finalLocationId);
@@ -2908,7 +2941,6 @@ export const resolvers = {
       if (rest.phone && !/^\d{10}$/.test(rest.phone)) {
         throw new Error("invalid_phone_format");
       }
-      
 
       const isUserTable = Number(id) < 0 || Number(id) >= 1000000;
       const targetId = isUserTable 
@@ -2921,6 +2953,81 @@ export const resolvers = {
         throw new Error(I18nService.translate("unauthorized_edit_member", context?.language));
       }
 
+      // Load updater details
+      const updater = await (prisma as any).user.findUnique({
+        where: { id: Number(context.user.id) }
+      }) || await (prisma as any).member.findUnique({
+        where: { id: Number(context.user.id) }
+      });
+      const updaterRole = updater?.role === 'Member' ? 'MEMBER' : (updater?.role ? updater.role.toUpperCase() : 'MEMBER');
+      const updaterLocId = updater?.locationId || null;
+
+      // Block normal members from changing roles
+      if (updaterRole === 'MEMBER' && rest.role && rest.role.toUpperCase() !== 'MEMBER') {
+        throw new Error(I18nService.translate("member_not_allowed", context?.language));
+      }
+
+      // Load target's current data
+      let currentRole = 'MEMBER';
+      let currentLocId = null;
+      let targetUser = null;
+      let targetMember = null;
+
+      if (isUserTable) {
+        targetUser = await (prisma as any).user.findUnique({
+          where: { id: targetId },
+          include: { location: true }
+        });
+        if (!targetUser) throw new Error(I18nService.translate("user_not_found", context?.language));
+        currentRole = targetUser.role;
+        currentLocId = targetUser.locationId;
+      } else {
+        targetMember = await (prisma as any).member.findUnique({
+          where: { id: targetId },
+          include: { location: true, profession: true }
+        });
+        if (!targetMember) throw new Error(I18nService.translate("user_not_found", context?.language));
+        currentRole = targetMember.role === 'Member' ? 'MEMBER' : targetMember.role.toUpperCase();
+        currentLocId = targetMember.locationId;
+      }
+
+      const targetRole = rest.role ? rest.role.toUpperCase().trim() : currentRole;
+      const finalLocationId = streetId || areaId || talukId || districtId || locationId;
+      const targetLocId = finalLocationId || currentLocId;
+
+      // Enforce location requirement for admin roles
+      if (['SUPER_ADMIN', 'ADMIN', 'SUB_ADMIN'].includes(targetRole)) {
+        if (!targetLocId) {
+          throw new Error(I18nService.translate("location_required", context?.language));
+        }
+      }
+
+      // Permission Check and Location Targeting Validation
+      if (updaterRole !== 'SUPER_ADMIN') {
+        if (targetRole === 'SUPER_ADMIN') {
+          throw new Error("Unauthorized: Non-Super Admin cannot promote to Super Admin");
+        }
+        if (currentRole === 'SUPER_ADMIN') {
+          throw new Error("Unauthorized: Only Super Admin can modify Super Admin profiles");
+        }
+        const isEditingSelf = (context.user.type === 'admin' && isUserTable && Number(context.user.id) === targetId) ||
+                              (context.user.type === 'member' && !isUserTable && Number(context.user.id) === targetId) ||
+                              (updater?.phone && (targetUser?.phone === updater.phone || targetMember?.phone === updater.phone));
+        if (currentRole === 'ADMIN' && !isEditingSelf) {
+          throw new Error("Unauthorized: Non-Super Admin cannot modify other Admins");
+        }
+
+        if (targetLocId) {
+          await validateLocationTargeting(
+            Number(context.user.id),
+            updaterRole,
+            updaterLocId,
+            Number(targetLocId),
+            context?.language
+          );
+        }
+      }
+
       let updateData: any = { ...rest };
 
       if (updateData.profilePicture !== undefined) {
@@ -2928,16 +3035,12 @@ export const resolvers = {
         delete updateData.profilePicture;
       }
 
-
-      // Determine the most specific location ID
-      const finalLocationId = streetId || areaId || talukId || districtId || locationId;
       if (finalLocationId) {
         updateData.locationId = finalLocationId;
         const locFields = await getLocationFields(finalLocationId);
         Object.assign(updateData, locFields);
       }
 
-      // Handle Profession update if name provided
       if (professionName) {
         const profession = await (prisma as any).profession.upsert({
           where: { name: professionName },
@@ -2947,9 +3050,119 @@ export const resolvers = {
         updateData.professionId = profession.id;
       }
 
+      // Handle transitions & synchronization
+      if (!isUserTable && ['SUPER_ADMIN', 'ADMIN', 'SUB_ADMIN'].includes(targetRole)) {
+        // Promote Member to User table
+        const phone = updateData.phone || targetMember.phone;
+        let existingUser = await (prisma as any).user.findFirst({ where: { phone } });
+
+        const userFields = {
+          name: updateData.name !== undefined ? updateData.name : targetMember.name,
+          surname: updateData.surname !== undefined ? updateData.surname : targetMember.surname,
+          phone: phone,
+          password: updateData.password !== undefined ? updateData.password : (targetMember.password || 'admin123'),
+          role: targetRole,
+          locationId: targetLocId,
+          approvalStatus: 'APPROVED',
+          isActive: true,
+          image: updateData.image !== undefined ? updateData.image : targetMember.image,
+          dateOfBirth: updateData.dateOfBirth !== undefined ? updateData.dateOfBirth : targetMember.dateOfBirth,
+          gender: updateData.gender !== undefined ? updateData.gender : targetMember.gender,
+          bloodGroup: updateData.bloodGroup !== undefined ? updateData.bloodGroup : targetMember.bloodGroup,
+          profession: professionName || targetMember.profession?.name || null,
+          district: updateData.district !== undefined ? updateData.district : targetMember.district,
+          constituency: updateData.constituency !== undefined ? updateData.constituency : targetMember.constituency,
+          area: updateData.area !== undefined ? updateData.area : targetMember.area,
+          street: updateData.street !== undefined ? updateData.street : targetMember.street
+        };
+
+        if (existingUser) {
+          await (prisma as any).user.update({
+            where: { id: existingUser.id },
+            data: userFields
+          });
+        } else {
+          existingUser = await (prisma as any).user.create({
+            data: userFields
+          });
+        }
+
+        const updatedMember = await (prisma as any).member.update({
+          where: { id: targetId },
+          data: {
+            ...updateData,
+            role: targetRole
+          },
+          include: { location: true, profession: true }
+        });
+
+        if (professionName) {
+          await autoJoinCommunities(updatedMember.id, professionName);
+        }
+
+        const userWithLoc = await (prisma as any).user.findUnique({
+          where: { id: existingUser.id },
+          include: { location: true }
+        });
+        return userToMemberShape(userWithLoc);
+      }
+
+      if (isUserTable && targetRole === 'MEMBER') {
+        // Demote User to Member table
+        const phone = updateData.phone || targetUser.phone;
+        let dbMember = await (prisma as any).member.findFirst({ where: { phone } });
+
+        let professionId = null;
+        const pName = professionName || targetUser.profession;
+        if (pName) {
+          const prof = await (prisma as any).profession.upsert({
+            where: { name: pName },
+            update: {},
+            create: { name: pName }
+          });
+          professionId = prof.id;
+        }
+
+        const memberFields = {
+          name: updateData.name !== undefined ? updateData.name : targetUser.name,
+          surname: updateData.surname !== undefined ? updateData.surname : targetUser.surname,
+          phone: phone,
+          password: updateData.password !== undefined ? updateData.password : targetUser.password,
+          locationId: targetLocId || 1,
+          role: 'Member',
+          approvalStatus: 'APPROVED',
+          isActive: true,
+          image: updateData.image !== undefined ? updateData.image : targetUser.image,
+          dateOfBirth: updateData.dateOfBirth !== undefined ? updateData.dateOfBirth : targetUser.dateOfBirth,
+          gender: updateData.gender !== undefined ? updateData.gender : targetUser.gender,
+          bloodGroup: updateData.bloodGroup !== undefined ? updateData.bloodGroup : targetUser.bloodGroup,
+          district: updateData.district !== undefined ? updateData.district : targetUser.district,
+          constituency: updateData.constituency !== undefined ? updateData.constituency : targetUser.constituency,
+          area: updateData.area !== undefined ? updateData.area : targetUser.area,
+          street: updateData.street !== undefined ? updateData.street : targetUser.street,
+          professionId: professionId
+        };
+
+        if (dbMember) {
+          dbMember = await (prisma as any).member.update({
+            where: { id: dbMember.id },
+            data: memberFields,
+            include: { location: true, profession: true }
+          });
+        } else {
+          dbMember = await (prisma as any).member.create({
+            data: memberFields,
+            include: { location: true, profession: true }
+          });
+        }
+
+        await (prisma as any).user.delete({ where: { id: targetId } });
+
+        return dbMember;
+      }
+
+      // Standard user update + sync to matching Member record
       if (isUserTable) {
-        // User model-ல் இல்லாத Member-only fields-ஐ நீக்குவோம்
-        // (allergies, conditions, emergencyContact are Member-only fields)
         const USER_ALLOWED_FIELDS = [
           'name', 'surname', 'phone', 'password', 'image',
           'dateOfBirth', 'gender', 'bloodGroup', 'role',
@@ -2962,26 +3175,91 @@ export const resolvers = {
             userUpdateData[key] = updateData[key];
           }
         }
-        // locationId from location hierarchy update
         if (updateData.locationId !== undefined) {
           userUpdateData.locationId = updateData.locationId;
         }
+        userUpdateData.role = targetRole;
+
         const updatedUser = await (prisma as any).user.update({
           where: { id: targetId },
           data: userUpdateData,
           include: { location: true }
         });
+
+        // Sync to matching Member table record
+        const matchingMember = await (prisma as any).member.findFirst({
+          where: { phone: updatedUser.phone }
+        });
+        if (matchingMember) {
+          const memberUpdateFields: any = {};
+          const SYNC_FIELDS = [
+            'name', 'surname', 'phone', 'password', 'image',
+            'dateOfBirth', 'gender', 'bloodGroup', 'locationId',
+            'district', 'constituency', 'area', 'street'
+          ];
+          for (const key of SYNC_FIELDS) {
+            if (userUpdateData[key] !== undefined) {
+              memberUpdateFields[key] = userUpdateData[key];
+            }
+          }
+          if (updateData.professionId !== undefined) {
+            memberUpdateFields.professionId = updateData.professionId;
+          }
+          memberUpdateFields.role = targetRole;
+
+          await (prisma as any).member.update({
+            where: { id: matchingMember.id },
+            data: memberUpdateFields
+          });
+        }
+
         return userToMemberShape(updatedUser);
       }
 
+      // Standard member update + sync to matching User record
       const updatedMember = await (prisma as any).member.update({
         where: { id: targetId },
-        data: updateData,
+        data: {
+          ...updateData,
+          role: targetRole
+        },
         include: { location: true, profession: true }
       });
       
       if (professionName) {
         await autoJoinCommunities(updatedMember.id, professionName);
+      }
+
+      // Sync to matching User table record
+      const matchingUser = await (prisma as any).user.findFirst({
+        where: { phone: updatedMember.phone }
+      });
+      if (matchingUser) {
+        const userUpdateFields: any = {};
+        const SYNC_FIELDS = [
+          'name', 'surname', 'phone', 'password', 'image',
+          'dateOfBirth', 'gender', 'bloodGroup', 'locationId',
+          'district', 'constituency', 'area', 'street'
+        ];
+        for (const key of SYNC_FIELDS) {
+          if (updateData[key] !== undefined) {
+            userUpdateFields[key] = updateData[key];
+          }
+        }
+        if (updatedMember.professionId) {
+          const prof = await (prisma as any).profession.findUnique({
+            where: { id: updatedMember.professionId }
+          });
+          if (prof) {
+            userUpdateFields.profession = prof.name;
+          }
+        }
+        userUpdateFields.role = targetRole;
+
+        await (prisma as any).user.update({
+          where: { id: matchingUser.id },
+          data: userUpdateFields
+        });
       }
 
       return updatedMember;
@@ -5335,6 +5613,25 @@ export const resolvers = {
         throw new Error(I18nService.translate("user_not_found", lang));
       }
 
+      // Enforce location checks
+      const targetLocId = dbUser ? dbUser.locationId : dbMember?.locationId;
+      if (['SUPER_ADMIN', 'ADMIN', 'SUB_ADMIN'].includes(targetRole)) {
+        if (!targetLocId) {
+          throw new Error(I18nService.translate("location_required", lang));
+        }
+      }
+      if (requesterRole !== 'SUPER_ADMIN') {
+        if (targetLocId) {
+          await validateLocationTargeting(
+            Number(context.user.id),
+            requesterRole,
+            context.user.locationId,
+            Number(targetLocId),
+            lang
+          );
+        }
+      }
+
       // Check permission hierarchy
       // 1. If target is already an admin (exists in User table):
       if (dbUser) {
@@ -5359,6 +5656,15 @@ export const resolvers = {
       if (targetRole === 'MEMBER') {
         // Demoting to MEMBER
         if (dbUser) {
+          let professionId = null;
+          if (dbUser.profession) {
+            const prof = await (prisma as any).profession.upsert({
+              where: { name: dbUser.profession },
+              update: {},
+              create: { name: dbUser.profession }
+            });
+            professionId = prof.id;
+          }
           // If they exist in User table, migrate to Member table (if not exists) and remove from User table
           if (!dbMember) {
             await (prisma as any).member.create({
@@ -5367,7 +5673,16 @@ export const resolvers = {
                 surname: dbUser.surname,
                 phone: dbUser.phone,
                 password: dbUser.password,
+                image: dbUser.image,
+                dateOfBirth: dbUser.dateOfBirth,
+                gender: dbUser.gender,
+                bloodGroup: dbUser.bloodGroup,
                 locationId: dbUser.locationId || 1,
+                district: dbUser.district,
+                constituency: dbUser.constituency,
+                area: dbUser.area,
+                street: dbUser.street,
+                professionId: professionId,
                 role: 'Member',
                 approvalStatus: 'APPROVED',
                 isActive: true
@@ -5376,7 +5691,22 @@ export const resolvers = {
           } else {
             await (prisma as any).member.update({
               where: { id: dbMember.id },
-              data: { role: 'Member' }
+              data: {
+                name: dbUser.name,
+                surname: dbUser.surname,
+                password: dbUser.password,
+                image: dbUser.image,
+                dateOfBirth: dbUser.dateOfBirth,
+                gender: dbUser.gender,
+                bloodGroup: dbUser.bloodGroup,
+                locationId: dbUser.locationId || 1,
+                district: dbUser.district,
+                constituency: dbUser.constituency,
+                area: dbUser.area,
+                street: dbUser.street,
+                professionId: professionId,
+                role: 'Member'
+              }
             });
           }
           // Remove from User table so they can't log in as admin anymore
@@ -5403,6 +5733,13 @@ export const resolvers = {
             });
           }
         } else if (dbMember) {
+          let professionName = null;
+          if (dbMember.professionId) {
+            const prof = await (prisma as any).profession.findUnique({
+              where: { id: dbMember.professionId }
+            });
+            professionName = prof?.name || null;
+          }
           // Promote from Member table to User table
           await (prisma as any).user.create({
             data: {
@@ -5413,7 +5750,16 @@ export const resolvers = {
               role: targetRole,
               locationId: dbMember.locationId,
               approvalStatus: 'APPROVED',
-              isActive: true
+              isActive: true,
+              image: dbMember.image,
+              dateOfBirth: dbMember.dateOfBirth,
+              gender: dbMember.gender,
+              bloodGroup: dbMember.bloodGroup,
+              district: dbMember.district,
+              constituency: dbMember.constituency,
+              area: dbMember.area,
+              street: dbMember.street,
+              profession: professionName
             }
           });
           // Update the Member's role field to reflect status

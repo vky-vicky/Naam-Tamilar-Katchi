@@ -135,7 +135,7 @@ export async function sendNotificationToLocation(
           notification: {
             sound: 'default',
             channelId: 'high_importance_channel',
-            priority: 'high' as const,
+            priority: 'max' as const,
           }
         },
         apns: {
@@ -225,7 +225,7 @@ export async function sendNotificationToCommunity(
           notification: {
             sound: 'default',
             channelId: 'high_importance_channel',
-            priority: 'high' as const,
+            priority: 'max' as const,
           }
         },
         apns: {
@@ -296,7 +296,7 @@ export async function sendNotificationToToken(
         notification: {
           sound: 'default',
           channelId: 'high_importance_channel',
-          priority: 'high' as const,
+          priority: 'max' as const,
         }
       },
       apns: {
