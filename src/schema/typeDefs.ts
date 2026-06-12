@@ -429,6 +429,41 @@ export const typeDefs = gql`
     userVoteOptionId: Int
     createdBy: User
     member: Member
+    likesCount: Int!
+    commentsCount: Int!
+    isLiked: Boolean!
+    comments: [PollComment!]!
+    likesList: [PollLike!]!
+    status: String!
+    reports: [PollReport!]!
+  }
+
+  type PollLike {
+    id: Int!
+    pollId: Int!
+    memberId: Int!
+    member: Member!
+    createdAt: String!
+  }
+
+  type PollComment {
+    id: Int!
+    content: String!
+    pollId: Int!
+    authorName: String!
+    authorRole: String!
+    createdAt: String!
+  }
+
+  type PollReport {
+    id: Int!
+    pollId: Int!
+    poll: Poll!
+    reportedById: Int!
+    reportedBy: Member!
+    reason: String!
+    status: ReportStatus!
+    createdAt: String!
   }
 
   type CommunityComment {
@@ -511,6 +546,10 @@ export const typeDefs = gql`
     getContributionAnalytics: ContributionAnalytics!
     getPendingPayments(district: String, constituency: String, area: String): [PendingPayment!]!
     getContributionLeaderboard: ContributionLeaderboard!
+    getReportedPosts(status: ReportStatus): [PostReport!]!
+    getReportedCommunityPosts(status: ReportStatus): [CommunityPostReport!]!
+    getReportedPolls(status: ReportStatus): [PollReport!]!
+    getUserWarnings(memberId: Int!): [UserWarning!]!
   }
 
   type Mutation {
@@ -657,14 +696,31 @@ export const typeDefs = gql`
     deletePost(
       id: Int!
     ): Boolean!
+    reportPost(postId: Int!, reason: String!): PostReport!
+    reportCommunityPost(postId: Int!, reason: String!): CommunityPostReport!
+    resolvePostReport(reportId: Int!, action: ReportAction!, warningMessage: String): Boolean!
+    resolveCommunityPostReport(reportId: Int!, action: ReportAction!, warningMessage: String): Boolean!
     createPoll(
       question: String!
       options: [String!]!
       durationDays: Int!
-      locationId: Int!
+      locationId: Int
+      districtId: Int
+      talukId: Int
+      areaId: Int
+      streetId: Int
       communityId: Int
     ): Poll!
     voteInPoll(pollId: Int!, optionId: Int!): Poll!
+    likePoll(id: Int!): Poll!
+    addPollComment(
+      pollId: Int!
+      content: String!
+      authorName: String!
+      authorRole: String!
+    ): PollComment!
+    reportPoll(pollId: Int!, reason: String!): PollReport!
+    resolvePollReport(reportId: Int!, action: ReportAction!, warningMessage: String): Boolean!
     likePost(id: Int!): Post!
     addComment(
       postId: Int!
@@ -1012,5 +1068,52 @@ export const typeDefs = gql`
     location: String!
     dueAmount: Float!
     pendingMonths: Int!
+  }
+
+  enum ReportStatus {
+    PENDING
+    IGNORED
+    WARNED
+    DELETED
+  }
+
+  enum ReportAction {
+    IGNORE
+    WARN
+    DELETE
+  }
+
+  type PostReport {
+    id: Int!
+    postId: Int!
+    post: Post!
+    reportedById: Int!
+    reportedBy: Member!
+    reason: String!
+    status: ReportStatus!
+    createdAt: String!
+  }
+
+  type CommunityPostReport {
+    id: Int!
+    postId: Int!
+    post: CommunityPost!
+    reportedById: Int!
+    reportedBy: Member!
+    reason: String!
+    status: ReportStatus!
+    createdAt: String!
+  }
+
+  type UserWarning {
+    id: Int!
+    memberId: Int!
+    member: Member!
+    adminId: Int!
+    admin: User!
+    message: String!
+    postId: Int
+    communityPostId: Int
+    createdAt: String!
   }
 `;

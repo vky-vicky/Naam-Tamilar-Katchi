@@ -574,6 +574,83 @@ function userToMemberShape(user: any) {
   };
 }
 
+async function getOrCreateMemberForUser(user: any) {
+  if (!user) return null;
+  if (user.type === 'member') {
+    return (prisma as any).member.findUnique({
+      where: { id: Number(user.id) }
+    });
+  }
+
+  const userRec = await (prisma as any).user.findUnique({
+    where: { id: Number(user.id) }
+  });
+  if (!userRec) return null;
+
+  let member = await (prisma as any).member.findUnique({ where: { phone: userRec.phone } });
+  if (!member) {
+    member = await (prisma as any).member.create({
+      data: {
+        name: userRec.name,
+        surname: userRec.surname,
+        phone: userRec.phone,
+        role: userRec.role === 'SUPER_ADMIN' ? 'SUPER_ADMIN' : (userRec.role === 'ADMIN' ? 'ADMIN' : (userRec.role === 'SUB_ADMIN' ? 'SUB_ADMIN' : 'Member')),
+        locationId: userRec.locationId || 1,
+        approvalStatus: 'APPROVED',
+        isActive: true,
+        district: userRec.district,
+        constituency: userRec.constituency,
+        area: userRec.area,
+        street: userRec.street
+      }
+    });
+  }
+  return member;
+}
+
+async function getPostCreatorMemberId(post: any): Promise<number | null> {
+  if (!post.createdById) {
+    const m = await (prisma as any).member.findFirst({
+      where: { name: post.authorName }
+    });
+    return m ? m.id : null;
+  }
+
+  if (post.createdByType === 'member') {
+    return post.createdById;
+  }
+
+  const u = await (prisma as any).user.findUnique({
+    where: { id: post.createdById },
+    select: { phone: true }
+  });
+  if (!u) return null;
+
+  const m = await (prisma as any).member.findUnique({
+    where: { phone: u.phone }
+  });
+  return m ? m.id : null;
+}
+
+async function getPollCreatorMemberId(poll: any): Promise<number | null> {
+  if (poll.memberId) {
+    return poll.memberId;
+  }
+  if (!poll.createdById) {
+    return null;
+  }
+  const u = await (prisma as any).user.findUnique({
+    where: { id: poll.createdById },
+    select: { phone: true }
+  });
+  if (!u) return null;
+
+  const m = await (prisma as any).member.findUnique({
+    where: { phone: u.phone }
+  });
+  return m ? m.id : null;
+}
+
 const ADMIN_ROLES = ['SUPER_ADMIN', 'ADMIN', 'SUB_ADMIN'];
 const NAME_REGEX = /^[a-zA-Z\u0B80-\u0BFF\s]+$/;
 
@@ -589,6 +666,49 @@ function translateLocationName(name: string | null | undefined, lang: string): s
     return translations[name] || name;
   }
   return name;
+}
+
+function parseDescriptionJson(description: string | null | undefined): any | null {
+  if (!description) return null;
+  const trimmed = description.trim();
+  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+    try {
+      return JSON.parse(trimmed);
+    } catch (e) {
+      return null;
+    }
+  }
+  return null;
+}
+
+function formatEmergencyDescription(description: string | null | undefined): string | null {
+  if (!description) return null;
+  const trimmed = description.trim();
+  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+    try {
+      const data = JSON.parse(trimmed);
+      const parts: string[] = [];
+      if (data.bloodGroup) parts.push(`Blood Group: ${data.bloodGroup}`);
+      if (data.unitsRequired) parts.push(`Units Required: ${data.unitsRequired}`);
+      if (data.hospitalName) parts.push(`Hospital: ${data.hospitalName}`);
+      if (data.patientCondition) parts.push(`Patient Condition: ${data.patientCondition}`);
+      if (data.disasterType) parts.push(`Disaster Type: ${data.disasterType}`);
+      if (data.affectedArea) parts.push(`Affected Area: ${data.affectedArea}`);
+      if (data.requiredSupport) parts.push(`Required Support: ${data.requiredSupport}`);
+      if (data.volunteerType) parts.push(`Volunteer Type: ${data.volunteerType}`);
+      if (data.contactNumber) parts.push(`Contact Number: ${data.contactNumber}`);
+      if (data.contactDetails) parts.push(`Contact Details: ${data.contactDetails}`);
+      if (data.location) parts.push(`Location: ${data.location}`);
+      if (data.additionalInfo) parts.push(`Additional Info: ${data.additionalInfo}`);
+      
+      if (parts.length > 0) {
+        return parts.join('\n');
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
+  return description;
 }
 
 // Normalize blood group: accepts both 'O+' and 'O_POSITIVE' formats
@@ -760,7 +880,7 @@ async function formatCommunityMessage(message: any) {
     metadata: message.metadata ? (typeof message.metadata === 'string' ? message.metadata : JSON.stringify(message.metadata)) : null,
     editedAt: toIsoString(message.editedAt),
     deletedAt: toIsoString(message.deletedAt),
-    createdAt: toIsoString(message.createdAt)
+    createdAt: toIST(message.createdAt)
   };
 }
 
@@ -982,8 +1102,8 @@ export const resolvers = {
       ]);
 
       // Combine and deduplicate globally by phone
-      // Member table gets PRIORITY over User table
-      // (some people exist in both — Member table role is the ground truth)
+      // User table gets PRIORITY over Member table
+      // (some people exist in both — User table role represents elevated system privileges)
       const formattedMembers = allMembers.map((m: any) => ({
         phone: m.phone,
         role: m.role ? m.role.toUpperCase() : 'MEMBER'
@@ -994,8 +1114,8 @@ export const resolvers = {
         role: u.role === 'Member' ? 'MEMBER' : (u.role ? u.role.toUpperCase() : 'MEMBER')
       }));
 
-      // User table first, Member table second → Member table overwrites (priority)
-      const combined = [...formattedUsers, ...formattedMembers];
+      // Member table first, User table second → User table overwrites (priority)
+      const combined = [...formattedMembers, ...formattedUsers];
       const uniquePeople = Array.from(new Map(combined.map(item => [item.phone, item])).values());
 
       const totalAdmins = uniquePeople.filter(p => p.role === 'ADMIN' || p.role === 'SUPER_ADMIN').length;
@@ -1020,6 +1140,121 @@ export const resolvers = {
         emergencyRequests,
         activeBroadcasts,
       };
+    },
+
+    getReportedPosts: async (_: any, { status }: any, context: any) => {
+      const lang = context?.language || 'en';
+      if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", lang));
+
+      const role = context.user.role;
+      const userLocId = context.user.locationId;
+
+      if (role === 'MEMBER') {
+        throw new Error("Unauthorized: Only administrators can view reports.");
+      }
+
+      // Hierarchy rules for location levels
+      let allowedTypes: string[] = [];
+      if (role === 'SUB_ADMIN') {
+        allowedTypes = ['STREET', 'AREA'];
+      } else if (role === 'ADMIN') {
+        allowedTypes = ['TALUK', 'DISTRICT'];
+      } else if (role === 'SUPER_ADMIN') {
+        allowedTypes = ['STATE', 'DISTRICT', 'TALUK', 'AREA', 'STREET'];
+      }
+
+      let locationFilter: any = {};
+      if (role !== 'SUPER_ADMIN') {
+        if (!userLocId) return [];
+        const childIds = await getChildLocationIds(userLocId);
+        locationFilter = {
+          locationId: { in: [userLocId, ...childIds] }
+        };
+      }
+
+      const whereClause: any = {
+        status: status || 'PENDING',
+        post: {
+          ...locationFilter,
+          location: {
+            type: { in: allowedTypes }
+          }
+        }
+      };
+
+      return (prisma as any).postReport.findMany({
+        where: whereClause,
+        orderBy: { createdAt: 'desc' },
+        include: { post: true, reportedBy: true }
+      });
+    },
+
+    getReportedCommunityPosts: async (_: any, { status }: any, context: any) => {
+      const lang = context?.language || 'en';
+      if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", lang));
+
+      const role = context.user.role;
+      const userLocId = context.user.locationId;
+
+      if (role === 'MEMBER') {
+        throw new Error("Unauthorized: Only administrators can view reports.");
+      }
+
+      // Hierarchy rules for location levels
+      let allowedTypes: string[] = [];
+      if (role === 'SUB_ADMIN') {
+        allowedTypes = ['STREET', 'AREA'];
+      } else if (role === 'ADMIN') {
+        allowedTypes = ['TALUK', 'DISTRICT'];
+      } else if (role === 'SUPER_ADMIN') {
+        allowedTypes = ['STATE', 'DISTRICT', 'TALUK', 'AREA', 'STREET'];
+      }
+
+      const reports = await (prisma as any).communityPostReport.findMany({
+        where: { status: status || 'PENDING' },
+        orderBy: { createdAt: 'desc' },
+        include: {
+          post: {
+            include: {
+              community: {
+                include: { location: true }
+              }
+            }
+          },
+          reportedBy: true
+        }
+      });
+
+      if (role === 'SUPER_ADMIN') {
+        return reports;
+      }
+
+      if (!userLocId) return [];
+      const childIds = await getChildLocationIds(userLocId);
+      const allowedLocIds = new Set([userLocId, ...childIds]);
+
+      // Filter reports in memory based on admin location tree and allowed location types
+      return reports.filter((r: any) => {
+        const commLoc = r.post?.community?.location;
+        if (!commLoc) return false; // Global/State community - only SUPER_ADMIN resolves
+        if (!allowedTypes.includes(commLoc.type)) return false;
+        return allowedLocIds.has(commLoc.id);
+      });
+    },
+
+    getUserWarnings: async (_: any, { memberId }: any, context: any) => {
+      const lang = context?.language || 'en';
+      if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", lang));
+
+      if (context.user.role === 'MEMBER') {
+        throw new Error("Unauthorized: Only administrators can view warning history.");
+      }
+
+      return (prisma as any).userWarning.findMany({
+        where: { memberId: Number(memberId) },
+        orderBy: { createdAt: 'desc' },
+        include: { member: true, admin: true }
+      });
     },
 
     // New resolver for towns and streets
@@ -1570,12 +1805,20 @@ export const resolvers = {
 
         return {
           ...post,
+          locationScore,
           feedScore
         };
       }));
 
-      // Sort descending by feedScore
-      return scoredPosts.sort((a, b) => b.feedScore - a.feedScore);
+      // Sort first by locationScore descending, and then by createdAt descending (newest first)
+      return scoredPosts.sort((a, b) => {
+        const aLocScore = a.locationScore || 0;
+        const bLocScore = b.locationScore || 0;
+        if (bLocScore !== aLocScore) {
+          return bLocScore - aLocScore;
+        }
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      });
     },
 
     getPollList: async (_: any, { locationId, communityId }: any, context: any) => {
@@ -1593,31 +1836,109 @@ export const resolvers = {
           allCommunityIds = relatedCommunities.map((c: any) => c.id);
         }
         where.communityId = { in: allCommunityIds };
-      } else if (locationId) {
-        const ancestorIds = await getAncestorLocationIds(locationId);
-        const childIds = await getChildLocationIds(locationId);
-        const allLocationIds = [...ancestorIds, locationId, ...childIds];
-        where.locationId = { in: allLocationIds };
-      } else if (user) {
-        if (user.role === 'MEMBER') {
-          if (user.locationId) {
-            const ancestorIds = await getAncestorLocationIds(user.locationId);
-            where.locationId = { in: ancestorIds };
-          } else {
-            where.locationId = -1;
+      } else {
+        let fetchRootId = null;
+        let targetLocationId = locationId || user?.locationId;
+        
+        if (targetLocationId) {
+          const ancestorIds = await getAncestorLocationIds(targetLocationId);
+          for (const aId of ancestorIds) {
+            const loc = await (prisma as any).location.findUnique({ where: { id: aId }, select: { type: true } });
+            if (loc?.type === 'STATE') {
+              fetchRootId = aId;
+              break;
+            }
           }
-        } else if (user.role === 'ADMIN' || user.role === 'SUB_ADMIN') {
-          if (user.locationId) {
-            const childIds = await getChildLocationIds(user.locationId);
-            where.locationId = { in: [user.locationId, ...childIds] };
-          } else {
-            where.locationId = -1;
+          if (!fetchRootId) {
+            fetchRootId = ancestorIds[ancestorIds.length - 1] || targetLocationId;
+          }
+        } else {
+          const stateLoc = await (prisma as any).location.findFirst({ where: { type: 'STATE' } });
+          if (stateLoc) {
+            fetchRootId = stateLoc.id;
           }
         }
+
+        if (fetchRootId) {
+          const childIds = await getChildLocationIds(fetchRootId);
+          where.locationId = { in: [fetchRootId, ...childIds] };
+        }
       }
-      return (prisma as any).poll.findMany({
+
+      const polls = await (prisma as any).poll.findMany({
         where,
         orderBy: { createdAt: 'desc' },
+      });
+
+      const targetScoreLocationId = locationId || user?.locationId;
+      const userScoreMap = await getUserLocationScoreMap(targetScoreLocationId);
+      const locationAncestorsCache = new Map<number, number[]>();
+
+      const scoredPolls = await Promise.all(polls.map(async (poll: any) => {
+        let pollAncestors = locationAncestorsCache.get(poll.locationId);
+        if (!pollAncestors) {
+          pollAncestors = await getAncestorLocationIds(poll.locationId);
+          locationAncestorsCache.set(poll.locationId, pollAncestors);
+        }
+
+        let locationScore = 0;
+        for (const pId of pollAncestors) {
+          if (userScoreMap.has(pId)) {
+            locationScore = Math.max(locationScore, userScoreMap.get(pId)!);
+          }
+        }
+
+        const likesCount = await (prisma as any).pollLike.count({ where: { pollId: poll.id } });
+        const commentsCount = await (prisma as any).pollComment.count({ where: { pollId: poll.id } });
+        const engagementScore = likesCount + (commentsCount * 3);
+
+        const feedScore = locationScore + engagementScore;
+        return {
+          ...poll,
+          locationScore,
+          feedScore
+        };
+      }));
+
+      // Sort by locationScore descending, then by createdAt descending!
+      return scoredPolls.sort((a, b) => {
+        const aLocScore = a.locationScore || 0;
+        const bLocScore = b.locationScore || 0;
+        if (bLocScore !== aLocScore) {
+          return bLocScore - aLocScore;
+        }
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      });
+    },
+
+    getReportedPolls: async (_: any, { status }: any, context: any) => {
+      const lang = context?.language || 'en';
+      if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", lang));
+
+      const role = context.user.role;
+      const userLocId = context.user.locationId;
+
+      if (role === 'MEMBER') {
+        throw new Error("Unauthorized: Only administrators can view reported polls.");
+      }
+
+      const where: any = {};
+      if (status) {
+        where.status = status;
+      }
+
+      if (role !== 'SUPER_ADMIN') {
+        if (!userLocId) return [];
+        const childIds = await getChildLocationIds(userLocId);
+        const allowedLocIds = [userLocId, ...childIds];
+        where.poll = {
+          locationId: { in: allowedLocIds }
+        };
+      }
+
+      return (prisma as any).pollReport.findMany({
+        where,
+        orderBy: { createdAt: 'desc' }
       });
     },
 
@@ -3046,7 +3367,7 @@ export const resolvers = {
               name: userRec.name,
               surname: userRec.surname,
               phone: userRec.phone,
-              role: userRec.role === 'SUPER_ADMIN' ? 'ADMIN' : (userRec.role === 'SUB_ADMIN' ? 'SUB_ADMIN' : 'Member'),
+              role: userRec.role === 'SUPER_ADMIN' ? 'SUPER_ADMIN' : (userRec.role === 'ADMIN' ? 'ADMIN' : (userRec.role === 'SUB_ADMIN' ? 'SUB_ADMIN' : 'Member')),
               locationId: userRec.locationId || 1,
               approvalStatus: 'APPROVED',
               isActive: true,
@@ -3103,7 +3424,7 @@ export const resolvers = {
               name: userRec.name,
               surname: userRec.surname,
               phone: userRec.phone,
-              role: userRec.role === 'SUPER_ADMIN' ? 'ADMIN' : (userRec.role === 'SUB_ADMIN' ? 'SUB_ADMIN' : 'Member'),
+              role: userRec.role === 'SUPER_ADMIN' ? 'SUPER_ADMIN' : (userRec.role === 'ADMIN' ? 'ADMIN' : (userRec.role === 'SUB_ADMIN' ? 'SUB_ADMIN' : 'Member')),
               locationId: userRec.locationId || 1,
               approvalStatus: 'APPROVED',
               isActive: true,
@@ -3183,26 +3504,62 @@ export const resolvers = {
 
       const expiryDateTime = expiryDate ? new Date(expiryDate) : null;
 
+      // Clean raw inputs and extract values from description JSON if description contains serialized details
+      let parsedJson: any = null;
+      if (description) {
+        const trimmed = description.trim();
+        if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+          try {
+            parsedJson = JSON.parse(trimmed);
+          } catch (e) {
+            // ignore
+          }
+        }
+      }
+
+      function cleanVal(val: any, jsonKey: string) {
+        if (val === undefined || val === null || val === 'null') {
+          if (parsedJson && parsedJson[jsonKey] !== undefined && parsedJson[jsonKey] !== null) {
+            return String(parsedJson[jsonKey]);
+          }
+          return null;
+        }
+        return String(val);
+      }
+
+      const dbBloodGroup = cleanVal(bloodGroup, 'bloodGroup');
+      const dbUnitsRequired = cleanVal(unitsRequired, 'unitsRequired');
+      const dbHospitalName = cleanVal(hospitalName, 'hospitalName');
+      const dbPatientCondition = cleanVal(patientCondition, 'patientCondition');
+      const dbDisasterType = cleanVal(disasterType, 'disasterType');
+      const dbAffectedArea = cleanVal(affectedArea, 'affectedArea');
+      const dbRequiredSupport = cleanVal(requiredSupport, 'requiredSupport');
+      const dbVolunteerType = cleanVal(volunteerType, 'volunteerType');
+      const dbContactPhone = cleanVal(contactPhone, 'contactNumber') || cleanVal(contactPhone, 'contactPhone') || cleanVal(contactPhone, 'contactDetails') || cleanVal(contactPhone, 'phone') || contactPhone;
+      const dbContactName = cleanVal(contactName, 'contactName') || contactName;
+
+      const formattedDescription = parsedJson ? formatEmergencyDescription(description) : description;
+
       const request = await (prisma as any).emergencyRequest.create({
         data: {
           title,
-          description,
+          description: formattedDescription || description,
           type,
           locationId: Number(locationId),
           status: initialStatus as any,
           audience,
-          contactName,
-          contactPhone,
+          contactName: dbContactName,
+          contactPhone: dbContactPhone,
           expiryDate: expiryDateTime,
           collectResponse: collectResponse !== undefined ? collectResponse : true,
-          bloodGroup,
-          unitsRequired,
-          hospitalName,
-          patientCondition,
-          disasterType,
-          affectedArea,
-          requiredSupport,
-          volunteerType,
+          bloodGroup: dbBloodGroup,
+          unitsRequired: dbUnitsRequired,
+          hospitalName: dbHospitalName,
+          patientCondition: dbPatientCondition,
+          disasterType: dbDisasterType,
+          affectedArea: dbAffectedArea,
+          requiredSupport: dbRequiredSupport,
+          volunteerType: dbVolunteerType,
           createdById,
           memberId
         },
@@ -3538,19 +3895,10 @@ export const resolvers = {
       const isOwner = post.createdById === Number(user.id) && post.createdByType === user.type;
       const isLegacyOwner = !post.createdById && post.authorName === user.name;
 
-      let isAuthorized = isOwner || isLegacyOwner || user.role === 'SUPER_ADMIN';
-
-      if (!isAuthorized && (user.role === 'ADMIN' || user.role === 'SUB_ADMIN')) {
-        try {
-          await validateLocationTargeting(Number(user.id), user.role, user.locationId, post.locationId, lang);
-          isAuthorized = true;
-        } catch {
-          isAuthorized = false;
-        }
-      }
+      const isAuthorized = isOwner || isLegacyOwner || user.role === 'SUPER_ADMIN';
 
       if (!isAuthorized) {
-        throw new Error("Unauthorized: You do not have permission to delete this post.");
+        throw new Error("Unauthorized: You do not have permission to delete this post directly.");
       }
 
       await (prisma as any).comment.deleteMany({
@@ -3564,7 +3912,265 @@ export const resolvers = {
       return true;
     },
 
-    createPoll: async (_: any, { question, options, durationDays, locationId, communityId }: any, context: any) => {
+    reportPost: async (_: any, { postId, reason }: any, context: any) => {
+      const lang = context?.language || 'en';
+      if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", lang));
+
+      const member = await getOrCreateMemberForUser(context.user);
+      if (!member) throw new Error("Member profile not found");
+
+      return (prisma as any).postReport.upsert({
+        where: {
+          postId_reportedById: {
+            postId: Number(postId),
+            reportedById: member.id
+          }
+        },
+        update: { reason, status: 'PENDING' },
+        create: {
+          postId: Number(postId),
+          reportedById: member.id,
+          reason,
+          status: 'PENDING'
+        },
+        include: { post: true, reportedBy: true }
+      });
+    },
+
+    reportCommunityPost: async (_: any, { postId, reason }: any, context: any) => {
+      const lang = context?.language || 'en';
+      if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", lang));
+
+      const member = await getOrCreateMemberForUser(context.user);
+      if (!member) throw new Error("Member profile not found");
+
+      return (prisma as any).communityPostReport.upsert({
+        where: {
+          postId_reportedById: {
+            postId: Number(postId),
+            reportedById: member.id
+          }
+        },
+        update: { reason, status: 'PENDING' },
+        create: {
+          postId: Number(postId),
+          reportedById: member.id,
+          reason,
+          status: 'PENDING'
+        },
+        include: { post: true, reportedBy: true }
+      });
+    },
+
+    resolvePostReport: async (_: any, { reportId, action, warningMessage }: any, context: any) => {
+      const lang = context?.language || 'en';
+      if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", lang));
+
+      const role = context.user.role;
+      const userLocId = context.user.locationId;
+
+      if (role === 'MEMBER') {
+        throw new Error("Unauthorized: Only administrators can resolve reports.");
+      }
+
+      const report = await (prisma as any).postReport.findUnique({
+        where: { id: Number(reportId) },
+        include: { post: true }
+      });
+      if (!report) throw new Error("Report not found");
+
+      // Validate administrative hierarchy
+      const postLoc = await (prisma as any).location.findUnique({
+        where: { id: report.post.locationId }
+      });
+
+      if (role === 'SUB_ADMIN' && !['STREET', 'AREA'].includes(postLoc.type)) {
+        throw new Error("Unauthorized: Sub Admins can only resolve Street or Area level reports.");
+      }
+      if (role === 'ADMIN' && !['TALUK', 'DISTRICT'].includes(postLoc.type)) {
+        throw new Error("Unauthorized: Admins can only resolve Taluk or District level reports.");
+      }
+
+      if (role !== 'SUPER_ADMIN') {
+        if (!userLocId) throw new Error("Unauthorized: Missing admin location scope.");
+        const childIds = await getChildLocationIds(userLocId);
+        const allowedLocIds = new Set([userLocId, ...childIds]);
+        if (!allowedLocIds.has(report.post.locationId)) {
+          throw new Error("Unauthorized: Post location is outside your scope.");
+        }
+      }
+
+      // Perform action
+      if (action === 'IGNORE') {
+        await (prisma as any).postReport.update({
+          where: { id: report.id },
+          data: { status: 'IGNORED' }
+        });
+      } else if (action === 'WARN') {
+        if (!warningMessage) throw new Error("Warning message is required to warn the user.");
+        
+        const postCreatorMemberId = await getPostCreatorMemberId(report.post);
+        if (postCreatorMemberId) {
+          await (prisma as any).userWarning.create({
+            data: {
+              memberId: postCreatorMemberId,
+              adminId: Number(context.user.id),
+              message: warningMessage,
+              postId: report.postId
+            }
+          });
+        }
+
+        await (prisma as any).postReport.update({
+          where: { id: report.id },
+          data: { status: 'WARNED' }
+        });
+      } else if (action === 'DELETE') {
+        // Log warning if message is provided
+        if (warningMessage) {
+          const postCreatorMemberId = await getPostCreatorMemberId(report.post);
+          if (postCreatorMemberId) {
+            await (prisma as any).userWarning.create({
+              data: {
+                memberId: postCreatorMemberId,
+                adminId: Number(context.user.id),
+                message: warningMessage,
+                postId: report.postId
+              }
+            });
+          }
+        }
+
+        // Cascade comments and delete the post
+        await (prisma as any).comment.deleteMany({
+          where: { postId: report.postId }
+        });
+        await (prisma as any).post.delete({
+          where: { id: report.postId }
+        });
+      }
+
+      return true;
+    },
+
+    resolveCommunityPostReport: async (_: any, { reportId, action, warningMessage }: any, context: any) => {
+      const lang = context?.language || 'en';
+      if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", lang));
+
+      const role = context.user.role;
+      const userLocId = context.user.locationId;
+
+      if (role === 'MEMBER') {
+        throw new Error("Unauthorized: Only administrators can resolve reports.");
+      }
+
+      const report = await (prisma as any).communityPostReport.findUnique({
+        where: { id: Number(reportId) },
+        include: {
+          post: {
+            include: {
+              community: {
+                include: { location: true }
+              }
+            }
+          }
+        }
+      });
+      if (!report) throw new Error("Report not found");
+
+      const commLoc = report.post.community.location;
+
+      if (!commLoc) {
+        if (role !== 'SUPER_ADMIN') {
+          throw new Error("Unauthorized: Only Super Admin can resolve global community reports.");
+        }
+      } else {
+        if (role === 'SUB_ADMIN' && !['STREET', 'AREA'].includes(commLoc.type)) {
+          throw new Error("Unauthorized: Sub Admins can only resolve Street or Area level reports.");
+        }
+        if (role === 'ADMIN' && !['TALUK', 'DISTRICT'].includes(commLoc.type)) {
+          throw new Error("Unauthorized: Admins can only resolve Taluk or District level reports.");
+        }
+
+        if (role !== 'SUPER_ADMIN') {
+          if (!userLocId) throw new Error("Unauthorized: Missing admin location scope.");
+          const childIds = await getChildLocationIds(userLocId);
+          const allowedLocIds = new Set([userLocId, ...childIds]);
+          if (!allowedLocIds.has(commLoc.id)) {
+            throw new Error("Unauthorized: Community location is outside your scope.");
+          }
+        }
+      }
+
+      // Perform action
+      if (action === 'IGNORE') {
+        await (prisma as any).communityPostReport.update({
+          where: { id: report.id },
+          data: { status: 'IGNORED' }
+        });
+      } else if (action === 'WARN') {
+        if (!warningMessage) throw new Error("Warning message is required to warn the user.");
+
+        const creatorMember = await (prisma as any).member.findFirst({
+          where: {
+            phone: (await (prisma as any).user.findUnique({
+              where: { id: report.post.createdById },
+              select: { phone: true }
+            }))?.phone
+          }
+        });
+
+        if (creatorMember) {
+          await (prisma as any).userWarning.create({
+            data: {
+              memberId: creatorMember.id,
+              adminId: Number(context.user.id),
+              message: warningMessage,
+              communityPostId: report.postId
+            }
+          });
+        }
+
+        await (prisma as any).communityPostReport.update({
+          where: { id: report.id },
+          data: { status: 'WARNED' }
+        });
+      } else if (action === 'DELETE') {
+        if (warningMessage) {
+          const creatorMember = await (prisma as any).member.findFirst({
+            where: {
+              phone: (await (prisma as any).user.findUnique({
+                where: { id: report.post.createdById },
+                select: { phone: true }
+              }))?.phone
+            }
+          });
+
+          if (creatorMember) {
+            await (prisma as any).userWarning.create({
+              data: {
+                memberId: creatorMember.id,
+                adminId: Number(context.user.id),
+                message: warningMessage,
+                communityPostId: report.postId
+              }
+            });
+          }
+        }
+
+        // Delete comments and the post
+        await (prisma as any).communityComment.deleteMany({
+          where: { postId: report.postId }
+        });
+        await (prisma as any).communityPost.delete({
+          where: { id: report.postId }
+        });
+      }
+
+      return true;
+    },
+
+    createPoll: async (_: any, { question, options, durationDays, locationId, districtId, talukId, areaId, streetId, communityId }: any, context: any) => {
       if (!context.user) {
         throw new Error(I18nService.translate("unauthorized_login", context?.language));
       }
@@ -3576,11 +4182,25 @@ export const resolvers = {
       const expiresAt = new Date();
       expiresAt.setDate(expiresAt.getDate() + durationDays);
       
+      let finalLocationId = streetId || areaId || talukId || districtId || locationId;
+      if (!finalLocationId) {
+        if (context.user.locationId) {
+          finalLocationId = Number(context.user.locationId);
+        }
+      }
+      if (!finalLocationId) {
+        const firstLocation = await (prisma as any).location.findFirst({ select: { id: true } });
+        finalLocationId = firstLocation?.id;
+      }
+      if (!finalLocationId) {
+        throw new Error(I18nService.translate("location_required", context?.language));
+      }
+      
       const poll = await (prisma as any).poll.create({
         data: {
           question,
-          locationId,
-          communityId,
+          locationId: Number(finalLocationId),
+          communityId: communityId ? Number(communityId) : null,
           createdById,
           memberId,
           expiresAt,
@@ -3600,7 +4220,7 @@ export const resolvers = {
              title: "New Poll",
              message: question,
              type: 'POLL',
-             locationId: Number(locationId),
+             locationId: Number(finalLocationId),
              time: 'Just now'
            }
          });
@@ -3625,12 +4245,12 @@ export const resolvers = {
            const payload = await formatCommunityMessage(chatMsg);
            io.to(`community:${communityId}`).emit('communityMessage', payload);
          }
-      } else if (locationId) {
+      } else if (finalLocationId) {
          await sendSystemNotification({
            title: "New Poll",
            message: question,
            type: 'POLL',
-           locationId: Number(locationId),
+           locationId: Number(finalLocationId),
            data: { pollId: poll.id }
          }).catch(e => console.error(e));
       }
@@ -3716,15 +4336,241 @@ export const resolvers = {
       });
     },
 
-    likePost: async (_: any, { id }: any) => {
-      return (prisma as any).post.update({
-        where: { id },
-        data: {
-          likes: {
-            increment: 1
+    likePoll: async (_: any, { id }: any, context: any) => {
+      const lang = context?.language || 'en';
+      if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", lang));
+
+      const member = await getOrCreateMemberForUser(context.user);
+      if (!member) throw new Error("Member profile not found");
+
+      const pollId = Number(id);
+      const memberId = member.id;
+
+      const existingLike = await (prisma as any).pollLike.findUnique({
+        where: {
+          pollId_memberId: {
+            pollId,
+            memberId
           }
         }
       });
+
+      if (existingLike) {
+        await (prisma as any).pollLike.delete({
+          where: {
+            pollId_memberId: {
+              pollId,
+              memberId
+            }
+          }
+        });
+      } else {
+        await (prisma as any).pollLike.create({
+          data: {
+            pollId,
+            memberId
+          }
+        });
+      }
+
+      return (prisma as any).poll.findUnique({
+        where: { id: pollId }
+      });
+    },
+
+    addPollComment: async (_: any, { pollId, content, authorName, authorRole }: any) => {
+      const comment = await (prisma as any).pollComment.create({
+        data: {
+          pollId,
+          content,
+          authorName,
+          authorRole
+        }
+      });
+      return comment;
+    },
+
+    reportPoll: async (_: any, { pollId, reason }: any, context: any) => {
+      const lang = context?.language || 'en';
+      if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", lang));
+
+      const member = await getOrCreateMemberForUser(context.user);
+      if (!member) throw new Error("Member profile not found");
+
+      const report = await (prisma as any).pollReport.upsert({
+        where: {
+          pollId_reportedById: {
+            pollId: Number(pollId),
+            reportedById: member.id
+          }
+        },
+        update: {
+          reason,
+          status: 'PENDING'
+        },
+        create: {
+          pollId: Number(pollId),
+          reportedById: member.id,
+          reason,
+          status: 'PENDING'
+        }
+      });
+
+      return report;
+    },
+
+    resolvePollReport: async (_: any, { reportId, action, warningMessage }: any, context: any) => {
+      const lang = context?.language || 'en';
+      if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", lang));
+
+      const role = context.user.role;
+      const userLocId = context.user.locationId;
+
+      if (role === 'MEMBER') {
+        throw new Error("Unauthorized: Only administrators can resolve reports.");
+      }
+
+      const report = await (prisma as any).pollReport.findUnique({
+        where: { id: Number(reportId) },
+        include: { poll: true }
+      });
+      if (!report) throw new Error("Report not found");
+
+      const pollLoc = await (prisma as any).location.findUnique({
+        where: { id: report.poll.locationId }
+      });
+
+      if (role === 'SUB_ADMIN' && !['STREET', 'AREA'].includes(pollLoc.type)) {
+        throw new Error("Unauthorized: Sub Admins can only resolve Street or Area level reports.");
+      }
+      if (role === 'ADMIN' && !['TALUK', 'DISTRICT'].includes(pollLoc.type)) {
+        throw new Error("Unauthorized: Admins can only resolve Taluk or District level reports.");
+      }
+
+      if (role !== 'SUPER_ADMIN') {
+        if (!userLocId) throw new Error("Unauthorized: Missing admin location scope.");
+        const childIds = await getChildLocationIds(userLocId);
+        const allowedLocIds = new Set([userLocId, ...childIds]);
+        if (!allowedLocIds.has(report.poll.locationId)) {
+          throw new Error("Unauthorized: Poll location is outside your scope.");
+        }
+      }
+
+      if (action === 'IGNORE') {
+        await (prisma as any).pollReport.update({
+          where: { id: report.id },
+          data: { status: 'IGNORED' }
+        });
+      } else if (action === 'WARN') {
+        if (!warningMessage) throw new Error("Warning message is required to warn the user.");
+        
+        const pollCreatorMemberId = await getPollCreatorMemberId(report.poll);
+        if (pollCreatorMemberId) {
+          await (prisma as any).userWarning.create({
+            data: {
+              memberId: pollCreatorMemberId,
+              adminId: Number(context.user.id),
+              message: warningMessage,
+              pollId: report.pollId
+            }
+          });
+        }
+
+        await (prisma as any).pollReport.update({
+          where: { id: report.id },
+          data: { status: 'WARNED' }
+        });
+      } else if (action === 'DELETE') {
+        if (warningMessage) {
+          const pollCreatorMemberId = await getPollCreatorMemberId(report.poll);
+          if (pollCreatorMemberId) {
+            await (prisma as any).userWarning.create({
+              data: {
+                memberId: pollCreatorMemberId,
+                adminId: Number(context.user.id),
+                message: warningMessage,
+                pollId: report.pollId
+              }
+            });
+          }
+        }
+
+        await (prisma as any).poll.delete({
+          where: { id: report.pollId }
+        });
+      }
+
+      return true;
+    },
+
+    likePost: async (_: any, { id }: any, context: any) => {
+      const lang = context?.language || 'en';
+      if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", lang));
+
+      const member = await getOrCreateMemberForUser(context.user);
+      if (!member) throw new Error("Member profile not found");
+
+      const postId = Number(id);
+      const memberId = member.id;
+
+      // Check if user already liked the post
+      const existingLike = await (prisma as any).postLike.findUnique({
+        where: {
+          postId_memberId: {
+            postId,
+            memberId
+          }
+        }
+      });
+
+      let updatedPost;
+      if (existingLike) {
+        // Unlike: delete the PostLike and decrement likes
+        await (prisma as any).postLike.delete({
+          where: {
+            postId_memberId: {
+              postId,
+              memberId
+            }
+          }
+        });
+        
+        updatedPost = await (prisma as any).post.update({
+          where: { id: postId },
+          data: {
+            likes: {
+              decrement: 1
+            }
+          }
+        });
+      } else {
+        // Like: create the PostLike and increment likes
+        await (prisma as any).postLike.create({
+          data: {
+            postId,
+            memberId
+          }
+        });
+
+        updatedPost = await (prisma as any).post.update({
+          where: { id: postId },
+          data: {
+            likes: {
+              increment: 1
+            }
+          }
+        });
+      }
+
+      // Safeguard: make sure likes count doesn't drop below 0
+      if (updatedPost.likes < 0) {
+        updatedPost = await (prisma as any).post.update({
+          where: { id: postId },
+          data: { likes: 0 }
+        });
+      }
+
+      return updatedPost;
     },
 
     addComment: async (_: any, { postId, content, authorName, authorRole }: any) => {
@@ -3946,34 +4792,143 @@ export const resolvers = {
       };
     },
 
-    likeCommunityPost: async (_: any, { postId }: any) => {
+    likeCommunityPost: async (_: any, { postId }: any, context: any) => {
+      const lang = context?.language || 'en';
+      if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", lang));
+
+      const member = await getOrCreateMemberForUser(context.user);
+      if (!member) throw new Error("Member profile not found");
+
+      const memberId = member.id;
+      const targetPostId = Number(postId);
+
       try {
-        const post = await (prisma as any).communityPost.update({
-          where: { id: postId },
-          data: { likes: { increment: 1 } },
-          include: {
-            community: true,
-            createdBy: true,
-            comments: {
-              orderBy: { createdAt: 'asc' }
+        // Try community post first
+        const communityPost = await (prisma as any).communityPost.findUnique({
+          where: { id: targetPostId }
+        });
+        if (!communityPost) throw new Error("Community post not found");
+
+        const existingLike = await (prisma as any).communityPostLike.findUnique({
+          where: {
+            postId_memberId: {
+              postId: targetPostId,
+              memberId
             }
           }
         });
+
+        let updatedPost;
+        if (existingLike) {
+          // Unlike
+          await (prisma as any).communityPostLike.delete({
+            where: {
+              postId_memberId: {
+                postId: targetPostId,
+                memberId
+              }
+            }
+          });
+
+          updatedPost = await (prisma as any).communityPost.update({
+            where: { id: targetPostId },
+            data: { likes: { decrement: 1 } },
+            include: {
+              community: true,
+              createdBy: true,
+              comments: { orderBy: { createdAt: 'asc' } }
+            }
+          });
+        } else {
+          // Like
+          await (prisma as any).communityPostLike.create({
+            data: {
+              postId: targetPostId,
+              memberId
+            }
+          });
+
+          updatedPost = await (prisma as any).communityPost.update({
+            where: { id: targetPostId },
+            data: { likes: { increment: 1 } },
+            include: {
+              community: true,
+              createdBy: true,
+              comments: { orderBy: { createdAt: 'asc' } }
+            }
+          });
+        }
+
+        if (updatedPost.likes < 0) {
+          updatedPost = await (prisma as any).communityPost.update({
+            where: { id: targetPostId },
+            data: { likes: 0 },
+            include: {
+              community: true,
+              createdBy: true,
+              comments: { orderBy: { createdAt: 'asc' } }
+            }
+          });
+        }
+
         return {
-          ...post,
-          createdAt: toIsoString(post.createdAt)
+          ...updatedPost,
+          createdAt: toIsoString(updatedPost.createdAt)
         };
+
       } catch (err) {
         // Fallback for regular posts when the mobile app calls likeCommunityPost
         const regularPost = await (prisma as any).post.findUnique({
-          where: { id: postId }
+          where: { id: targetPostId }
         });
         
         if (regularPost) {
-          const updatedRegularPost = await (prisma as any).post.update({
-            where: { id: postId },
-            data: { likes: { increment: 1 } }
+          const existingLike = await (prisma as any).postLike.findUnique({
+            where: {
+              postId_memberId: {
+                postId: targetPostId,
+                memberId
+              }
+            }
           });
+
+          let updatedRegularPost;
+          if (existingLike) {
+            // Unlike
+            await (prisma as any).postLike.delete({
+              where: {
+                postId_memberId: {
+                  postId: targetPostId,
+                  memberId
+                }
+              }
+            });
+
+            updatedRegularPost = await (prisma as any).post.update({
+              where: { id: targetPostId },
+              data: { likes: { decrement: 1 } }
+            });
+          } else {
+            // Like
+            await (prisma as any).postLike.create({
+              data: {
+                postId: targetPostId,
+                memberId
+              }
+            });
+
+            updatedRegularPost = await (prisma as any).post.update({
+              where: { id: targetPostId },
+              data: { likes: { increment: 1 } }
+            });
+          }
+
+          if (updatedRegularPost.likes < 0) {
+            updatedRegularPost = await (prisma as any).post.update({
+              where: { id: targetPostId },
+              data: { likes: 0 }
+            });
+          }
           
           return {
             id: updatedRegularPost.id,
@@ -4690,6 +5645,24 @@ export const resolvers = {
     updatedAt: (parent: any) => toIST(parent.updatedAt),
   },
 
+  PostReport: {
+    post: (parent: any) => (prisma as any).post.findUnique({ where: { id: parent.postId } }),
+    reportedBy: (parent: any) => (prisma as any).member.findUnique({ where: { id: parent.reportedById } }),
+    createdAt: (parent: any) => toIsoString(parent.createdAt),
+  },
+
+  CommunityPostReport: {
+    post: (parent: any) => (prisma as any).communityPost.findUnique({ where: { id: parent.postId } }),
+    reportedBy: (parent: any) => (prisma as any).member.findUnique({ where: { id: parent.reportedById } }),
+    createdAt: (parent: any) => toIsoString(parent.createdAt),
+  },
+
+  UserWarning: {
+    member: (parent: any) => (prisma as any).member.findUnique({ where: { id: parent.memberId } }),
+    admin: (parent: any) => (prisma as any).user.findUnique({ where: { id: parent.adminId } }),
+    createdAt: (parent: any) => toIsoString(parent.createdAt),
+  },
+
   EmergencyRequest: {
     createdAt: (parent: any) => toIST(parent.createdAt),
     expiryDate: (parent: any) => toIST(parent.expiryDate),
@@ -4698,39 +5671,63 @@ export const resolvers = {
     createdBy: (parent: any) => parent.createdById ? (prisma as any).user.findUnique({ where: { id: parent.createdById } }) : null,
     location: (parent: any) => (prisma as any).location.findUnique({ where: { id: parent.locationId } }),
     responses: (parent: any, _: any, context: any) => {
-      const user = context?.user;
-      if (user?.role === 'MEMBER') {
-        return (prisma as any).emergencyResponse.findMany({
-          where: { 
-            emergencyRequestId: parent.id, 
-            memberId: Number(user.id) 
-          },
-          include: { member: true }
-        });
-      }
       return (prisma as any).emergencyResponse.findMany({ 
         where: { emergencyRequestId: parent.id }, 
         include: { member: true } 
       });
     },
     stats: async (parent: any, _: any, context: any) => {
-      const user = context?.user;
-      if (user?.role === 'MEMBER') {
-        return {
-          total: 0,
-          going: 0,
-          maybe: 0,
-          notGoing: 0,
-          coming: 0,
-          onTheWay: 0,
-          reached: 0,
-          unable: 0,
-          contactRequested: 0
-        };
-      }
       const responses = await (prisma as any).emergencyResponse.findMany({ where: { emergencyRequestId: parent.id } });
       return buildEmergencyResponseStats(responses);
     },
+    description: (parent: any) => {
+      return formatEmergencyDescription(parent.description);
+    },
+    bloodGroup: (parent: any) => {
+      if (parent.bloodGroup && parent.bloodGroup !== 'null') return parent.bloodGroup;
+      const parsed = parseDescriptionJson(parent.description);
+      return parsed?.bloodGroup || parent.bloodGroup;
+    },
+    unitsRequired: (parent: any) => {
+      if (parent.unitsRequired && parent.unitsRequired !== 'null') return parent.unitsRequired;
+      const parsed = parseDescriptionJson(parent.description);
+      return parsed?.unitsRequired || parent.unitsRequired;
+    },
+    hospitalName: (parent: any) => {
+      if (parent.hospitalName && parent.hospitalName !== 'null') return parent.hospitalName;
+      const parsed = parseDescriptionJson(parent.description);
+      return parsed?.hospitalName || parent.hospitalName;
+    },
+    patientCondition: (parent: any) => {
+      if (parent.patientCondition && parent.patientCondition !== 'null') return parent.patientCondition;
+      const parsed = parseDescriptionJson(parent.description);
+      return parsed?.patientCondition || parent.patientCondition;
+    },
+    disasterType: (parent: any) => {
+      if (parent.disasterType && parent.disasterType !== 'null') return parent.disasterType;
+      const parsed = parseDescriptionJson(parent.description);
+      return parsed?.disasterType || parent.disasterType;
+    },
+    affectedArea: (parent: any) => {
+      if (parent.affectedArea && parent.affectedArea !== 'null') return parent.affectedArea;
+      const parsed = parseDescriptionJson(parent.description);
+      return parsed?.affectedArea || parent.affectedArea;
+    },
+    requiredSupport: (parent: any) => {
+      if (parent.requiredSupport && parent.requiredSupport !== 'null') return parent.requiredSupport;
+      const parsed = parseDescriptionJson(parent.description);
+      return parsed?.requiredSupport || parent.requiredSupport;
+    },
+    volunteerType: (parent: any) => {
+      if (parent.volunteerType && parent.volunteerType !== 'null') return parent.volunteerType;
+      const parsed = parseDescriptionJson(parent.description);
+      return parsed?.volunteerType || parent.volunteerType;
+    },
+    contactPhone: (parent: any) => {
+      if (parent.contactPhone && parent.contactPhone !== 'null') return parent.contactPhone;
+      const parsed = parseDescriptionJson(parent.description);
+      return parsed?.contactNumber || parsed?.contactPhone || parsed?.contactDetails || parsed?.phone || parent.contactPhone;
+    }
   },
 
   Activity: {
@@ -4805,7 +5802,70 @@ export const resolvers = {
       if (parent.member) return parent.member;
       if (!parent.memberId) return null;
       return (prisma as any).member.findUnique({ where: { id: parent.memberId } });
+    },
+    likesCount: async (parent: any) => {
+      return (prisma as any).pollLike.count({ where: { pollId: parent.id } });
+    },
+    commentsCount: async (parent: any) => {
+      return (prisma as any).pollComment.count({ where: { pollId: parent.id } });
+    },
+    isLiked: async (parent: any, _: any, context: any) => {
+      if (!context?.user) return false;
+      const member = await getOrCreateMemberForUser(context.user);
+      if (!member) return false;
+      const count = await (prisma as any).pollLike.count({
+        where: {
+          pollId: parent.id,
+          memberId: member.id
+        }
+      });
+      return count > 0;
+    },
+    comments: async (parent: any) => {
+      return (prisma as any).pollComment.findMany({
+        where: { pollId: parent.id },
+        orderBy: { createdAt: 'desc' }
+      });
+    },
+    likesList: async (parent: any) => {
+      return (prisma as any).pollLike.findMany({
+        where: { pollId: parent.id },
+        include: { member: true }
+      });
+    },
+    status: (parent: any) => {
+      const now = new Date();
+      return new Date(parent.expiresAt) > now ? "Active" : "Expired";
+    },
+    reports: async (parent: any) => {
+      return (prisma as any).pollReport.findMany({
+        where: { pollId: parent.id }
+      });
     }
+  },
+
+  PollComment: {
+    createdAt: (parent: any) => toIsoString(parent.createdAt)
+  },
+
+  PollLike: {
+    member: async (parent: any) => {
+      if (parent.member) return parent.member;
+      return (prisma as any).member.findUnique({ where: { id: parent.memberId } });
+    },
+    createdAt: (parent: any) => toIsoString(parent.createdAt)
+  },
+
+  PollReport: {
+    poll: async (parent: any) => {
+      if (parent.poll) return parent.poll;
+      return (prisma as any).poll.findUnique({ where: { id: parent.pollId } });
+    },
+    reportedBy: async (parent: any) => {
+      if (parent.reportedBy) return parent.reportedBy;
+      return (prisma as any).member.findUnique({ where: { id: parent.reportedById } });
+    },
+    createdAt: (parent: any) => toIsoString(parent.createdAt)
   },
 
   Campaign: {
@@ -4967,7 +6027,7 @@ export const resolvers = {
       });
       return replyTo ? formatCommunityMessage(replyTo) : null;
     },
-    createdAt: (parent: any) => toIsoString(parent.createdAt)
+    createdAt: (parent: any) => toIST(parent.createdAt)
   },
 
   CommunityMessageReaction: {

@@ -66,6 +66,8 @@ model Member {
   emergencyResponses EmergencyResponse[]
   polls              Poll[]
   pollVotes          PollVote[]
+  postLikes          PostLike[]
+  communityPostLikes CommunityPostLike[]
   district           String?
   constituency       String?
   area               String?
@@ -73,6 +75,11 @@ model Member {
   enrollments        MemberPlanEnrollment[]
   payments           ContributionPayment[]
   contributionProfile ContributionProfile?
+  postReports          PostReport[]
+  communityPostReports CommunityPostReport[]
+  warnings             UserWarning[]          @relation("MemberWarnings")
+  pollLikes            PollLike[]
+  pollReports          PollReport[]
 
   @@index([locationId])
   @@index([professionId])
@@ -118,6 +125,7 @@ model User {
   broadcasts      Broadcast[]
   polls           Poll[]
   notifications   Notification[]
+  warningsCreated UserWarning[]          @relation("AdminWarnings")
   district        String?
   constituency    String?
   area            String?
@@ -267,6 +275,8 @@ model Post {
   locationId    Int
   location      Location  @relation(fields: [locationId], references: [id])
   comments      Comment[]
+  likesList     PostLike[]
+  reports       PostReport[]
   createdAt     DateTime  @default(now())
   createdById   Int?
   createdByType String?
@@ -288,6 +298,9 @@ model Poll {
   updatedAt   DateTime     @updatedAt
   options     PollOption[]
   votes       PollVote[]
+  likesList   PollLike[]
+  comments    PollComment[]
+  reports     PollReport[]
 
   @@index([locationId])
   @@index([communityId])
@@ -468,6 +481,8 @@ model CommunityPost {
   createdBy   User               @relation(fields: [createdById], references: [id])
   likes       Int                @default(0)
   comments    CommunityComment[]
+  likesList   CommunityPostLike[]
+  reports     CommunityPostReport[]
   createdAt   DateTime           @default(now())
   updatedAt   DateTime           @updatedAt
 }
@@ -645,4 +660,118 @@ enum ReminderNotificationType {
   PUSH
   SMS
   WHATSAPP
+}
+
+model PostLike {
+  id        Int      @id @default(autoincrement())
+  postId    Int
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  memberId  Int
+  member    Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([postId, memberId])
+}
+
+model CommunityPostLike {
+  id        Int           @id @default(autoincrement())
+  postId    Int
+  post      CommunityPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  memberId  Int
+  member    Member        @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  createdAt DateTime      @default(now())
+
+  @@unique([postId, memberId])
+}
+
+enum ReportStatus {
+  PENDING
+  IGNORED
+  WARNED
+  DELETED
+}
+
+model PostReport {
+  id           Int          @id @default(autoincrement())
+  postId       Int
+  post         Post         @relation(fields: [postId], references: [id], onDelete: Cascade)
+  reportedById Int
+  reportedBy   Member       @relation(fields: [reportedById], references: [id], onDelete: Cascade)
+  reason       String
+  status       ReportStatus @default(PENDING)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@unique([postId, reportedById])
+  @@index([postId])
+  @@index([reportedById])
+}
+
+model CommunityPostReport {
+  id           Int           @id @default(autoincrement())
+  postId       Int
+  post         CommunityPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  reportedById Int
+  reportedBy   Member        @relation(fields: [reportedById], references: [id], onDelete: Cascade)
+  reason       String
+  status       ReportStatus  @default(PENDING)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@unique([postId, reportedById])
+  @@index([postId])
+  @@index([reportedById])
+}
+
+model UserWarning {
+  id              Int      @id @default(autoincrement())
+  memberId        Int
+  member          Member   @relation("MemberWarnings", fields: [memberId], references: [id], onDelete: Cascade)
+  adminId         Int
+  admin           User     @relation("AdminWarnings", fields: [adminId], references: [id], onDelete: Cascade)
+  message         String
+  postId          Int?
+  communityPostId Int?
+  pollId          Int?
+  createdAt       DateTime @default(now())
+
+  @@index([memberId])
+  @@index([adminId])
+}
+
+model PollLike {
+  id        Int      @id @default(autoincrement())
+  pollId    Int
+  poll      Poll     @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  memberId  Int
+  member    Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([pollId, memberId])
+}
+
+model PollComment {
+  id         Int      @id @default(autoincrement())
+  content    String
+  authorName String
+  authorRole String?
+  pollId     Int
+  poll       Poll     @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+}
+
+model PollReport {
+  id           Int          @id @default(autoincrement())
+  pollId       Int
+  poll         Poll         @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  reportedById Int
+  reportedBy   Member       @relation(fields: [reportedById], references: [id], onDelete: Cascade)
+  reason       String
+  status       ReportStatus @default(PENDING)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@unique([pollId, reportedById])
+  @@index([pollId])
+  @@index([reportedById])
 }
