@@ -483,6 +483,7 @@ export const typeDefs = gql`
   # Root Query and Mutation
   type DashboardStats {
     locationName: String!
+    totalSuperAdmins: Int!
     totalAdmins: Int!
     totalSubAdmins: Int!
     totalMembers: Int!

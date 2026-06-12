@@ -110,6 +110,10 @@ async function startServer() {
                     locationId: dbUser.locationId || null,
                     type: type // 'admin' or 'member'
                   };
+                } else {
+                  // Token exists but DB record not found (e.g., after DB reset)
+                  // Set session_expired so resolvers can return proper error
+                  contextUser = { id: null, role: null, type: null, session_expired: true };
                 }
               }
             } else if (token) {

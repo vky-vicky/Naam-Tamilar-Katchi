@@ -1118,7 +1118,8 @@ export const resolvers = {
       const combined = [...formattedMembers, ...formattedUsers];
       const uniquePeople = Array.from(new Map(combined.map(item => [item.phone, item])).values());
 
-      const totalAdmins = uniquePeople.filter(p => p.role === 'ADMIN' || p.role === 'SUPER_ADMIN').length;
+      const totalSuperAdmins = uniquePeople.filter(p => p.role === 'SUPER_ADMIN').length;
+      const totalAdmins = uniquePeople.filter(p => p.role === 'ADMIN').length;
       const totalSubAdmins = uniquePeople.filter(p => p.role === 'SUB_ADMIN').length;
       const totalMembers = uniquePeople.filter(p => p.role === 'MEMBER').length;
 
@@ -1128,6 +1129,7 @@ export const resolvers = {
 
       return {
         locationName,
+        totalSuperAdmins,
         totalAdmins,
         totalSubAdmins,
         totalMembers,
@@ -1578,12 +1580,16 @@ export const resolvers = {
             orderBy: { createdAt: 'desc' },
             include: { location: true, parent: true }
           }).then((users: any[]) => users.map((u: any) => {
-            const addedByName = u.parent?.name || 'Admin';
+            const isSuper = u.role === 'SUPER_ADMIN';
+            const addedByName = u.parent?.name 
+              ? u.parent.name 
+              : (isSuper ? 'System' : 'Admin');
+            const roleLabel = isSuper ? 'Super Admin' : 'Admin';
             return {
               id: u.id,
               activityType: 'ADMIN',
-              title: u.role === 'ADMIN' ? 'Admin Added' : 'Super Admin Added',
-              description: `${u.role.replace('_', ' ')} ${u.name} ${u.surname || ''} added by ${addedByName}`,
+              title: isSuper ? 'Super Admin Added' : 'Admin Added',
+              description: `${roleLabel} ${u.name} ${u.surname || ''} added by ${addedByName}`,
               createdAt: toIST(u.createdAt),
               member: {
                 id: u.id,
@@ -2942,10 +2948,27 @@ export const resolvers = {
       }
 
       if (isUserTable) {
-        delete updateData.professionId;
+        // User model-ல் இல்லாத Member-only fields-ஐ நீக்குவோம்
+        // (allergies, conditions, emergencyContact are Member-only fields)
+        const USER_ALLOWED_FIELDS = [
+          'name', 'surname', 'phone', 'password', 'image',
+          'dateOfBirth', 'gender', 'bloodGroup', 'role',
+          'locationId', 'approvalStatus', 'isActive', 'fcmToken',
+          'district', 'constituency', 'area', 'street', 'profession'
+        ];
+        const userUpdateData: any = {};
+        for (const key of USER_ALLOWED_FIELDS) {
+          if (updateData[key] !== undefined) {
+            userUpdateData[key] = updateData[key];
+          }
+        }
+        // locationId from location hierarchy update
+        if (updateData.locationId !== undefined) {
+          userUpdateData.locationId = updateData.locationId;
+        }
         const updatedUser = await (prisma as any).user.update({
           where: { id: targetId },
-          data: updateData,
+          data: userUpdateData,
           include: { location: true }
         });
         return userToMemberShape(updatedUser);
