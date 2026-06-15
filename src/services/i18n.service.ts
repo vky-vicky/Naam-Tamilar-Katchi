@@ -9,6 +9,26 @@ const translations = {
     en: 'Unauthorized: Members can only edit their own profile',
     ta: 'அனுமதி இல்லை: உறுப்பினர்கள் தங்கள் சொந்த சுயவிவரத்தை மட்டுமே திருத்த முடியும்'
   },
+  state_selection_mandatory: {
+    en: 'State selection is mandatory for Super Admin.',
+    ta: 'சூப்பர் அட்மின் (Super Admin) பொறுப்பிற்கு மாநிலத்தைத் தேர்ந்தெடுப்பது கட்டாயமாகும்.'
+  },
+  district_or_taluk_selection_mandatory: {
+    en: 'District or Taluk selection is mandatory for Admin role.',
+    ta: 'நிர்வாகி (Admin) பொறுப்பிற்கு மாவட்டம் அல்லது தாலுகாவைத் தேர்ந்தெடுப்பது கட்டாயமாகும்.'
+  },
+  admin_level_error: {
+    en: 'Admin role can only be assigned at District or Taluk level.',
+    ta: 'நிர்வாகி (Admin) பொறுப்பை மாவட்டம் அல்லது தாலுகா அளவிலான இடத்திற்கு மட்டுமே ஒதுக்க முடியும்.'
+  },
+  area_or_street_selection_mandatory: {
+    en: 'Area or Street selection is mandatory for Sub Admin role.',
+    ta: 'துணை நிர்வாகி (Sub Admin) பொறுப்பிற்கு பகுதி அல்லது தெருவைத் தேர்ந்தெடுப்பது கட்டாயமாகும்.'
+  },
+  subadmin_level_error: {
+    en: 'Sub Admin role can only be assigned at Area or Street level.',
+    ta: 'துணை நிர்வாகி (Sub Admin) பொறுப்பை பகுதி அல்லது தெரு அளவிலான இடத்திற்கு மட்டுமே ஒதுக்க முடியும்.'
+  },
   user_not_found: {
     en: 'User not found',
     ta: 'பயனர் கண்டறியப்படவில்லை'

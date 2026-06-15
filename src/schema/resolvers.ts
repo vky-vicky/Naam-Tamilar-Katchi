@@ -69,6 +69,7 @@ function safeResolver<T>(fn: (...args: any[]) => Promise<T>) {
 
 // Helper to get all child location IDs without one DB query per tree node.
 async function getChildLocationIds(locationId: number): Promise<number[]> {
+  const numericLocationId = Number(locationId);
   const locations = await (prisma as any).location.findMany({
     select: { id: true, parentId: true },
   });
@@ -82,7 +83,7 @@ async function getChildLocationIds(locationId: number): Promise<number[]> {
   }
 
   const ids: number[] = [];
-  const queue = [...(childrenByParent.get(locationId) || [])];
+  const queue = [...(childrenByParent.get(numericLocationId) || [])];
 
   while (queue.length > 0) {
     const id = queue.shift()!;
@@ -95,8 +96,9 @@ async function getChildLocationIds(locationId: number): Promise<number[]> {
 
 // Helper to get all parent/ancestor location IDs up to the root.
 async function getAncestorLocationIds(locationId: number): Promise<number[]> {
-  const ids: number[] = [locationId];
-  let currentId = locationId;
+  const numericLocationId = Number(locationId);
+  const ids: number[] = [numericLocationId];
+  let currentId = numericLocationId;
   while (true) {
     const loc = await (prisma as any).location.findUnique({
       where: { id: currentId },
@@ -108,6 +110,39 @@ async function getAncestorLocationIds(locationId: number): Promise<number[]> {
   }
   return ids;
 }
+
+async function getUniqueRecipientCount(locationId: number): Promise<number> {
+  const targetIds = await getChildLocationIds(locationId);
+  const allIds = [Number(locationId), ...targetIds];
+
+  const [members, users] = await Promise.all([
+    (prisma as any).member.findMany({
+      where: { locationId: { in: allIds }, isActive: true },
+      select: { phone: true }
+    }),
+    (prisma as any).user.findMany({
+      where: { locationId: { in: allIds }, isActive: true },
+      select: { phone: true }
+    })
+  ]);
+
+  const uniquePhones = new Set<string>();
+  for (const m of members) {
+    if (m.phone) {
+      const cleanPhone = m.phone.trim().toLowerCase();
+      if (cleanPhone) uniquePhones.add(cleanPhone);
+    }
+  }
+  for (const u of users) {
+    if (u.phone) {
+      const cleanPhone = u.phone.trim().toLowerCase();
+      if (cleanPhone) uniquePhones.add(cleanPhone);
+    }
+  }
+
+  return uniquePhones.size;
+}
+
 
 async function findParentLocationOfType(locationId: number, targetType: string): Promise<number | null> {
   const ancestorIds = await getAncestorLocationIds(locationId);
@@ -430,11 +465,7 @@ async function getBroadcastListForContext({ locationId, scope, broadcastId, isAc
 
   return Promise.all(
     authorizedBroadcasts.map(async (broadcast: any) => {
-      const targetIds = await getChildLocationIds(broadcast.locationId);
-      const allIds = [broadcast.locationId, ...targetIds];
-      const recipientCount = await (prisma as any).member.count({
-        where: { locationId: { in: allIds }, isActive: true },
-      });
+      const recipientCount = await getUniqueRecipientCount(broadcast.locationId);
       return { ...broadcast, recipientCount };
     })
   );
@@ -495,6 +526,149 @@ async function validateLocationTargeting(userId: number, role: string, userLocat
 
   // 4. MEMBERS are not allowed to create events or broadcasts
   throw new Error(I18nService.translate("member_not_allowed", lang));
+}
+
+// Helper to validate role-based location level requirements
+async function validateRoleLocationLevel(role: string, locationId: number, lang: string = 'en') {
+  const targetLocation = await (prisma as any).location.findUnique({
+    where: { id: locationId }
+  });
+  if (!targetLocation) {
+    throw new Error(I18nService.translate("target_location_not_found", lang));
+  }
+
+  const normRole = role.toUpperCase().trim();
+  const type = targetLocation.type;
+
+  if (normRole === 'SUPER_ADMIN') {
+    if (type !== 'STATE') {
+      throw new Error(I18nService.translate("state_selection_mandatory" as any, lang));
+    }
+  } else if (normRole === 'ADMIN') {
+    if (type !== 'DISTRICT' && type !== 'TALUK') {
+      if (type === 'STATE') {
+        throw new Error(I18nService.translate("district_or_taluk_selection_mandatory" as any, lang));
+      } else {
+        throw new Error(I18nService.translate("admin_level_error" as any, lang));
+      }
+    }
+  } else if (normRole === 'SUB_ADMIN') {
+    if (type !== 'AREA' && type !== 'STREET') {
+      if (type === 'STATE' || type === 'DISTRICT' || type === 'TALUK') {
+        throw new Error(I18nService.translate("area_or_street_selection_mandatory" as any, lang));
+      } else {
+        throw new Error(I18nService.translate("subadmin_level_error" as any, lang));
+      }
+    }
+  }
+}
+
+// Helpers for role and designation formatting
+function getRoleLabel(role: string | null | undefined): string {
+  if (!role) return 'Member';
+  const r = role.toUpperCase().trim();
+  if (r === 'SUPER_ADMIN') return 'Super Admin';
+  if (r === 'ADMIN') return 'Admin';
+  if (r === 'SUB_ADMIN') return 'Sub Admin';
+  if (r === 'MEMBER') return 'Member';
+  return role;
+}
+
+function formatUserDesignation(user: any, fallbackRole: string = 'Admin'): string {
+  if (!user) return fallbackRole;
+  const roleLabel = getRoleLabel(user.role);
+  return `${roleLabel} ${user.name}`;
+}
+
+async function writeUpdateAuditLogs(
+  context: any,
+  isUserTable: boolean,
+  targetId: number,
+  currentPhone: string,
+  rest: any,
+  args: any,
+  currentRole: string,
+  targetRole: string,
+  isRoleExplicitlyChanged: boolean,
+  targetUser: any,
+  targetMember: any
+) {
+  try {
+    // 1. Get the target's updated details from DB to have correct name/phone
+    const phoneToCheck = rest.phone || currentPhone;
+    const updatedUser = await (prisma as any).user.findFirst({
+      where: { phone: phoneToCheck }
+    });
+    const updatedMember = await (prisma as any).member.findFirst({
+      where: { phone: phoneToCheck }
+    });
+
+    const targetName = updatedUser ? updatedUser.name : (updatedMember ? updatedMember.name : (targetUser ? targetUser.name : (targetMember ? targetMember.name : '')));
+    const targetSurname = updatedUser ? updatedUser.surname : (updatedMember ? updatedMember.surname : (targetUser ? targetUser.surname : (targetMember ? targetMember.surname : '')));
+    const targetFullName = `${targetName} ${targetSurname || ''}`.trim();
+
+    // 2. Load updater details
+    const updaterUser = await (prisma as any).user.findUnique({
+      where: { id: Number(context.user.id) }
+    }) || await (prisma as any).member.findUnique({
+      where: { id: Number(context.user.id) }
+    });
+    const updaterName = formatUserDesignation(updaterUser, 'Admin');
+
+    // 3. Audit for Role Change
+    if (isRoleExplicitlyChanged) {
+      const oldRoleLabel = getRoleLabel(currentRole);
+      const newRoleLabel = getRoleLabel(targetRole);
+      const roleDetails = `Member Role Changed from ${oldRoleLabel} to ${newRoleLabel} for ${targetFullName} by ${updaterName}`;
+      
+      const finalUserRecord = await (prisma as any).user.findFirst({
+        where: { phone: phoneToCheck }
+      });
+
+      await (prisma as any).auditLog.create({
+        data: {
+          userId: finalUserRecord ? finalUserRecord.id : Number(context.user.id),
+          action: 'role_change',
+          details: roleDetails
+        }
+      });
+    }
+
+    // 4. Audit for Profile Update
+    const hasProfileUpdates = 
+      (rest.name !== undefined && rest.name !== (targetUser?.name ?? targetMember?.name)) ||
+      (rest.surname !== undefined && rest.surname !== (targetUser?.surname ?? targetMember?.surname)) ||
+      (rest.phone !== undefined && rest.phone !== currentPhone) ||
+      (rest.password !== undefined) ||
+      (rest.image !== undefined) ||
+      (rest.profilePicture !== undefined) ||
+      (rest.dateOfBirth !== undefined) ||
+      (rest.gender !== undefined) ||
+      (rest.bloodGroup !== undefined) ||
+      (args.locationId !== undefined) ||
+      (args.districtId !== undefined) ||
+      (args.talukId !== undefined) ||
+      (args.areaId !== undefined) ||
+      (args.streetId !== undefined) ||
+      (args.professionName !== undefined);
+
+    if (hasProfileUpdates) {
+      const profileDetails = `Member Profile Updated for ${targetFullName} by ${updaterName}`;
+      const finalUserRecord = await (prisma as any).user.findFirst({
+        where: { phone: phoneToCheck }
+      });
+
+      await (prisma as any).auditLog.create({
+        data: {
+          userId: finalUserRecord ? finalUserRecord.id : Number(context.user.id),
+          action: 'profile_update',
+          details: profileDetails
+        }
+      });
+    }
+  } catch (error) {
+    console.error('Failed to write update audit logs:', error);
+  }
 }
 
 // Helper to resolve location names to a Street ID
@@ -710,6 +884,45 @@ function formatEmergencyDescription(description: string | null | undefined): str
   }
   return description;
 }
+
+function extractRemarksFromDescription(description: string | null | undefined): string | null {
+  if (!description) return null;
+  const trimmed = description.trim();
+  
+  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+    try {
+      const data = JSON.parse(trimmed);
+      return data.additionalInfo || data.remarks || data.description || null;
+    } catch (e) {
+      // ignore
+    }
+  }
+  
+  const lines = trimmed.split('\n');
+  for (const line of lines) {
+    if (line.startsWith('Additional Info:')) {
+      return line.substring('Additional Info:'.length).trim();
+    }
+    if (line.startsWith('Remarks:')) {
+      return line.substring('Remarks:'.length).trim();
+    }
+  }
+  
+  return description;
+}
+
+function parseFieldFromFormattedDescription(description: string | null | undefined, fieldPrefix: string): string | null {
+  if (!description) return null;
+  const trimmed = description.trim();
+  const lines = trimmed.split('\n');
+  for (const line of lines) {
+    if (line.toLowerCase().startsWith(fieldPrefix.toLowerCase() + ':')) {
+      return line.substring(fieldPrefix.length + 1).trim();
+    }
+  }
+  return null;
+}
+
 
 // Normalize blood group: accepts both 'O+' and 'O_POSITIVE' formats
 function normalizeBloodGroup(value: string | null | undefined): string | null {
@@ -1504,7 +1717,7 @@ export const resolvers = {
             })
           ]).then(([members, users]) => {
             const memberActivities = members.map((m: any) => {
-              const approvedByName = m.approvedBy?.name || m.createdBy?.name || 'Admin';
+              const approvedByName = m.approvedBy ? formatUserDesignation(m.approvedBy) : (m.createdBy ? formatUserDesignation(m.createdBy) : 'Admin');
               const actionText = m.approvedById ? 'approved' : 'added';
               return {
                 id: m.id,
@@ -1526,7 +1739,7 @@ export const resolvers = {
             });
 
             const userActivities = users.map((u: any) => {
-              const addedByName = u.parent?.name || 'Admin';
+              const addedByName = formatUserDesignation(u.parent, 'Admin');
               return {
                 id: 1000000 + u.id,
                 activityType: 'MEMBER',
@@ -1581,9 +1794,7 @@ export const resolvers = {
             include: { location: true, parent: true }
           }).then((users: any[]) => users.map((u: any) => {
             const isSuper = u.role === 'SUPER_ADMIN';
-            const addedByName = u.parent?.name 
-              ? u.parent.name 
-              : (isSuper ? 'System' : 'Admin');
+            const addedByName = formatUserDesignation(u.parent, isSuper ? 'System' : 'Admin');
             const roleLabel = isSuper ? 'Super Admin' : 'Admin';
             return {
               id: u.id,
@@ -1632,7 +1843,7 @@ export const resolvers = {
             orderBy: { createdAt: 'desc' },
             include: { location: true, parent: true }
           }).then((users: any[]) => users.map((u: any) => {
-            const addedByName = u.parent?.name || 'Admin';
+            const addedByName = formatUserDesignation(u.parent, 'Admin');
             return {
               id: u.id,
               activityType: 'SUB_ADMIN',
@@ -1682,7 +1893,7 @@ export const resolvers = {
       }
 
       if (shouldQuery('ROLE_CHANGE')) {
-        // Build audit where carefully — merge user filters without spread conflict
+        // Build audit where carefully — merge filters without spread conflict
         const auditUserFilter: any = {};
         if (targetLocationId) {
           auditUserFilter.locationId = { in: allLocationIds };
@@ -1691,14 +1902,34 @@ export const resolvers = {
           auditUserFilter.name = { contains: search, mode: 'insensitive' };
         }
 
+        const andFilters: any[] = [
+          {
+            OR: [
+              { action: { contains: 'role', mode: 'insensitive' } },
+              { action: { contains: 'profile', mode: 'insensitive' } }
+            ]
+          }
+        ];
+
+        if (Object.keys(auditUserFilter).length > 0) {
+          andFilters.push({ user: auditUserFilter });
+        }
+
+        if (search) {
+          andFilters.push({
+            OR: [
+              { action: { contains: search, mode: 'insensitive' } },
+              { details: { contains: search, mode: 'insensitive' } }
+            ]
+          });
+        }
+
+        if (dateFilter.createdAt) {
+          andFilters.push({ createdAt: dateFilter.createdAt });
+        }
+
         const auditWhere: any = {
-          action: { contains: 'role', mode: 'insensitive' },
-          ...(Object.keys(auditUserFilter).length > 0 ? { user: auditUserFilter } : {}),
-          ...(search ? { OR: [
-            { action: { contains: search, mode: 'insensitive' } },
-            { details: { contains: search, mode: 'insensitive' } },
-          ]} : {}),
-          ...dateFilter
+          AND: andFilters
         };
 
         promises.push(
@@ -1707,23 +1938,26 @@ export const resolvers = {
             take: takeLimit,
             orderBy: { createdAt: 'desc' },
             include: { user: { include: { location: true } } }
-          }).then((logs: any[]) => logs.map((l: any) => ({
-            id: l.id,
-            activityType: 'ROLE_CHANGE',
-            title: 'Role Changed',
-            description: l.details || `Role changed for user ${l.user.name}`,
-            createdAt: toIST(l.createdAt),
-            member: {
-              id: l.user.id,
-              name: l.user.name,
-              phone: l.user.phone,
-              role: l.user.role
-            },
-            location: l.user.location ? {
-              id: l.user.location.id,
-              name: l.user.location.name
-            } : null
-          })))
+          }).then((logs: any[]) => logs.map((l: any) => {
+            const isProfile = l.action.toLowerCase().includes('profile');
+            return {
+              id: l.id,
+              activityType: 'ROLE_CHANGE',
+              title: isProfile ? 'Profile Updated' : 'Role Changed',
+              description: l.details || (isProfile ? `Profile updated for user ${l.user?.name || ''}` : `Role changed for user ${l.user?.name || ''}`),
+              createdAt: toIST(l.createdAt),
+              member: l.user ? {
+                id: l.user.id,
+                name: l.user.name,
+                phone: l.user.phone,
+                role: l.user.role
+              } : null,
+              location: l.user?.location ? {
+                id: l.user.location.id,
+                name: l.user.location.name
+              } : null
+            };
+          }))
         );
       }
 
@@ -2110,11 +2344,7 @@ export const resolvers = {
 
       let deliveryStats = null;
       if (broadcast) {
-        const targetIds = await getChildLocationIds(broadcast.locationId);
-        const allIds = [broadcast.locationId, ...targetIds];
-        const totalRecipients = await (prisma as any).member.count({
-          where: { locationId: { in: allIds }, isActive: true }
-        });
+        const totalRecipients = await getUniqueRecipientCount(broadcast.locationId);
         deliveryStats = {
           totalRecipients,
           readCount: 0,
@@ -2498,14 +2728,10 @@ export const resolvers = {
         orderBy: { createdAt: 'desc' },
       });
 
-      // Compute recipient count for each broadcast (members in that location subtree)
+      // Compute recipient count for each broadcast (unique members/users in that location subtree)
       const withCount = await Promise.all(
         broadcasts.map(async (b: any) => {
-          const targetIds = await getChildLocationIds(b.locationId);
-          const allIds = [b.locationId, ...targetIds];
-          const recipientCount = await (prisma as any).member.count({
-            where: { locationId: { in: allIds }, isActive: true },
-          });
+          const recipientCount = await getUniqueRecipientCount(b.locationId);
           return { ...b, recipientCount };
         })
       );
@@ -2646,6 +2872,15 @@ export const resolvers = {
         throw new Error("please_select_profession");
       }
 
+      // Phone number uniqueness validation
+      if (rest.phone) {
+        const duplicateUser = await (prisma as any).user.findFirst({ where: { phone: rest.phone } });
+        const duplicateMember = await (prisma as any).member.findFirst({ where: { phone: rest.phone } });
+        if (duplicateUser || duplicateMember) {
+          throw new Error(I18nService.translate("phone_already_registered", context?.language));
+        }
+      }
+
       // 1. Creator Hierarchy logic
       let creatorId = context?.user?.id;
       if (!creatorId) {
@@ -2663,6 +2898,18 @@ export const resolvers = {
           select: { locationId: true }
         });
         finalLocationId = creatorUser?.locationId;
+      }
+
+      // Enforce location requirement for admin roles
+      if (['SUPER_ADMIN', 'ADMIN', 'SUB_ADMIN'].includes(rest.role)) {
+        if (!finalLocationId) {
+          throw new Error(I18nService.translate("location_required", context?.language));
+        }
+      }
+
+      // Validate location matches the target role level requirements
+      if (finalLocationId) {
+        await validateRoleLocationLevel(rest.role, finalLocationId, context?.language);
       }
 
       if (context?.user) {
@@ -2745,6 +2992,15 @@ export const resolvers = {
         throw new Error("please_select_profession");
       }
 
+      // Phone number uniqueness validation
+      if (rest.phone) {
+        const duplicateUser = await (prisma as any).user.findFirst({ where: { phone: rest.phone } });
+        const duplicateMember = await (prisma as any).member.findFirst({ where: { phone: rest.phone } });
+        if (duplicateUser || duplicateMember) {
+          throw new Error(I18nService.translate("phone_already_registered", context?.language));
+        }
+      }
+
       // 1. Creator Fallback for testing
       let creatorId = context?.user?.id;
       if (!creatorId) {
@@ -2776,6 +3032,20 @@ export const resolvers = {
 
       if (!finalLocationId) {
         throw new Error(I18nService.translate("location_required", context?.language));
+      }
+
+      const targetRoleForValidation = rest.role ? rest.role.toUpperCase().trim() : 'MEMBER';
+      
+      // Enforce location requirement for admin roles
+      if (['SUPER_ADMIN', 'ADMIN', 'SUB_ADMIN'].includes(targetRoleForValidation)) {
+        if (!finalLocationId) {
+          throw new Error(I18nService.translate("location_required", context?.language));
+        }
+      }
+
+      // Validate location matches the target role level requirements
+      if (finalLocationId) {
+        await validateRoleLocationLevel(targetRoleForValidation, finalLocationId, context?.language);
       }
 
       if (context?.user) {
@@ -2962,11 +3232,6 @@ export const resolvers = {
       const updaterRole = updater?.role === 'Member' ? 'MEMBER' : (updater?.role ? updater.role.toUpperCase() : 'MEMBER');
       const updaterLocId = updater?.locationId || null;
 
-      // Block normal members from changing roles
-      if (updaterRole === 'MEMBER' && rest.role && rest.role.toUpperCase() !== 'MEMBER') {
-        throw new Error(I18nService.translate("member_not_allowed", context?.language));
-      }
-
       // Load target's current data
       let currentRole = 'MEMBER';
       let currentLocId = null;
@@ -2991,9 +3256,34 @@ export const resolvers = {
         currentLocId = targetMember.locationId;
       }
 
+      // Unique phone validation
+      const currentPhone = isUserTable ? targetUser.phone : targetMember.phone;
+      if (rest.phone && rest.phone !== currentPhone) {
+        const duplicateUser = await (prisma as any).user.findFirst({ where: { phone: rest.phone } });
+        const duplicateMember = await (prisma as any).member.findFirst({ where: { phone: rest.phone } });
+        if (duplicateUser || duplicateMember) {
+          throw new Error(I18nService.translate("phone_already_registered", context?.language));
+        }
+      }
+
       const targetRole = rest.role ? rest.role.toUpperCase().trim() : currentRole;
+      const isRoleExplicitlyChanged = rest.role && rest.role.toUpperCase().trim() !== currentRole;
       const finalLocationId = streetId || areaId || talukId || districtId || locationId;
       const targetLocId = finalLocationId || currentLocId;
+
+      const isEditingSelf = (context.user.type === 'admin' && isUserTable && Number(context.user.id) === targetId) ||
+                            (context.user.type === 'member' && !isUserTable && Number(context.user.id) === targetId) ||
+                            (updater?.phone && (targetUser?.phone === updater.phone || targetMember?.phone === updater.phone));
+
+      // Block users from changing their own role
+      if (isRoleExplicitlyChanged && isEditingSelf) {
+        throw new Error("Unauthorized: You cannot change your own role.");
+      }
+
+      // Block normal members from changing roles
+      if (isRoleExplicitlyChanged && updaterRole === 'MEMBER') {
+        throw new Error(I18nService.translate("member_not_allowed", context?.language));
+      }
 
       // Enforce location requirement for admin roles
       if (['SUPER_ADMIN', 'ADMIN', 'SUB_ADMIN'].includes(targetRole)) {
@@ -3002,17 +3292,21 @@ export const resolvers = {
         }
       }
 
+      // Validate location matches the target role level requirements
+      if (targetLocId) {
+        await validateRoleLocationLevel(targetRole, targetLocId, context?.language);
+      }
+
       // Permission Check and Location Targeting Validation
       if (updaterRole !== 'SUPER_ADMIN') {
-        if (targetRole === 'SUPER_ADMIN') {
-          throw new Error("Unauthorized: Non-Super Admin cannot promote to Super Admin");
+        if (isRoleExplicitlyChanged) {
+          if (targetRole === 'SUPER_ADMIN') {
+            throw new Error("Unauthorized: Non-Super Admin cannot promote to Super Admin");
+          }
+          if (currentRole === 'ADMIN' || currentRole === 'SUPER_ADMIN') {
+            throw new Error("Unauthorized: Only Super Admin can change Admin roles");
+          }
         }
-        if (currentRole === 'SUPER_ADMIN') {
-          throw new Error("Unauthorized: Only Super Admin can modify Super Admin profiles");
-        }
-        const isEditingSelf = (context.user.type === 'admin' && isUserTable && Number(context.user.id) === targetId) ||
-                              (context.user.type === 'member' && !isUserTable && Number(context.user.id) === targetId) ||
-                              (updater?.phone && (targetUser?.phone === updater.phone || targetMember?.phone === updater.phone));
         if (currentRole === 'ADMIN' && !isEditingSelf) {
           throw new Error("Unauthorized: Non-Super Admin cannot modify other Admins");
         }
@@ -3051,114 +3345,117 @@ export const resolvers = {
       }
 
       // Handle transitions & synchronization
-      if (!isUserTable && ['SUPER_ADMIN', 'ADMIN', 'SUB_ADMIN'].includes(targetRole)) {
-        // Promote Member to User table
-        const phone = updateData.phone || targetMember.phone;
-        let existingUser = await (prisma as any).user.findFirst({ where: { phone } });
+      if (isRoleExplicitlyChanged) {
+        if (!isUserTable && ['SUPER_ADMIN', 'ADMIN', 'SUB_ADMIN'].includes(targetRole)) {
+          // Promote Member to User table
+          const phone = updateData.phone || targetMember.phone;
+          let existingUser = await (prisma as any).user.findFirst({ where: { phone } });
 
-        const userFields = {
-          name: updateData.name !== undefined ? updateData.name : targetMember.name,
-          surname: updateData.surname !== undefined ? updateData.surname : targetMember.surname,
-          phone: phone,
-          password: updateData.password !== undefined ? updateData.password : (targetMember.password || 'admin123'),
-          role: targetRole,
-          locationId: targetLocId,
-          approvalStatus: 'APPROVED',
-          isActive: true,
-          image: updateData.image !== undefined ? updateData.image : targetMember.image,
-          dateOfBirth: updateData.dateOfBirth !== undefined ? updateData.dateOfBirth : targetMember.dateOfBirth,
-          gender: updateData.gender !== undefined ? updateData.gender : targetMember.gender,
-          bloodGroup: updateData.bloodGroup !== undefined ? updateData.bloodGroup : targetMember.bloodGroup,
-          profession: professionName || targetMember.profession?.name || null,
-          district: updateData.district !== undefined ? updateData.district : targetMember.district,
-          constituency: updateData.constituency !== undefined ? updateData.constituency : targetMember.constituency,
-          area: updateData.area !== undefined ? updateData.area : targetMember.area,
-          street: updateData.street !== undefined ? updateData.street : targetMember.street
-        };
+          const userFields = {
+            name: updateData.name !== undefined ? updateData.name : targetMember.name,
+            surname: updateData.surname !== undefined ? updateData.surname : targetMember.surname,
+            phone: phone,
+            password: updateData.password !== undefined ? updateData.password : (targetMember.password || 'admin123'),
+            role: targetRole,
+            locationId: targetLocId,
+            approvalStatus: 'APPROVED',
+            isActive: true,
+            image: updateData.image !== undefined ? updateData.image : targetMember.image,
+            dateOfBirth: updateData.dateOfBirth !== undefined ? updateData.dateOfBirth : targetMember.dateOfBirth,
+            gender: updateData.gender !== undefined ? updateData.gender : targetMember.gender,
+            bloodGroup: updateData.bloodGroup !== undefined ? updateData.bloodGroup : targetMember.bloodGroup,
+            profession: professionName || targetMember.profession?.name || null,
+            district: updateData.district !== undefined ? updateData.district : targetMember.district,
+            constituency: updateData.constituency !== undefined ? updateData.constituency : targetMember.constituency,
+            area: updateData.area !== undefined ? updateData.area : targetMember.area,
+            street: updateData.street !== undefined ? updateData.street : targetMember.street
+          };
 
-        if (existingUser) {
-          await (prisma as any).user.update({
+          if (existingUser) {
+            await (prisma as any).user.update({
+              where: { id: existingUser.id },
+              data: userFields
+            });
+          } else {
+            existingUser = await (prisma as any).user.create({
+              data: userFields
+            });
+          }
+
+          const updatedMember = await (prisma as any).member.update({
+            where: { id: targetId },
+            data: {
+              ...updateData,
+              role: targetRole
+            },
+            include: { location: true, profession: true }
+          });
+
+          if (professionName) {
+            await autoJoinCommunities(updatedMember.id, professionName);
+          }
+
+          const userWithLoc = await (prisma as any).user.findUnique({
             where: { id: existingUser.id },
-            data: userFields
+            include: { location: true }
           });
-        } else {
-          existingUser = await (prisma as any).user.create({
-            data: userFields
-          });
+          await writeUpdateAuditLogs(context, isUserTable, targetId, currentPhone, rest, args, currentRole, targetRole, isRoleExplicitlyChanged, targetUser, targetMember);
+          return userToMemberShape(userWithLoc);
         }
 
-        const updatedMember = await (prisma as any).member.update({
-          where: { id: targetId },
-          data: {
-            ...updateData,
-            role: targetRole
-          },
-          include: { location: true, profession: true }
-        });
+        if (isUserTable && targetRole === 'MEMBER') {
+          // Demote User to Member table
+          const phone = updateData.phone || targetUser.phone;
+          let dbMember = await (prisma as any).member.findFirst({ where: { phone } });
 
-        if (professionName) {
-          await autoJoinCommunities(updatedMember.id, professionName);
+          let professionId = null;
+          const pName = professionName || targetUser.profession;
+          if (pName) {
+            const prof = await (prisma as any).profession.upsert({
+              where: { name: pName },
+              update: {},
+              create: { name: pName }
+            });
+            professionId = prof.id;
+          }
+
+          const memberFields = {
+            name: updateData.name !== undefined ? updateData.name : targetUser.name,
+            surname: updateData.surname !== undefined ? updateData.surname : targetUser.surname,
+            phone: phone,
+            password: updateData.password !== undefined ? updateData.password : targetUser.password,
+            locationId: targetLocId || 1,
+            role: 'Member',
+            approvalStatus: 'APPROVED',
+            isActive: true,
+            image: updateData.image !== undefined ? updateData.image : targetUser.image,
+            dateOfBirth: updateData.dateOfBirth !== undefined ? updateData.dateOfBirth : targetUser.dateOfBirth,
+            gender: updateData.gender !== undefined ? updateData.gender : targetUser.gender,
+            bloodGroup: updateData.bloodGroup !== undefined ? updateData.bloodGroup : targetUser.bloodGroup,
+            district: updateData.district !== undefined ? updateData.district : targetUser.district,
+            constituency: updateData.constituency !== undefined ? updateData.constituency : targetUser.constituency,
+            area: updateData.area !== undefined ? updateData.area : targetUser.area,
+            street: updateData.street !== undefined ? updateData.street : targetUser.street,
+            professionId: professionId
+          };
+
+          if (dbMember) {
+            dbMember = await (prisma as any).member.update({
+              where: { id: dbMember.id },
+              data: memberFields,
+              include: { location: true, profession: true }
+            });
+          } else {
+            dbMember = await (prisma as any).member.create({
+              data: memberFields,
+              include: { location: true, profession: true }
+            });
+          }
+
+          await (prisma as any).user.delete({ where: { id: targetId } });
+          await writeUpdateAuditLogs(context, isUserTable, targetId, currentPhone, rest, args, currentRole, targetRole, isRoleExplicitlyChanged, targetUser, targetMember);
+          return dbMember;
         }
-
-        const userWithLoc = await (prisma as any).user.findUnique({
-          where: { id: existingUser.id },
-          include: { location: true }
-        });
-        return userToMemberShape(userWithLoc);
-      }
-
-      if (isUserTable && targetRole === 'MEMBER') {
-        // Demote User to Member table
-        const phone = updateData.phone || targetUser.phone;
-        let dbMember = await (prisma as any).member.findFirst({ where: { phone } });
-
-        let professionId = null;
-        const pName = professionName || targetUser.profession;
-        if (pName) {
-          const prof = await (prisma as any).profession.upsert({
-            where: { name: pName },
-            update: {},
-            create: { name: pName }
-          });
-          professionId = prof.id;
-        }
-
-        const memberFields = {
-          name: updateData.name !== undefined ? updateData.name : targetUser.name,
-          surname: updateData.surname !== undefined ? updateData.surname : targetUser.surname,
-          phone: phone,
-          password: updateData.password !== undefined ? updateData.password : targetUser.password,
-          locationId: targetLocId || 1,
-          role: 'Member',
-          approvalStatus: 'APPROVED',
-          isActive: true,
-          image: updateData.image !== undefined ? updateData.image : targetUser.image,
-          dateOfBirth: updateData.dateOfBirth !== undefined ? updateData.dateOfBirth : targetUser.dateOfBirth,
-          gender: updateData.gender !== undefined ? updateData.gender : targetUser.gender,
-          bloodGroup: updateData.bloodGroup !== undefined ? updateData.bloodGroup : targetUser.bloodGroup,
-          district: updateData.district !== undefined ? updateData.district : targetUser.district,
-          constituency: updateData.constituency !== undefined ? updateData.constituency : targetUser.constituency,
-          area: updateData.area !== undefined ? updateData.area : targetUser.area,
-          street: updateData.street !== undefined ? updateData.street : targetUser.street,
-          professionId: professionId
-        };
-
-        if (dbMember) {
-          dbMember = await (prisma as any).member.update({
-            where: { id: dbMember.id },
-            data: memberFields,
-            include: { location: true, profession: true }
-          });
-        } else {
-          dbMember = await (prisma as any).member.create({
-            data: memberFields,
-            include: { location: true, profession: true }
-          });
-        }
-
-        await (prisma as any).user.delete({ where: { id: targetId } });
-
-        return dbMember;
       }
 
       // Standard user update + sync to matching Member record
@@ -3212,7 +3509,7 @@ export const resolvers = {
             data: memberUpdateFields
           });
         }
-
+        await writeUpdateAuditLogs(context, isUserTable, targetId, currentPhone, rest, args, currentRole, targetRole, isRoleExplicitlyChanged, targetUser, targetMember);
         return userToMemberShape(updatedUser);
       }
 
@@ -3261,7 +3558,7 @@ export const resolvers = {
           data: userUpdateFields
         });
       }
-
+      await writeUpdateAuditLogs(context, isUserTable, targetId, currentPhone, rest, args, currentRole, targetRole, isRoleExplicitlyChanged, targetUser, targetMember);
       return updatedMember;
     }),
 
@@ -3442,17 +3739,31 @@ export const resolvers = {
         include: { location: true, createdBy: true },
       });
 
-      // Send WhatsApp broadcast to all members in the target subtree
+      // Send WhatsApp broadcast to all unique active recipients in the target subtree
       const targetIds = await getChildLocationIds(broadcast.locationId);
       const allIds = [broadcast.locationId, ...targetIds];
-      const recipientCount = await (prisma as any).member.count({
-        where: { locationId: { in: allIds }, isActive: true },
-      });
-      const members = await (prisma as any).member.findMany({
-        where: { locationId: { in: allIds }, isActive: true },
-        select: { phone: true },
-      });
-      const phoneNumbers = members.map((m: any) => m.phone).filter(Boolean);
+      const recipientCount = await getUniqueRecipientCount(broadcast.locationId);
+      
+      const [members, users] = await Promise.all([
+        (prisma as any).member.findMany({
+          where: { locationId: { in: allIds }, isActive: true },
+          select: { phone: true },
+        }),
+        (prisma as any).user.findMany({
+          where: { locationId: { in: allIds }, isActive: true },
+          select: { phone: true },
+        })
+      ]);
+
+      const phoneSet = new Set<string>();
+      for (const m of members) {
+        if (m.phone) phoneSet.add(m.phone.trim());
+      }
+      for (const u of users) {
+        if (u.phone) phoneSet.add(u.phone.trim());
+      }
+      const phoneNumbers = Array.from(phoneSet).filter(Boolean);
+
       if (phoneNumbers.length > 0) {
         await whatsappService.sendMessage(
           phoneNumbers,
@@ -3793,7 +4104,11 @@ export const resolvers = {
       }
 
       if (isMember) {
-        memberId = userId;
+        if (context?.user?.type === 'member') {
+          memberId = userId;
+        } else {
+          createdById = userId;
+        }
       } else {
         createdById = userId;
         // Enforce geographic targeting based on role
@@ -3877,13 +4192,14 @@ export const resolvers = {
           createdById: null,
           purpose: 'New emergency request pending Sub Admin review.',
           entityType: 'EMERGENCY',
-          entityId: request.id
+          entityId: request.id,
+          data: { requestId: request.id }
         }).catch(e => console.error(e));
       } else {
         // Push Notification, DB Notification, and Socket.IO for standard admin creation
         await sendSystemNotification({
           title: "Emergency Request: " + title,
-          message: description || "Urgent help needed in your area",
+          message: formattedDescription || description || "Urgent help needed in your area",
           type: 'EMERGENCY',
           locationId: Number(locationId),
           createdById,
@@ -4000,7 +4316,8 @@ export const resolvers = {
               contactName: request.contactName,
               contactPhone: request.contactPhone,
               collectResponse: true
-            }
+            },
+            data: { requestId: request.id }
           });
 
           return updated;
@@ -4027,7 +4344,8 @@ export const resolvers = {
             locationId: targetNotifyLocationId,
             purpose: 'Forwarded emergency blood request pending admin review.',
             entityType: 'EMERGENCY',
-            entityId: request.id
+            entityId: request.id,
+            data: { requestId: request.id }
           });
 
           return updated;
@@ -4061,7 +4379,8 @@ export const resolvers = {
               contactName: request.contactName,
               contactPhone: request.contactPhone,
               collectResponse: true
-            }
+            },
+            data: { requestId: request.id }
           });
 
           return updated;
@@ -4088,7 +4407,8 @@ export const resolvers = {
             locationId: targetNotifyLocationId,
             purpose: 'Forwarded emergency blood request pending Super Admin review.',
             entityType: 'EMERGENCY',
-            entityId: request.id
+            entityId: request.id,
+            data: { requestId: request.id }
           });
 
           return updated;
@@ -4122,7 +4442,8 @@ export const resolvers = {
               contactName: request.contactName,
               contactPhone: request.contactPhone,
               collectResponse: true
-            }
+            },
+            data: { requestId: request.id }
           });
 
           return updated;
@@ -5620,6 +5941,11 @@ export const resolvers = {
           throw new Error(I18nService.translate("location_required", lang));
         }
       }
+
+      // Validate location matches the target role level requirements
+      if (targetLocId) {
+        await validateRoleLocationLevel(targetRole, targetLocId, lang);
+      }
       if (requesterRole !== 'SUPER_ADMIN') {
         if (targetLocId) {
           await validateLocationTargeting(
@@ -5771,11 +6097,27 @@ export const resolvers = {
       }
 
       // Add AuditLog for Role Change
+      const finalUserRecord = await (prisma as any).user.findFirst({
+        where: { phone }
+      });
+      const targetName = dbUser ? dbUser.name : dbMember!.name;
+      const targetSurname = dbUser ? dbUser.surname : dbMember!.surname;
+      const targetFullName = `${targetName} ${targetSurname || ''}`.trim();
+      const oldRoleLabel = getRoleLabel(dbUser ? dbUser.role : dbMember!.role);
+      const newRoleLabel = getRoleLabel(targetRole);
+
+      // Load updater details
+      const updaterUser = await (prisma as any).user.findUnique({
+        where: { id: Number(context.user.id) }
+      });
+      const updaterName = formatUserDesignation(updaterUser, 'Admin');
+
+      const details = `Member Role Changed from ${oldRoleLabel} to ${newRoleLabel} for ${targetFullName} by ${updaterName}`;
       await (prisma as any).auditLog.create({
         data: {
-          userId: dbUser ? dbUser.id : dbMember!.id,
+          userId: finalUserRecord ? finalUserRecord.id : Number(context.user.id),
           action: 'role_change',
-          details: 'Role changed to ' + targetRole
+          details: details
         }
       });
 
@@ -6050,52 +6392,63 @@ export const resolvers = {
       return buildEmergencyResponseStats(responses);
     },
     description: (parent: any) => {
-      return formatEmergencyDescription(parent.description);
+      return extractRemarksFromDescription(parent.description);
     },
     bloodGroup: (parent: any) => {
       if (parent.bloodGroup && parent.bloodGroup !== 'null') return parent.bloodGroup;
       const parsed = parseDescriptionJson(parent.description);
-      return parsed?.bloodGroup || parent.bloodGroup;
+      if (parsed?.bloodGroup) return parsed.bloodGroup;
+      return parseFieldFromFormattedDescription(parent.description, 'Blood Group') || parent.bloodGroup;
     },
     unitsRequired: (parent: any) => {
       if (parent.unitsRequired && parent.unitsRequired !== 'null') return parent.unitsRequired;
       const parsed = parseDescriptionJson(parent.description);
-      return parsed?.unitsRequired || parent.unitsRequired;
+      if (parsed?.unitsRequired) return parsed.unitsRequired;
+      return parseFieldFromFormattedDescription(parent.description, 'Units Required') || parent.unitsRequired;
     },
     hospitalName: (parent: any) => {
       if (parent.hospitalName && parent.hospitalName !== 'null') return parent.hospitalName;
       const parsed = parseDescriptionJson(parent.description);
-      return parsed?.hospitalName || parent.hospitalName;
+      if (parsed?.hospitalName) return parsed.hospitalName;
+      return parseFieldFromFormattedDescription(parent.description, 'Hospital') || parent.hospitalName;
     },
     patientCondition: (parent: any) => {
       if (parent.patientCondition && parent.patientCondition !== 'null') return parent.patientCondition;
       const parsed = parseDescriptionJson(parent.description);
-      return parsed?.patientCondition || parent.patientCondition;
+      if (parsed?.patientCondition) return parsed.patientCondition;
+      return parseFieldFromFormattedDescription(parent.description, 'Patient Condition') || parent.patientCondition;
     },
     disasterType: (parent: any) => {
       if (parent.disasterType && parent.disasterType !== 'null') return parent.disasterType;
       const parsed = parseDescriptionJson(parent.description);
-      return parsed?.disasterType || parent.disasterType;
+      if (parsed?.disasterType) return parsed.disasterType;
+      return parseFieldFromFormattedDescription(parent.description, 'Disaster Type') || parent.disasterType;
     },
     affectedArea: (parent: any) => {
       if (parent.affectedArea && parent.affectedArea !== 'null') return parent.affectedArea;
       const parsed = parseDescriptionJson(parent.description);
-      return parsed?.affectedArea || parent.affectedArea;
+      if (parsed?.affectedArea) return parsed.affectedArea;
+      return parseFieldFromFormattedDescription(parent.description, 'Affected Area') || parent.affectedArea;
     },
     requiredSupport: (parent: any) => {
       if (parent.requiredSupport && parent.requiredSupport !== 'null') return parent.requiredSupport;
       const parsed = parseDescriptionJson(parent.description);
-      return parsed?.requiredSupport || parent.requiredSupport;
+      if (parsed?.requiredSupport) return parsed.requiredSupport;
+      return parseFieldFromFormattedDescription(parent.description, 'Required Support') || parent.requiredSupport;
     },
     volunteerType: (parent: any) => {
       if (parent.volunteerType && parent.volunteerType !== 'null') return parent.volunteerType;
       const parsed = parseDescriptionJson(parent.description);
-      return parsed?.volunteerType || parent.volunteerType;
+      if (parsed?.volunteerType) return parsed.volunteerType;
+      return parseFieldFromFormattedDescription(parent.description, 'Volunteer Type') || parent.volunteerType;
     },
     contactPhone: (parent: any) => {
       if (parent.contactPhone && parent.contactPhone !== 'null') return parent.contactPhone;
       const parsed = parseDescriptionJson(parent.description);
-      return parsed?.contactNumber || parsed?.contactPhone || parsed?.contactDetails || parsed?.phone || parent.contactPhone;
+      if (parsed) {
+        return parsed.contactNumber || parsed.contactPhone || parsed.contactDetails || parsed.phone || parent.contactPhone;
+      }
+      return parseFieldFromFormattedDescription(parent.description, 'Contact Number') || parent.contactPhone;
     }
   },
 
@@ -6255,11 +6608,7 @@ export const resolvers = {
     },
     recipientCount: async (parent: any) => {
       if (parent.recipientCount !== undefined) return parent.recipientCount;
-      const targetIds = await getChildLocationIds(parent.locationId);
-      const allIds = [parent.locationId, ...targetIds];
-      return (prisma as any).member.count({
-        where: { locationId: { in: allIds }, isActive: true },
-      });
+      return getUniqueRecipientCount(parent.locationId);
     }
   },
 

@@ -44,6 +44,7 @@ try {
  * Gets all child location IDs for a given location
  */
 export async function getChildLocationIdsForFCM(parentId: number): Promise<number[]> {
+  const numericParentId = Number(parentId);
   const locations = await (prisma as any).location.findMany({
     select: { id: true, parentId: true },
   });
@@ -57,7 +58,7 @@ export async function getChildLocationIdsForFCM(parentId: number): Promise<numbe
   }
 
   const ids: number[] = [];
-  const queue = [...(childrenByParent.get(parentId) || [])];
+  const queue = [...(childrenByParent.get(numericParentId) || [])];
 
   while (queue.length > 0) {
     const id = queue.shift()!;
@@ -77,14 +78,15 @@ export async function sendNotificationToLocation(
   body: string, 
   data: any = {}
 ) {
+  const numericLocationId = Number(locationId);
   if (!initialized) {
-    console.log(`[FCM Simulation] Would send to location ${locationId}: ${title}`);
+    console.log(`[FCM Simulation] Would send to location ${numericLocationId}: ${title}`);
     return;
   }
 
   try {
-    const childIds = await getChildLocationIdsForFCM(locationId);
-    const targetLocations = [locationId, ...childIds];
+    const childIds = await getChildLocationIdsForFCM(numericLocationId);
+    const targetLocations = [numericLocationId, ...childIds];
 
     const users = await (prisma as any).user.findMany({
       where: { locationId: { in: targetLocations }, fcmToken: { not: null } },
