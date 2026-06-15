@@ -407,6 +407,14 @@ export const typeDefs = gql`
     feedScore: Float
     createdById: Int
     createdByType: String
+    status: String!
+    reportCount: Int!
+    reportReasons: [String!]!
+    reportedUsersCount: Int!
+    isHighPriority: Boolean!
+    isUnderReview: Boolean!
+    hasWarning: Boolean!
+    reports: [PostReport!]!
   }
 
   type PollOption {
@@ -497,6 +505,20 @@ export const typeDefs = gql`
     activeBroadcasts: Int!
   }
 
+  type ModerationDashboardStats {
+    totalReportedPosts: Int!
+    pendingReviews: Int!
+    warningSentCount: Int!
+    deletedPostsCount: Int!
+    highPriorityReportsCount: Int!
+  }
+
+  enum ModerationAction {
+    KEEP
+    WARN
+    DELETE
+  }
+
   type Query {
     getLocationList(parentId: Int, type: LocationType): [Location!]!
     getLocationDetails(id: Int!): Location
@@ -551,6 +573,8 @@ export const typeDefs = gql`
     getReportedCommunityPosts(status: ReportStatus): [CommunityPostReport!]!
     getReportedPolls(status: ReportStatus): [PollReport!]!
     getUserWarnings(memberId: Int!): [UserWarning!]!
+    getModerationDashboardStats(locationId: Int): ModerationDashboardStats!
+    getReportedPostsList(locationId: Int, status: String): [Post!]!
   }
 
   type Mutation {
@@ -701,6 +725,7 @@ export const typeDefs = gql`
     reportCommunityPost(postId: Int!, reason: String!): CommunityPostReport!
     resolvePostReport(reportId: Int!, action: ReportAction!, warningMessage: String): Boolean!
     resolveCommunityPostReport(reportId: Int!, action: ReportAction!, warningMessage: String): Boolean!
+    moderatePost(postId: Int!, action: ModerationAction!, warningMessage: String): Boolean!
     createPoll(
       question: String!
       options: [String!]!

@@ -806,6 +806,87 @@ async function getPostCreatorMemberId(post: any): Promise<number | null> {
   return m ? m.id : null;
 }
 
+async function getOrCreateUserForMember(memberId: number): Promise<number> {
+  const member = await (prisma as any).member.findUnique({ where: { id: memberId } });
+  if (!member) throw new Error("Member not found");
+
+  let user = await (prisma as any).user.findUnique({ where: { phone: member.phone } });
+  if (!user) {
+    user = await (prisma as any).user.create({
+      data: {
+        name: member.name,
+        surname: member.surname || '',
+        phone: member.phone,
+        password: member.password || 'no-password',
+        role: 'MEMBER',
+        locationId: member.locationId,
+        approvalStatus: member.approvalStatus,
+        isActive: member.isActive,
+        district: member.district,
+        constituency: member.constituency,
+        area: member.area,
+        street: member.street
+      }
+    });
+  }
+  return user.id;
+}
+
+async function notifyAdminsOfReport(post: any) {
+  const postLoc = await (prisma as any).location.findUnique({ where: { id: post.locationId } });
+  if (!postLoc) return;
+
+  const ancestorIds = await getAncestorLocationIds(post.locationId);
+  const admins = await (prisma as any).user.findMany({
+    where: {
+      locationId: { in: ancestorIds },
+      fcmToken: { not: null },
+      role: { in: ['ADMIN', 'SUB_ADMIN'] }
+    }
+  });
+
+  for (const adminUser of admins) {
+    let canReview = false;
+    if (adminUser.role === 'SUB_ADMIN' && ['STREET', 'AREA'].includes(postLoc.type)) {
+      canReview = true;
+    } else if (adminUser.role === 'ADMIN' && ['TALUK', 'DISTRICT'].includes(postLoc.type)) {
+      canReview = true;
+    }
+
+    if (canReview && adminUser.fcmToken) {
+      await sendNotificationToToken(
+        adminUser.fcmToken,
+        "New reported post requires review.",
+        `Post in ${postLoc.name} has been reported.`,
+        { type: "REPORTED_POST", postId: post.id }
+      ).catch(e => console.error("Error sending push to admin:", e));
+    }
+  }
+}
+
+async function notifyPostOwner(postId: number, title: string, body: string) {
+  const post = await (prisma as any).post.findUnique({ where: { id: postId } });
+  if (!post) return;
+
+  const memberId = await getPostCreatorMemberId(post);
+  if (!memberId) return;
+
+  const member = await (prisma as any).member.findUnique({
+    where: { id: memberId },
+    select: { fcmToken: true }
+  });
+
+  if (member && member.fcmToken) {
+    await sendNotificationToToken(
+      member.fcmToken,
+      title,
+      body,
+      { type: "POST_MODERATION", postId }
+    ).catch(e => console.error("Error sending push to owner:", e));
+  }
+}
+
+
 async function getPollCreatorMemberId(poll: any): Promise<number | null> {
   if (poll.memberId) {
     return poll.memberId;
@@ -1401,6 +1482,153 @@ export const resolvers = {
         where: whereClause,
         orderBy: { createdAt: 'desc' },
         include: { post: true, reportedBy: true }
+      });
+    },
+
+    getModerationDashboardStats: async (_: any, { locationId }: any, context: any) => {
+      const lang = context?.language || 'en';
+      if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", lang));
+
+      const role = context.user.role;
+      const userLocId = context.user.locationId;
+
+      if (role === 'MEMBER') {
+        throw new Error("Unauthorized: Only administrators can view moderation statistics.");
+      }
+
+      let allowedTypes: string[] = [];
+      if (role === 'SUB_ADMIN') {
+        allowedTypes = ['STREET', 'AREA'];
+      } else if (role === 'ADMIN') {
+        allowedTypes = ['TALUK', 'DISTRICT'];
+      } else if (role === 'SUPER_ADMIN') {
+        allowedTypes = ['STATE', 'DISTRICT', 'TALUK', 'AREA', 'STREET'];
+      }
+
+      let locationIds: number[] = [];
+      let effectiveLocId = locationId || userLocId;
+      if (role !== 'SUPER_ADMIN') {
+        if (!effectiveLocId) return {
+          totalReportedPosts: 0,
+          pendingReviews: 0,
+          warningSentCount: 0,
+          deletedPostsCount: 0,
+          highPriorityReportsCount: 0
+        };
+        const childIds = await getChildLocationIds(effectiveLocId);
+        locationIds = [effectiveLocId, ...childIds];
+      } else {
+        if (effectiveLocId) {
+          const childIds = await getChildLocationIds(effectiveLocId);
+          locationIds = [effectiveLocId, ...childIds];
+        }
+      }
+
+      const postWhereClause: any = {
+        location: {
+          ...(locationIds.length > 0 ? { id: { in: locationIds } } : {}),
+          type: { in: allowedTypes }
+        }
+      };
+
+      const totalReportedPosts = await (prisma as any).post.count({
+        where: {
+          ...postWhereClause,
+          reports: { some: {} }
+        }
+      });
+
+      const pendingReviews = await (prisma as any).post.count({
+        where: {
+          ...postWhereClause,
+          status: { in: ["REPORTED", "UNDER_REVIEW"] }
+        }
+      });
+
+      const warningSentCount = await (prisma as any).post.count({
+        where: {
+          ...postWhereClause,
+          status: "WARNED"
+        }
+      });
+
+      const deletedPostsCount = await (prisma as any).post.count({
+        where: {
+          ...postWhereClause,
+          status: "DELETED"
+        }
+      });
+
+      const highPriorityReportsCount = await (prisma as any).post.count({
+        where: {
+          ...postWhereClause,
+          status: "UNDER_REVIEW"
+        }
+      });
+
+      return {
+        totalReportedPosts,
+        pendingReviews,
+        warningSentCount,
+        deletedPostsCount,
+        highPriorityReportsCount
+      };
+    },
+
+    getReportedPostsList: async (_: any, { locationId, status }: any, context: any) => {
+      const lang = context?.language || 'en';
+      if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", lang));
+
+      const role = context.user.role;
+      const userLocId = context.user.locationId;
+
+      if (role === 'MEMBER') {
+        throw new Error("Unauthorized: Only administrators can view reports.");
+      }
+
+      let allowedTypes: string[] = [];
+      if (role === 'SUB_ADMIN') {
+        allowedTypes = ['STREET', 'AREA'];
+      } else if (role === 'ADMIN') {
+        allowedTypes = ['TALUK', 'DISTRICT'];
+      } else if (role === 'SUPER_ADMIN') {
+        allowedTypes = ['STATE', 'DISTRICT', 'TALUK', 'AREA', 'STREET'];
+      }
+
+      let locationIds: number[] = [];
+      let effectiveLocId = locationId || userLocId;
+      if (role !== 'SUPER_ADMIN') {
+        if (!effectiveLocId) return [];
+        const childIds = await getChildLocationIds(effectiveLocId);
+        locationIds = [effectiveLocId, ...childIds];
+      } else {
+        if (effectiveLocId) {
+          const childIds = await getChildLocationIds(effectiveLocId);
+          locationIds = [effectiveLocId, ...childIds];
+        }
+      }
+
+      const postWhereClause: any = {
+        location: {
+          ...(locationIds.length > 0 ? { id: { in: locationIds } } : {}),
+          type: { in: allowedTypes }
+        }
+      };
+
+      if (status) {
+        if (status === 'PENDING') {
+          postWhereClause.status = { in: ['REPORTED', 'UNDER_REVIEW'] };
+        } else {
+          postWhereClause.status = status;
+        }
+      } else {
+        postWhereClause.reports = { some: {} };
+      }
+
+      return (prisma as any).post.findMany({
+        where: postWhereClause,
+        orderBy: { createdAt: 'desc' },
+        include: { location: true }
       });
     },
 
@@ -2009,6 +2237,7 @@ export const resolvers = {
         where.locationId = { in: [fetchRootId, ...childIds] };
       }
 
+      where.status = { not: 'DELETED' };
       // 1. Fetch recent posts (limit 200 to keep ranking fast)
       const posts = await (prisma as any).post.findMany({
         where,
@@ -2206,10 +2435,16 @@ export const resolvers = {
       });
     },
 
-    getPostDetails: async (_: any, { id }: any) => {
-      return (prisma as any).post.findUnique({
+    getPostDetails: async (_: any, { id }: any, context: any) => {
+      const post = await (prisma as any).post.findUnique({
         where: { id: Number(id) }
       });
+      if (post && post.status === 'DELETED') {
+        if (!context?.user || context.user.role === 'MEMBER') {
+          return null;
+        }
+      }
+      return post;
     },
 
     notifications: async (_: any, { locationId }: any, context: any) => {
@@ -4541,15 +4776,25 @@ export const resolvers = {
       const member = await getOrCreateMemberForUser(context.user);
       if (!member) throw new Error("Member profile not found");
 
-      return (prisma as any).postReport.upsert({
+      const existing = await (prisma as any).postReport.findUnique({
         where: {
           postId_reportedById: {
             postId: Number(postId),
             reportedById: member.id
           }
-        },
-        update: { reason, status: 'PENDING' },
-        create: {
+        }
+      });
+      if (existing) {
+        throw new Error("You have already reported this post.");
+      }
+
+      const post = await (prisma as any).post.findUnique({
+        where: { id: Number(postId) }
+      });
+      if (!post) throw new Error("Post not found");
+
+      const report = await (prisma as any).postReport.create({
+        data: {
           postId: Number(postId),
           reportedById: member.id,
           reason,
@@ -4557,6 +4802,45 @@ export const resolvers = {
         },
         include: { post: true, reportedBy: true }
       });
+
+      const reportCount = await (prisma as any).postReport.count({
+        where: { postId: Number(postId) }
+      });
+
+      let nextStatus = post.status || 'ACTIVE';
+      if (reportCount >= 10) {
+        nextStatus = 'UNDER_REVIEW';
+      } else if (post.status === 'ACTIVE') {
+        nextStatus = 'REPORTED';
+      }
+
+      if (nextStatus !== post.status) {
+        await (prisma as any).post.update({
+          where: { id: post.id },
+          data: { status: nextStatus }
+        });
+      }
+
+      // Trigger admin notifications
+      notifyAdminsOfReport(post).catch(e => console.error("Error sending admin notifications:", e));
+
+      // Log activity
+      try {
+        const auditUserId = await getOrCreateUserForMember(member.id);
+        if (auditUserId) {
+          await (prisma as any).auditLog.create({
+            data: {
+              userId: auditUserId,
+              action: 'post_reported',
+              details: `Post reported by Member (Post ID: ${postId}, Reason: ${reason})`
+            }
+          });
+        }
+      } catch (err) {
+        console.error("Error logging post report audit log:", err);
+      }
+
+      return report;
     },
 
     reportCommunityPost: async (_: any, { postId, reason }: any, context: any) => {
@@ -4566,15 +4850,25 @@ export const resolvers = {
       const member = await getOrCreateMemberForUser(context.user);
       if (!member) throw new Error("Member profile not found");
 
-      return (prisma as any).communityPostReport.upsert({
+      const existing = await (prisma as any).communityPostReport.findUnique({
         where: {
           postId_reportedById: {
             postId: Number(postId),
             reportedById: member.id
           }
-        },
-        update: { reason, status: 'PENDING' },
-        create: {
+        }
+      });
+      if (existing) {
+        throw new Error("You have already reported this post.");
+      }
+
+      const post = await (prisma as any).communityPost.findUnique({
+        where: { id: Number(postId) }
+      });
+      if (!post) throw new Error("Community post not found");
+
+      const report = await (prisma as any).communityPostReport.create({
+        data: {
           postId: Number(postId),
           reportedById: member.id,
           reason,
@@ -4582,6 +4876,42 @@ export const resolvers = {
         },
         include: { post: true, reportedBy: true }
       });
+
+      const reportCount = await (prisma as any).communityPostReport.count({
+        where: { postId: Number(postId) }
+      });
+
+      let nextStatus = post.status || 'ACTIVE';
+      if (reportCount >= 10) {
+        nextStatus = 'UNDER_REVIEW';
+      } else if (post.status === 'ACTIVE') {
+        nextStatus = 'REPORTED';
+      }
+
+      if (nextStatus !== post.status) {
+        await (prisma as any).communityPost.update({
+          where: { id: post.id },
+          data: { status: nextStatus }
+        });
+      }
+
+      // Log activity
+      try {
+        const auditUserId = await getOrCreateUserForMember(member.id);
+        if (auditUserId) {
+          await (prisma as any).auditLog.create({
+            data: {
+              userId: auditUserId,
+              action: 'community_post_reported',
+              details: `Community post reported by Member (Community Post ID: ${postId}, Reason: ${reason})`
+            }
+          });
+        }
+      } catch (err) {
+        console.error("Error logging community post report audit log:", err);
+      }
+
+      return report;
     },
 
     resolvePostReport: async (_: any, { reportId, action, warningMessage }: any, context: any) => {
@@ -4786,6 +5116,191 @@ export const resolvers = {
         });
         await (prisma as any).communityPost.delete({
           where: { id: report.postId }
+        });
+      }
+
+      return true;
+    },
+
+    moderatePost: async (_: any, { postId, action, warningMessage }: any, context: any) => {
+      const lang = context?.language || 'en';
+      if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", lang));
+
+      const role = context.user.role;
+      const userLocId = context.user.locationId;
+
+      if (role === 'MEMBER') {
+        throw new Error("Unauthorized: Only administrators can moderate posts.");
+      }
+
+      const post = await (prisma as any).post.findUnique({
+        where: { id: Number(postId) },
+        include: { location: true }
+      });
+      if (!post) throw new Error("Post not found");
+
+      // Validate administrative hierarchy
+      if (role === 'SUB_ADMIN' && !['STREET', 'AREA'].includes(post.location.type)) {
+        throw new Error("Unauthorized: Sub Admins can only resolve Street or Area level reports.");
+      }
+      if (role === 'ADMIN' && !['TALUK', 'DISTRICT'].includes(post.location.type)) {
+        throw new Error("Unauthorized: Admins can only resolve Taluk or District level reports.");
+      }
+
+      if (role !== 'SUPER_ADMIN') {
+        if (!userLocId) throw new Error("Unauthorized: Missing admin location scope.");
+        const childIds = await getChildLocationIds(userLocId);
+        const allowedLocIds = new Set([userLocId, ...childIds]);
+        if (!allowedLocIds.has(post.locationId)) {
+          throw new Error("Unauthorized: Post location is outside your scope.");
+        }
+      }
+
+      const postCreatorMemberId = await getPostCreatorMemberId(post);
+      const postCreatorMember = postCreatorMemberId 
+        ? await (prisma as any).member.findUnique({ where: { id: postCreatorMemberId } })
+        : null;
+
+      if (action === 'KEEP') {
+        // Update post status to KEPT
+        await (prisma as any).post.update({
+          where: { id: post.id },
+          data: { status: 'KEPT' }
+        });
+
+        // Update all pending reports for this post to IGNORED
+        await (prisma as any).postReport.updateMany({
+          where: { postId: post.id, status: 'PENDING' },
+          data: { status: 'IGNORED' }
+        });
+
+        // Create Audit Log
+        await (prisma as any).auditLog.create({
+          data: {
+            userId: Number(context.user.id),
+            action: 'post_kept',
+            details: `Reviewed and kept post ID ${post.id} by Admin ID ${context.user.id}`
+          }
+        });
+
+      } else if (action === 'WARN') {
+        if (!warningMessage) throw new Error("Warning message is required to warn the user.");
+
+        // Update post status to WARNED
+        await (prisma as any).post.update({
+          where: { id: post.id },
+          data: { status: 'WARNED' }
+        });
+
+        // Update all pending reports for this post to WARNED
+        await (prisma as any).postReport.updateMany({
+          where: { postId: post.id, status: 'PENDING' },
+          data: { status: 'WARNED' }
+        });
+
+        // Create UserWarning
+        if (postCreatorMemberId) {
+          await (prisma as any).userWarning.create({
+            data: {
+              memberId: postCreatorMemberId,
+              adminId: Number(context.user.id),
+              message: warningMessage,
+              postId: post.id
+            }
+          });
+
+          // Send warning push notification
+          if (postCreatorMember?.fcmToken) {
+            await sendNotificationToToken(
+              postCreatorMember.fcmToken,
+              "Your post received a warning.",
+              warningMessage,
+              { type: "POST_MODERATION", postId: post.id }
+            ).catch(e => console.error("Error sending push to owner:", e));
+          }
+
+          // Create App Notification for the post owner
+          await (prisma as any).notification.create({
+            data: {
+              title: "Your post received a warning.",
+              message: warningMessage,
+              type: "POST_MODERATION",
+              locationId: post.locationId,
+              entityType: "Post",
+              entityId: post.id,
+              status: "ACTIVE",
+              time: "Just now"
+            }
+          });
+        }
+
+        // Create Audit Log
+        await (prisma as any).auditLog.create({
+          data: {
+            userId: Number(context.user.id),
+            action: 'post_warned',
+            details: `Warning sent by Admin for post ID ${post.id}: ${warningMessage}`
+          }
+        });
+
+      } else if (action === 'DELETE') {
+        // Update post status to DELETED
+        await (prisma as any).post.update({
+          where: { id: post.id },
+          data: { status: 'DELETED' }
+        });
+
+        // Update all pending reports for this post to DELETED
+        await (prisma as any).postReport.updateMany({
+          where: { postId: post.id, status: 'PENDING' },
+          data: { status: 'DELETED' }
+        });
+
+        // Create UserWarning if message provided
+        if (postCreatorMemberId) {
+          if (warningMessage) {
+            await (prisma as any).userWarning.create({
+              data: {
+                memberId: postCreatorMemberId,
+                adminId: Number(context.user.id),
+                message: warningMessage,
+                postId: post.id
+              }
+            });
+          }
+
+          // Send delete push notification
+          if (postCreatorMember?.fcmToken) {
+            await sendNotificationToToken(
+              postCreatorMember.fcmToken,
+              "Your post was removed by Admin.",
+              warningMessage || "Your post violated community guidelines and was removed.",
+              { type: "POST_MODERATION", postId: post.id }
+            ).catch(e => console.error("Error sending push to owner:", e));
+          }
+
+          // Create App Notification for the post owner
+          await (prisma as any).notification.create({
+            data: {
+              title: "Your post was removed by Admin.",
+              message: warningMessage || "Your post violated community guidelines and was removed.",
+              type: "POST_MODERATION",
+              locationId: post.locationId,
+              entityType: "Post",
+              entityId: post.id,
+              status: "ACTIVE",
+              time: "Just now"
+            }
+          });
+        }
+
+        // Create Audit Log
+        await (prisma as any).auditLog.create({
+          data: {
+            userId: Number(context.user.id),
+            action: 'post_deleted',
+            details: `Post deleted by Admin: post ID ${post.id}`
+          }
         });
       }
 
@@ -6479,7 +6994,43 @@ export const resolvers = {
     comments: (parent: any) => (prisma as any).comment.findMany({ where: { postId: parent.id }, orderBy: { createdAt: 'desc' } }),
     commentCount: (parent: any) => (prisma as any).comment.count({ where: { postId: parent.id } }),
     location: (parent: any) => (prisma as any).location.findUnique({ where: { id: parent.locationId } }),
-    createdAt: (parent: any) => toIsoString(parent.createdAt)
+    createdAt: (parent: any) => toIsoString(parent.createdAt),
+    status: (parent: any) => parent.status || "ACTIVE",
+    reportCount: async (parent: any) => {
+      return (prisma as any).postReport.count({
+        where: { postId: parent.id }
+      });
+    },
+    reportReasons: async (parent: any) => {
+      const reports = await (prisma as any).postReport.findMany({
+        where: { postId: parent.id },
+        select: { reason: true }
+      });
+      return Array.from(new Set(reports.map((r: any) => r.reason)));
+    },
+    reportedUsersCount: async (parent: any) => {
+      return (prisma as any).postReport.count({
+        where: { postId: parent.id }
+      });
+    },
+    isHighPriority: async (parent: any) => {
+      const count = await (prisma as any).postReport.count({
+        where: { postId: parent.id }
+      });
+      return count >= 10;
+    },
+    isUnderReview: (parent: any) => {
+      return parent.status === "UNDER_REVIEW";
+    },
+    hasWarning: (parent: any) => {
+      return parent.status === "WARNED";
+    },
+    reports: (parent: any) => {
+      return (prisma as any).postReport.findMany({
+        where: { postId: parent.id },
+        include: { reportedBy: true }
+      });
+    }
   },
 
   PollOption: {

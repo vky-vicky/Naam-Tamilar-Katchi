@@ -280,6 +280,7 @@ model Post {
   createdAt     DateTime  @default(now())
   createdById   Int?
   createdByType String?
+  status        String    @default("ACTIVE")
 }
 
 model Poll {
@@ -485,6 +486,7 @@ model CommunityPost {
   reports     CommunityPostReport[]
   createdAt   DateTime           @default(now())
   updatedAt   DateTime           @updatedAt
+  status      String             @default("ACTIVE")
 }
 
 model CommunityMember {
