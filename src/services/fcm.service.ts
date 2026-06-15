@@ -70,12 +70,26 @@ export async function getChildLocationIdsForFCM(parentId: number): Promise<numbe
 }
 
 /**
+ * Formats data payload for FCM
+ */
+function formatDataPayload(data: any): Record<string, string> {
+  const stringData: Record<string, string> = {};
+  for (const key in data) {
+    if (data[key] !== null && data[key] !== undefined) {
+      stringData[key] = String(data[key]);
+    }
+  }
+  stringData['click_action'] = 'FLUTTER_NOTIFICATION_CLICK';
+  return stringData;
+}
+
+/**
  * Sends a push notification to all users/members in a given location tree
  */
 export async function sendNotificationToLocation(
-  locationId: number, 
-  title: string, 
-  body: string, 
+  locationId: number,
+  title: string,
+  body: string,
   data: any = {}
 ) {
   const numericLocationId = Number(locationId);
@@ -106,74 +120,28 @@ export async function sendNotificationToLocation(
     const uniqueTokens = Array.from(new Set<string>(tokens as string[]));
 
     if (uniqueTokens.length === 0) {
-      console.log(`[FCM] No FCM tokens found for location ${locationId} and its children.`);
+      console.log(`[FCM] No FCM tokens found for location ${numericLocationId} and its children.`);
       return;
     }
 
-    // Convert data values to strings (FCM requirement)
-    const stringData: Record<string, string> = {};
-    for (const key in data) {
-      if (data[key] !== null && data[key] !== undefined) {
-        stringData[key] = String(data[key]);
-      }
-    }
-    stringData['click_action'] = 'FLUTTER_NOTIFICATION_CLICK';
-
-    // FCM has a limit of 500 tokens per multicast request
+    const stringData = formatDataPayload(data);
     const batchSize = 500;
-    let successCount = 0;
-    let failureCount = 0;
 
     for (let i = 0; i < uniqueTokens.length; i += batchSize) {
       const batchTokens = uniqueTokens.slice(i, i + batchSize);
       const message = {
-        notification: {
-          title,
-          body
-        },
+        notification: { title, body },
         data: stringData,
         android: {
           priority: 'high' as const,
-          notification: {
-            sound: 'default',
-            channelId: 'high_importance_channel',
-            priority: 'max' as const,
-          }
+          notification: { sound: 'default', channelId: 'high_importance_channel', priority: 'max' as const }
         },
-        apns: {
-          payload: {
-            aps: {
-              sound: 'default',
-              badge: 1,
-            }
-          }
-        },
+        apns: { payload: { aps: { sound: 'default', badge: 1 } } },
         tokens: batchTokens
       };
 
-      console.log('[FCM] Sending Multicast Payload:', JSON.stringify({
-        notification: message.notification,
-        data: message.data,
-        android: message.android,
-        apns: message.apns,
-        tokenCount: batchTokens.length
-      }, null, 2));
-
-      const response = await admin.messaging().sendEachForMulticast(message);
-      successCount += response.successCount;
-      failureCount += response.failureCount;
-
-      console.log(`[FCM] Multicast Response: Success Count = ${response.successCount}, Failure Count = ${response.failureCount}`);
-      response.responses.forEach((res, idx) => {
-        if (!res.success) {
-          console.error(`[FCM] Failed Token [${batchTokens[idx]}]:`, res.error);
-        } else {
-          console.log(`[FCM] Success Token [${batchTokens[idx]}]: Message ID = ${res.messageId}`);
-        }
-      });
+      await admin.messaging().sendEachForMulticast(message);
     }
-
-    console.log(`[FCM] Notifications sent summary: ${successCount} success, ${failureCount} failed.`);
   } catch (error) {
     console.error('[FCM] Error sending FCM notification:', error);
   }

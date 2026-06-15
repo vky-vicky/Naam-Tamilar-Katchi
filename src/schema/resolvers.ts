@@ -259,10 +259,17 @@ async function sendSystemNotification({
         (prisma as any).broadcast.findUnique({
           where: { id: Number(entityId) },
           include: { location: true, createdBy: true }
-        }).then((broadcastObj: any) => {
+        }).then(async (broadcastObj: any) => {
           if (broadcastObj) {
-            io.emit('newBroadcast', broadcastObj);
-            io.emit('broadcast', broadcastObj);
+            const recipientCount = await getUniqueRecipientCount(broadcastObj.locationId);
+            const enrichedBroadcast = {
+              ...broadcastObj,
+              recipientCount,
+              createdAt: toIST(broadcastObj.createdAt),
+              updatedAt: toIST(broadcastObj.updatedAt)
+            };
+            io.emit('newBroadcast', enrichedBroadcast);
+            io.emit('broadcast', enrichedBroadcast);
           }
         }).catch((err: any) => console.error('[Socket] Error fetching broadcast for emit:', err));
       }
@@ -2650,7 +2657,7 @@ export const resolvers = {
       });
     },
 
-    getEmergencyRequestList: async (_: any, { locationId, status }: any) => {
+    getEmergencyRequestList: async (_: any, { locationId, status }: any, context: any) => {
       const where: any = {};
       if (locationId) {
         const ancestorIds = await getAncestorLocationIds(locationId);
@@ -2658,7 +2665,23 @@ export const resolvers = {
         const allLocationIds = [...ancestorIds, locationId, ...childIds];
         where.locationId = { in: allLocationIds };
       }
-      if (status) where.status = status;
+
+      const userRole = context?.user?.role;
+      if (status) {
+        where.status = status;
+      } else {
+        // Default visibility filters based on role
+        if (userRole === 'SUPER_ADMIN') {
+          where.status = { in: ['PENDING_SUPER_ADMIN', 'APPROVED_STATE', 'COMPLETED', 'REJECTED'] };
+        } else if (userRole === 'ADMIN') {
+          where.status = { in: ['PENDING_ADMIN', 'APPROVED_ADMIN', 'PENDING_SUPER_ADMIN', 'APPROVED_STATE', 'COMPLETED', 'REJECTED'] };
+        } else if (userRole === 'SUB_ADMIN') {
+          where.status = { in: ['PENDING_SUB_ADMIN', 'APPROVED_SUB_ADMIN', 'PENDING_ADMIN', 'APPROVED_ADMIN', 'PENDING_SUPER_ADMIN', 'APPROVED_STATE', 'COMPLETED', 'REJECTED'] };
+        } else {
+          // Members or unauthenticated users only see approved and live requests
+          where.status = { in: ['APPROVED_SUB_ADMIN', 'APPROVED_ADMIN', 'APPROVED_STATE', 'COMPLETED'] };
+        }
+      }
       
       return (prisma as any).emergencyRequest.findMany({
         where,
@@ -2915,62 +2938,8 @@ export const resolvers = {
       return getBroadcastListForContext(args, context);
     },
 
-    getBroadcasts: async (_: any, { locationId, scope, broadcastId, isActive }: any, context: any) => {
-      if (broadcastId || isActive !== undefined) {
-        return getBroadcastListForContext({ locationId, scope, broadcastId, isActive }, context);
-      }
-      // Only return broadcasts that the user is authorized to see
-      const user = context.user;
-      if (!user) return [];
-      const role = user.role;
-      const userLocId = user.locationId;
-
-      // Build a list of location IDs the user can view based on role
-      let visibleLocationIds: number[] = [];
-      if (role === 'SUPER_ADMIN') {
-        // Super admin can see everything – fetch all broadcasts optionally filtered
-        visibleLocationIds = [];
-      } else if (role === 'ADMIN' || role === 'SUB_ADMIN') {
-        if (!userLocId) return [];
-        const childIds = await getChildLocationIds(userLocId);
-        const ancestorIds = await getAncestorLocationIds(userLocId);
-        visibleLocationIds = Array.from(new Set([...ancestorIds, ...childIds]));
-      } else {
-        // Members see broadcasts targeted to their ancestor chain
-        if (!userLocId) return [];
-        const ancestorIds = await getAncestorLocationIds(userLocId);
-        visibleLocationIds = ancestorIds;
-      }
-
-      const where: any = {};
-      if (locationId !== undefined) {
-        const ancestorIds = await getAncestorLocationIds(locationId);
-        const childIds = await getChildLocationIds(locationId);
-        const selectedLocationIds = [...ancestorIds, locationId, ...childIds];
-        if (visibleLocationIds.length > 0) {
-          where.locationId = { in: selectedLocationIds.filter(id => visibleLocationIds.includes(id)) };
-        } else {
-          where.locationId = { in: selectedLocationIds };
-        }
-      } else if (visibleLocationIds.length > 0) {
-        where.locationId = { in: visibleLocationIds };
-      }
-      if (scope) where.scope = scope;
-
-      const broadcasts = await (prisma as any).broadcast.findMany({
-        where,
-        include: { location: true, createdBy: true },
-        orderBy: { createdAt: 'desc' },
-      });
-
-      // Compute recipient count for each broadcast (unique members/users in that location subtree)
-      const withCount = await Promise.all(
-        broadcasts.map(async (b: any) => {
-          const recipientCount = await getUniqueRecipientCount(b.locationId);
-          return { ...b, recipientCount };
-        })
-      );
-      return withCount;
+    getBroadcasts: async (_: any, args: any, context: any) => {
+      return getBroadcastListForContext(args, context);
     },
 
     // ─────────────────────────────────────────────────────────────
@@ -3546,7 +3515,7 @@ export const resolvers = {
           throw new Error("Unauthorized: Non-Super Admin cannot modify other Admins");
         }
 
-        if (targetLocId) {
+        if (targetLocId && updaterRole !== 'MEMBER') {
           await validateLocationTargeting(
             Number(context.user.id),
             updaterRole,
@@ -3720,7 +3689,7 @@ export const resolvers = {
 
         // Sync to matching Member table record
         const matchingMember = await (prisma as any).member.findFirst({
-          where: { phone: updatedUser.phone }
+          where: { phone: currentPhone }
         });
         if (matchingMember) {
           const memberUpdateFields: any = {};
@@ -3764,7 +3733,7 @@ export const resolvers = {
 
       // Sync to matching User table record
       const matchingUser = await (prisma as any).user.findFirst({
-        where: { phone: updatedMember.phone }
+        where: { phone: currentPhone }
       });
       if (matchingUser) {
         const userUpdateFields: any = {};
@@ -4478,6 +4447,14 @@ export const resolvers = {
 
       if (!isOwnerUser && !isOwnerMember && !isSuper && !isWithinLocationScope) {
         throw new Error('Unauthorized to update this request');
+      }
+
+      const protectedStatuses = [
+        'APPROVED_SUB_ADMIN', 'PENDING_ADMIN', 'APPROVED_ADMIN', 
+        'PENDING_SUPER_ADMIN', 'APPROVED_STATE', 'REJECTED'
+      ];
+      if (protectedStatuses.includes(status)) {
+        throw new Error('Cannot set review/approval statuses directly via updateRequestStatus. Use reviewEmergencyRequest instead.');
       }
 
       const updated = await (prisma as any).emergencyRequest.update({
@@ -7030,6 +7007,18 @@ export const resolvers = {
         where: { postId: parent.id },
         include: { reportedBy: true }
       });
+    },
+    isLiked: async (parent: any, _: any, context: any) => {
+      if (!context?.user) return false;
+      const member = await getOrCreateMemberForUser(context.user);
+      if (!member) return false;
+      const count = await (prisma as any).postLike.count({
+        where: {
+          postId: parent.id,
+          memberId: member.id
+        }
+      });
+      return count > 0;
     }
   },
 
@@ -7240,7 +7229,19 @@ export const resolvers = {
       }
       return null;
     },
-    createdAt: (parent: any) => toIsoString(parent.createdAt)
+    createdAt: (parent: any) => toIsoString(parent.createdAt),
+    isLiked: async (parent: any, _: any, context: any) => {
+      if (!context?.user) return false;
+      const member = await getOrCreateMemberForUser(context.user);
+      if (!member) return false;
+      const count = await (prisma as any).communityPostLike.count({
+        where: {
+          postId: parent.id,
+          memberId: member.id
+        }
+      });
+      return count > 0;
+    }
   },
 
   Community: {

@@ -313,6 +313,7 @@ export const typeDefs = gql`
     location: Location
     comments: [Comment!]!
     createdAt: String!
+    isLiked: Boolean!
   }
 
   type Notification {
@@ -415,6 +416,7 @@ export const typeDefs = gql`
     isUnderReview: Boolean!
     hasWarning: Boolean!
     reports: [PostReport!]!
+    isLiked: Boolean!
   }
 
   type PollOption {
