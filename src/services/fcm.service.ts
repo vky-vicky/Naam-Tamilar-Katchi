@@ -30,10 +30,22 @@ try {
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount)
     });
-    console.log('🔥 Firebase Admin initialized successfully');
+    console.log('🔥 Firebase Admin initialized successfully via file');
     initialized = true;
+  } else if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+    try {
+      const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+      admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount)
+      });
+      console.log('🔥 Firebase Admin initialized successfully via env var');
+      initialized = true;
+    } catch (envError) {
+      console.error('Error parsing FIREBASE_SERVICE_ACCOUNT_JSON env var:', envError);
+    }
   } else {
     console.warn('⚠️ serviceAccountKey.json not found in any of:', possiblePaths);
+    console.warn('   and FIREBASE_SERVICE_ACCOUNT_JSON env var not set.');
     console.warn('   Push notifications will be disabled');
   }
 } catch (error) {
@@ -102,19 +114,30 @@ export async function sendNotificationToLocation(
     const childIds = await getChildLocationIdsForFCM(numericLocationId);
     const targetLocations = [numericLocationId, ...childIds];
 
-    const users = await (prisma as any).user.findMany({
-      where: { locationId: { in: targetLocations }, fcmToken: { not: null } },
-      select: { fcmToken: true }
-    });
-
-    const members = await (prisma as any).member.findMany({
-      where: { locationId: { in: targetLocations }, fcmToken: { not: null } },
-      select: { fcmToken: true }
-    });
+    const [users, members, superAdminUsers, superAdminMembers] = await Promise.all([
+      (prisma as any).user.findMany({
+        where: { locationId: { in: targetLocations }, fcmToken: { not: null } },
+        select: { fcmToken: true }
+      }),
+      (prisma as any).member.findMany({
+        where: { locationId: { in: targetLocations }, fcmToken: { not: null } },
+        select: { fcmToken: true }
+      }),
+      (prisma as any).user.findMany({
+        where: { role: 'SUPER_ADMIN', fcmToken: { not: null } },
+        select: { fcmToken: true }
+      }),
+      (prisma as any).member.findMany({
+        where: { role: { in: ['SUPER_ADMIN', 'Super Admin'] }, fcmToken: { not: null } },
+        select: { fcmToken: true }
+      })
+    ]);
 
     const tokens = [
       ...users.map((u: any) => u.fcmToken as string),
-      ...members.map((m: any) => m.fcmToken as string)
+      ...members.map((m: any) => m.fcmToken as string),
+      ...superAdminUsers.map((u: any) => u.fcmToken as string),
+      ...superAdminMembers.map((m: any) => m.fcmToken as string)
     ].filter((t: any) => t && t.trim() !== '');
 
     const uniqueTokens = Array.from(new Set<string>(tokens as string[]));
