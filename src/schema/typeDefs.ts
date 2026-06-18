@@ -254,6 +254,8 @@ export const typeDefs = gql`
     locationId: Int
     location: Location
     createdAt: String!
+    isJoined: Boolean!
+    rules: [String!]!
   }
 
   type CommunityMessageReaction {
@@ -304,6 +306,8 @@ export const typeDefs = gql`
     category: String
     image: String
     images: [String!]
+    documents: [String!]!
+    attachments: [String!]!
     authorName: String
     authorRole: String
     likes: Int!
@@ -550,7 +554,7 @@ export const typeDefs = gql`
     getNotificationDetails(id: Int!): NotificationDetails
     getEventList(locationId: Int, status: EventStatus, eventId: Int): [Event!]!
     getEmergencyRequestList(locationId: Int, status: RequestStatus): [EmergencyRequest!]!
-    getCommunities: [Community!]!
+    getCommunities(joinedOnly: Boolean): [Community!]!
     getCommunityPosts(communityId: Int!, category: String): [CommunityPost!]!
     getCommunityMessages(communityId: Int!, limit: Int = 50, beforeMessageId: Int): [CommunityMessage!]!
     getCommunityUnreadCount(communityId: Int!): Int!
@@ -774,8 +778,13 @@ export const typeDefs = gql`
       description: String
       image: String
       allowMemberMessages: Boolean
+      locationId: Int
     ): Community!
     joinCommunity(
+      communityId: Int!
+      memberId: Int
+    ): Boolean!
+    leaveCommunity(
       communityId: Int!
       memberId: Int
     ): Boolean!
@@ -785,6 +794,7 @@ export const typeDefs = gql`
       content: String!
       category: String
       images: [String!]
+      documents: [String!]
     ): CommunityPost!
     likeCommunityPost(postId: Int!): CommunityPost!
     addCommunityComment(
@@ -1109,6 +1119,7 @@ export const typeDefs = gql`
     IGNORE
     WARN
     DELETE
+    REMOVE_MEMBER
   }
 
   type PostReport {

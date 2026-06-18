@@ -80,6 +80,7 @@ model Member {
   warnings             UserWarning[]          @relation("MemberWarnings")
   pollLikes            PollLike[]
   pollReports          PollReport[]
+  communityPosts       CommunityPost[]
 
   @@index([locationId])
   @@index([professionId])
@@ -478,8 +479,10 @@ model CommunityPost {
   images      String[]
   communityId Int
   community   Community          @relation(fields: [communityId], references: [id], onDelete: Cascade)
-  createdById Int
-  createdBy   User               @relation(fields: [createdById], references: [id])
+  createdById Int?
+  createdBy   User?              @relation(fields: [createdById], references: [id])
+  memberId    Int?
+  member      Member?            @relation(fields: [memberId], references: [id])
   likes       Int                @default(0)
   comments    CommunityComment[]
   likesList   CommunityPostLike[]

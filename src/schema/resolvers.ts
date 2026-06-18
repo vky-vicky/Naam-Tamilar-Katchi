@@ -2690,11 +2690,19 @@ export const resolvers = {
       });
     },
 
-    getCommunities: async (_: any, __: any, context: any) => {
+    getCommunities: async (_: any, { joinedOnly }: { joinedOnly?: boolean }, context: any) => {
       const user = context?.user;
+      if (!user) return [];
       const where: any = {};
 
-      if (user) {
+      if (joinedOnly) {
+        const memberships = await (prisma as any).communityMember.findMany({
+          where: { memberId: Number(user.id) },
+          select: { communityId: true }
+        });
+        const joinedIds = memberships.map((m: any) => m.communityId);
+        where.id = { in: joinedIds };
+      } else {
         if (user.role === 'MEMBER') {
           if (user.locationId) {
             const ancestorIds = await getAncestorLocationIds(user.locationId);
@@ -2756,6 +2764,7 @@ export const resolvers = {
         include: {
           community: true,
           createdBy: true,
+          member: true,
           comments: {
             orderBy: { createdAt: 'asc' }
           }
@@ -3301,10 +3310,6 @@ export const resolvers = {
         include: { location: true, profession: true },
       });
 
-      if (professionName) {
-        await autoJoinCommunities(member.id, professionName);
-      }
-
       return member;
     }),
 
@@ -3595,10 +3600,6 @@ export const resolvers = {
             include: { location: true, profession: true }
           });
 
-          if (professionName) {
-            await autoJoinCommunities(updatedMember.id, professionName);
-          }
-
           const userWithLoc = await (prisma as any).user.findUnique({
             where: { id: existingUser.id },
             include: { location: true }
@@ -3726,10 +3727,6 @@ export const resolvers = {
         },
         include: { location: true, profession: true }
       });
-      
-      if (professionName) {
-        await autoJoinCommunities(updatedMember.id, professionName);
-      }
 
       // Sync to matching User table record
       const matchingUser = await (prisma as any).user.findFirst({
@@ -5094,6 +5091,54 @@ export const resolvers = {
         await (prisma as any).communityPost.delete({
           where: { id: report.postId }
         });
+      } else if (action === 'REMOVE_MEMBER') {
+        // Remove the poster from the community
+        // Determine who created the post - could be Admin (createdById) or Member (memberId)
+        let posterMemberId: number | null = null;
+
+        if (report.post.memberId) {
+          // Post was created by a Member directly
+          posterMemberId = report.post.memberId;
+        } else if (report.post.createdById) {
+          // Post was created by an Admin/User — find their Member record by phone
+          const postCreator = await (prisma as any).user.findUnique({
+            where: { id: report.post.createdById },
+            select: { phone: true }
+          });
+          if (postCreator?.phone) {
+            const memberRecord = await (prisma as any).member.findFirst({
+              where: { phone: postCreator.phone }
+            });
+            posterMemberId = memberRecord?.id || null;
+          }
+        }
+
+        if (posterMemberId) {
+          // Delete their membership from the community
+          await (prisma as any).communityMember.deleteMany({
+            where: {
+              communityId: report.post.communityId,
+              memberId: posterMemberId
+            }
+          });
+
+          // Also issue a warning if warningMessage is provided
+          if (warningMessage) {
+            await (prisma as any).userWarning.create({
+              data: {
+                memberId: posterMemberId,
+                adminId: Number(context.user.id),
+                message: warningMessage,
+                communityPostId: report.postId
+              }
+            });
+          }
+        }
+
+        await (prisma as any).communityPostReport.update({
+          where: { id: report.id },
+          data: { status: 'DELETED' }
+        });
       }
 
       return true;
@@ -5768,23 +5813,27 @@ export const resolvers = {
       return true;
     },
 
-    createCommunity: async (_: any, { name, description, image, allowMemberMessages }: any, context: any) => {
+    createCommunity: async (_: any, { name, description, image, allowMemberMessages, locationId }: any, context: any) => {
       if (!context.user) throw new Error(I18nService.translate("unauthorized_login", context?.language));
-      if (context.user.role !== 'SUPER_ADMIN' && context.user.role !== 'ADMIN') {
+      if (context.user.role !== 'SUPER_ADMIN' && context.user.role !== 'ADMIN' && context.user.role !== 'SUB_ADMIN') {
         throw new Error(I18nService.translate("member_not_allowed", context?.language));
       }
+
+      const resolvedLocationId = locationId !== undefined ? locationId : (context.user.locationId || null);
 
       const community = await (prisma as any).community.upsert({
         where: { name },
         update: {
           description,
           image,
+          locationId: resolvedLocationId,
           ...(allowMemberMessages !== undefined ? { allowMemberMessages } : {})
         },
         create: {
           name,
           description,
           image,
+          locationId: resolvedLocationId,
           allowMemberMessages: allowMemberMessages ?? true
         }
       });
@@ -5797,7 +5846,6 @@ export const resolvers = {
     },
 
     joinCommunity: async (_: any, { communityId, memberId }: any, context: any) => {
-      // Auto-detect memberId from context if not provided
       let resolvedMemberId = memberId;
       if (!resolvedMemberId && context?.user) {
         resolvedMemberId = Number(context.user.id);
@@ -5822,12 +5870,38 @@ export const resolvers = {
       return true;
     },
 
-    createCommunityPost: async (_: any, { communityId, title, content, category, images }: any, context: any) => {
-      if (!context.user) throw new Error(I18nService.translate("unauthorized_login", context?.language));
-      if (context.user.role !== 'SUPER_ADMIN' && context.user.role !== 'ADMIN') {
-        throw new Error(I18nService.translate("member_not_allowed", context?.language));
+    leaveCommunity: async (_: any, { communityId, memberId }: any, context: any) => {
+      let resolvedMemberId = memberId;
+      if (!resolvedMemberId && context?.user) {
+        resolvedMemberId = Number(context.user.id);
       }
-      // Validate title is provided and non-empty
+      if (!resolvedMemberId) {
+        throw new Error('Member ID is required to leave community');
+      }
+
+      const existing = await (prisma as any).communityMember.findUnique({
+        where: {
+          communityId_memberId: {
+            communityId,
+            memberId: resolvedMemberId
+          }
+        }
+      });
+      if (!existing) return true;
+
+      await (prisma as any).communityMember.delete({
+        where: {
+          communityId_memberId: {
+            communityId,
+            memberId: resolvedMemberId
+          }
+        }
+      });
+      return true;
+    },
+    createCommunityPost: async (_: any, { communityId, title, content, category, images, documents }: any, context: any) => {
+      if (!context.user) throw new Error(I18nService.translate("unauthorized_login", context?.language));
+      
       if (!title || title.trim() === '') {
         throw new Error('Title is required for community posts');
       }
@@ -5837,23 +5911,50 @@ export const resolvers = {
       });
       if (!community) throw new Error("Community not found");
 
+      const isMember = context.user.type === 'member' || context.user.role === 'MEMBER';
+      if (isMember) {
+        const membership = await (prisma as any).communityMember.findUnique({
+          where: {
+            communityId_memberId: {
+              communityId,
+              memberId: Number(context.user.id)
+            }
+          }
+        });
+        if (!membership) {
+          throw new Error('Unauthorized: You must join this community before creating a post.');
+        }
+      }
+
+      const combinedAttachments = [
+        ...(images || []),
+        ...(documents || [])
+      ];
+
+      const postData: any = {
+        title,
+        content,
+        category: category || "Information",
+        images: combinedAttachments,
+        communityId
+      };
+
+      if (isMember) {
+        postData.memberId = Number(context.user.id);
+      } else {
+        postData.createdById = Number(context.user.id);
+      }
+
       const post = await (prisma as any).communityPost.create({
-        data: {
-          title,
-          content,
-          category: category || "Information",
-          images: images || [],
-          communityId,
-          createdById: Number(context.user.id)
-        },
+        data: postData,
         include: {
           community: true,
           createdBy: true,
+          member: true,
           comments: true
         }
       });
 
-      // 4. WhatsApp-style Broadcast
       const members = await (prisma as any).communityMember.findMany({
         where: { communityId },
         include: { member: true }
@@ -5872,7 +5973,7 @@ export const resolvers = {
                 message: content,
                 type: 'COMMUNITY',
                 locationId: m.member.locationId,
-                createdById: Number(context.user.id),
+                createdById: isMember ? null : Number(context.user.id),
                 purpose: 'Share a community post with members in this group.',
                 entityType: 'COMMUNITY_POST',
                 entityId: post.id,
@@ -5886,7 +5987,6 @@ export const resolvers = {
             });
           }
 
-          // Push FCM notification to community
           sendNotificationToCommunity(
             Number(communityId),
             `${community.name}: ${title}`,
@@ -6079,6 +6179,93 @@ export const resolvers = {
           authorRole
         }
       });
+
+      // --- Push notification to post owner ---
+      try {
+        const post = await (prisma as any).communityPost.findUnique({
+          where: { id: Number(postId) },
+          include: { community: true, member: true, createdBy: true }
+        });
+
+        if (post) {
+          // Determine the post owner's FCM token
+          let ownerToken: string | null = null;
+          let ownerName: string = 'Someone';
+          let isOwnComment = false;
+
+          if (post.memberId) {
+            // Post created by a Member
+            const postOwner = post.member || await (prisma as any).member.findUnique({
+              where: { id: post.memberId },
+              select: { fcmToken: true, name: true, id: true }
+            });
+            ownerToken = postOwner?.fcmToken || null;
+            ownerName = postOwner?.name || 'Someone';
+            isOwnComment = context?.user?.type === 'member' && Number(context.user.id) === post.memberId;
+          } else if (post.createdById) {
+            // Post created by an Admin (User table)
+            const postOwner = post.createdBy || await (prisma as any).user.findUnique({
+              where: { id: post.createdById },
+              select: { fcmToken: true, name: true, id: true }
+            });
+            ownerToken = postOwner?.fcmToken || null;
+            ownerName = postOwner?.name || 'Someone';
+            isOwnComment = context?.user?.type === 'admin' && Number(context.user.id) === post.createdById;
+          }
+
+          // Don't notify post owner if they are the commenter
+          if (ownerToken && !isOwnComment) {
+            const communityName = post.community?.name || 'Community';
+            sendNotificationToToken(
+              ownerToken,
+              `💬 ${communityName}`,
+              `${authorName} commented on your post: "${content.substring(0, 100)}"`,
+              { type: 'COMMUNITY_COMMENT', communityId: String(post.communityId), postId: String(post.id) }
+            ).catch(e => console.error('[FCM] Error notifying post owner of comment:', e));
+          }
+
+          // --- Mention scanning: find @Name or @phone patterns ---
+          const mentionRegex = /@([\w\s]+?)(?=\s@|\s*$|[.,!?])/g;
+          const mentions: string[] = [];
+          let match;
+          while ((match = mentionRegex.exec(content)) !== null) {
+            if (match[1]) mentions.push(match[1].trim());
+          }
+
+          if (mentions.length > 0) {
+            // Get all members in this community to match mentions
+            const communityMembers = await (prisma as any).communityMember.findMany({
+              where: { communityId: post.communityId },
+              include: { member: { select: { id: true, name: true, phone: true, fcmToken: true } } }
+            });
+
+            for (const mentionText of mentions) {
+              const mentionLower = mentionText.toLowerCase();
+              const matchedMember = communityMembers.find((cm: any) => {
+                const memberName = (cm.member?.name || '').toLowerCase();
+                const memberPhone = (cm.member?.phone || '').toLowerCase();
+                return memberName === mentionLower || memberPhone === mentionLower || memberName.includes(mentionLower);
+              });
+
+              if (matchedMember?.member?.fcmToken) {
+                // Don't send mention notification to the commenter themselves
+                const isSelf = context?.user?.type === 'member' && Number(context.user.id) === matchedMember.member.id;
+                if (!isSelf) {
+                  const communityName = post.community?.name || 'Community';
+                  sendNotificationToToken(
+                    matchedMember.member.fcmToken,
+                    `🔔 ${communityName} - Mentioned`,
+                    `${authorName} mentioned you: "${content.substring(0, 100)}"`,
+                    { type: 'COMMUNITY_MENTION', communityId: String(post.communityId), postId: String(post.id) }
+                  ).catch(e => console.error('[FCM] Error notifying mentioned member:', e));
+                }
+              }
+            }
+          }
+        }
+      } catch (notifError) {
+        console.error('[addCommunityComment] Error sending comment notifications:', notifError);
+      }
 
       return {
         ...comment,
@@ -7158,7 +7345,27 @@ export const resolvers = {
 
   CommunityPost: {
     image: (parent: any) => {
-      return (parent.images && parent.images.length > 0) ? parent.images[0] : null;
+      // Return the first image-type attachment as the thumbnail
+      const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg'];
+      const allFiles: string[] = parent.images || [];
+      const firstImage = allFiles.find((url: string) => imageExts.some(ext => url.toLowerCase().endsWith(ext)));
+      return firstImage || (allFiles.length > 0 ? allFiles[0] : null);
+    },
+    images: (parent: any) => {
+      // Filter only image-type URLs from the combined images[] DB column
+      const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg'];
+      const allFiles: string[] = parent.images || [];
+      return allFiles.filter((url: string) => imageExts.some(ext => url.toLowerCase().endsWith(ext)));
+    },
+    documents: (parent: any) => {
+      // Filter only document-type URLs from the combined images[] DB column
+      const docExts = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.txt', '.csv', '.zip', '.rar'];
+      const allFiles: string[] = parent.images || [];
+      return allFiles.filter((url: string) => docExts.some(ext => url.toLowerCase().endsWith(ext)));
+    },
+    attachments: (parent: any) => {
+      // Return all attachments (images + documents) as-is
+      return parent.images || [];
     },
     category: (parent: any, _: any, context: any) => {
       const lang = context?.language || 'en';
@@ -7173,16 +7380,34 @@ export const resolvers = {
       return parent.category;
     },
     authorName: async (parent: any) => {
+      // Check Admin (User table) first
       if (parent.createdBy?.name) return parent.createdBy.name;
-      if (!parent.createdById) return null;
-      const user = await (prisma as any).user.findUnique({ where: { id: parent.createdById }, select: { name: true } });
-      return user?.name || null;
+      if (parent.createdById) {
+        const user = await (prisma as any).user.findUnique({ where: { id: parent.createdById }, select: { name: true } });
+        if (user?.name) return user.name;
+      }
+      // Check Member table
+      if (parent.member?.name) return parent.member.name;
+      if (parent.memberId) {
+        const member = await (prisma as any).member.findUnique({ where: { id: parent.memberId }, select: { name: true } });
+        if (member?.name) return member.name;
+      }
+      return null;
     },
     authorRole: async (parent: any) => {
+      // Check Admin (User table) first
       if (parent.createdBy?.role) return parent.createdBy.role;
-      if (!parent.createdById) return null;
-      const user = await (prisma as any).user.findUnique({ where: { id: parent.createdById }, select: { role: true } });
-      return user?.role || null;
+      if (parent.createdById) {
+        const user = await (prisma as any).user.findUnique({ where: { id: parent.createdById }, select: { role: true } });
+        if (user?.role) return user.role;
+      }
+      // Check Member table
+      if (parent.member?.role) return parent.member.role;
+      if (parent.memberId) {
+        const member = await (prisma as any).member.findUnique({ where: { id: parent.memberId }, select: { role: true } });
+        if (member?.role) return member.role;
+      }
+      return 'MEMBER';
     },
     commentCount: async (parent: any) => {
       if (parent.comments) return parent.comments.length;
@@ -7279,6 +7504,26 @@ export const resolvers = {
     location: async (parent: any) => {
       if (!parent.locationId) return null;
       return (prisma as any).location.findUnique({ where: { id: parent.locationId } });
+    },
+    isJoined: async (parent: any, _: any, context: any) => {
+      const user = context?.user;
+      if (!user) return false;
+      const count = await (prisma as any).communityMember.count({
+        where: {
+          communityId: Number(parent.id),
+          memberId: Number(user.id)
+        }
+      });
+      return count > 0;
+    },
+    rules: () => {
+      return [
+        "Be respectful to everyone",
+        "No spam or promotional content",
+        "Share only relevant content",
+        "No personal attacks",
+        "Do not share fake information"
+      ];
     },
     createdAt: (parent: any) => toIsoString(parent.createdAt)
   },
