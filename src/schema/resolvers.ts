@@ -2494,6 +2494,16 @@ export const resolvers = {
         where.locationId = { in: targetLocationIds };
       }
 
+      // Get all deleted notification IDs for this user
+      const deletedNotifications = await (prisma as any).deletedNotification.findMany({
+        where: context.user.type === 'admin'
+          ? { userId: Number(context.user.id) }
+          : { memberId: Number(context.user.id) },
+        select: { notificationId: true }
+      });
+      const deletedIds = deletedNotifications.map((dn: any) => dn.notificationId);
+      where.id = { notIn: deletedIds };
+
       return (prisma as any).notification.findMany({
         where,
         include: { location: true, createdBy: true },
@@ -2511,6 +2521,14 @@ export const resolvers = {
         include: { location: true, createdBy: true }
       });
       if (!notification) return null;
+
+      // Check if deleted by the user
+      const isDeleted = await (prisma as any).deletedNotification.findFirst({
+        where: context.user.type === 'admin'
+          ? { notificationId: Number(id), userId: Number(context.user.id) }
+          : { notificationId: Number(id), memberId: Number(context.user.id) }
+      });
+      if (isDeleted) return null;
 
       const role = context.user.role;
       const userLocId = context.user.locationId;
@@ -4142,7 +4160,19 @@ export const resolvers = {
         throw new Error('Unauthorized');
       }
 
-      await (prisma as any).notification.delete({ where: { id: Number(id) } });
+      const deleteWhere = context.user.type === 'admin'
+        ? { notificationId_userId: { notificationId: Number(id), userId: Number(context.user.id) } }
+        : { notificationId_memberId: { notificationId: Number(id), memberId: Number(context.user.id) } };
+
+      const deleteData = context.user.type === 'admin'
+        ? { notificationId: Number(id), userId: Number(context.user.id) }
+        : { notificationId: Number(id), memberId: Number(context.user.id) };
+
+      await (prisma as any).deletedNotification.upsert({
+        where: deleteWhere,
+        create: deleteData,
+        update: {}
+      });
       return true;
     },
 

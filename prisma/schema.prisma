@@ -81,6 +81,7 @@ model Member {
   pollLikes            PollLike[]
   pollReports          PollReport[]
   communityPosts       CommunityPost[]
+  deletedNotifications DeletedNotification[]  @relation("MemberDeletedNotifications")
 
   @@index([locationId])
   @@index([professionId])
@@ -127,6 +128,7 @@ model User {
   polls           Poll[]
   notifications   Notification[]
   warningsCreated UserWarning[]          @relation("AdminWarnings")
+  deletedNotifications DeletedNotification[] @relation("UserDeletedNotifications")
   district        String?
   constituency    String?
   area            String?
@@ -355,6 +357,7 @@ model Notification {
   createdById Int?
   createdBy   User?     @relation(fields: [createdById], references: [id])
   createdAt   DateTime  @default(now())
+  deletedBy   DeletedNotification[]
 
   @@index([locationId])
   @@index([type])
@@ -779,4 +782,21 @@ model PollReport {
   @@unique([pollId, reportedById])
   @@index([pollId])
   @@index([reportedById])
+}
+
+model DeletedNotification {
+  id             Int          @id @default(autoincrement())
+  notificationId Int
+  notification   Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  userId         Int?
+  user           User?        @relation("UserDeletedNotifications", fields: [userId], references: [id], onDelete: Cascade)
+  memberId       Int?
+  member         Member?      @relation("MemberDeletedNotifications", fields: [memberId], references: [id], onDelete: Cascade)
+  createdAt      DateTime     @default(now())
+
+  @@unique([notificationId, userId])
+  @@unique([notificationId, memberId])
+  @@index([notificationId])
+  @@index([userId])
+  @@index([memberId])
 }
