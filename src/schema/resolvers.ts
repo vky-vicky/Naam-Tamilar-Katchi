@@ -5005,9 +5005,14 @@ export const resolvers = {
 
       const report = await (prisma as any).postReport.findUnique({
         where: { id: Number(reportId) },
-        include: { post: true }
+        include: { post: true, reportedBy: true }
       });
       if (!report) throw new Error("Report not found");
+
+      // Prevent duplicate resolutions
+      if (report.status !== 'PENDING') {
+        throw new Error("This report has already been resolved.");
+      }
 
       // Validate administrative hierarchy
       const postLoc = await (prisma as any).location.findUnique({
@@ -5030,13 +5035,29 @@ export const resolvers = {
         }
       }
 
+      let nextStatus = 'PENDING';
+      const io = (global as any).io;
+
       // Perform action
       if (action === 'IGNORE') {
+        nextStatus = 'IGNORED';
         await (prisma as any).postReport.update({
           where: { id: report.id },
           data: { status: 'IGNORED' }
         });
+
+        // Send FCM notification to reporter
+        if (report.reportedBy?.fcmToken) {
+          sendNotificationToToken(
+            report.reportedBy.fcmToken,
+            "Report Update / புகார் பரிசீலனை",
+            "Your report on post has been reviewed and closed / உங்களது புகார் பரிசீலிக்கப்பட்டு மூடப்பட்டது.",
+            { type: 'REPORT_RESOLVED', reportId: report.id, status: nextStatus }
+          ).catch(e => console.error("Error sending FCM notification to reporter:", e));
+        }
+
       } else if (action === 'WARN') {
+        nextStatus = 'WARNED';
         if (!warningMessage) throw new Error("Warning message is required to warn the user.");
         
         const postCreatorMemberId = await getPostCreatorMemberId(report.post);
@@ -5049,13 +5070,29 @@ export const resolvers = {
               postId: report.postId
             }
           });
+
+          // Send FCM notification to creator
+          const creatorMember = await (prisma as any).member.findUnique({
+            where: { id: postCreatorMemberId },
+            select: { fcmToken: true }
+          });
+          if (creatorMember?.fcmToken) {
+            sendNotificationToToken(
+              creatorMember.fcmToken,
+              "Warning: Content Flagged / எச்சரிக்கை",
+              `Your post received a warning: ${warningMessage} / உங்களது பதிவு எச்சரிக்கப்பட்டுள்ளது: ${warningMessage}`,
+              { type: 'CONTENT_WARNING', postId: report.postId, warningMessage }
+            ).catch(e => console.error("Error sending FCM warning notification:", e));
+          }
         }
 
         await (prisma as any).postReport.update({
           where: { id: report.id },
           data: { status: 'WARNED' }
         });
+
       } else if (action === 'DELETE') {
+        nextStatus = 'DELETED';
         // Log warning if message is provided
         if (warningMessage) {
           const postCreatorMemberId = await getPostCreatorMemberId(report.post);
@@ -5068,6 +5105,37 @@ export const resolvers = {
                 postId: report.postId
               }
             });
+
+            // Send FCM notification to creator
+            const creatorMember = await (prisma as any).member.findUnique({
+              where: { id: postCreatorMemberId },
+              select: { fcmToken: true }
+            });
+            if (creatorMember?.fcmToken) {
+              sendNotificationToToken(
+                creatorMember.fcmToken,
+                "Content Removed / பதிவு நீக்கப்பட்டது",
+                `Your post was removed: ${warningMessage} / உங்களது பதிவு நீக்கப்பட்டுள்ளது: ${warningMessage}`,
+                { type: 'CONTENT_REMOVED', postId: report.postId, reason: warningMessage }
+              ).catch(e => console.error("Error sending FCM removal notification:", e));
+            }
+          }
+        } else {
+          // Send generic notification to creator
+          const postCreatorMemberId = await getPostCreatorMemberId(report.post);
+          if (postCreatorMemberId) {
+            const creatorMember = await (prisma as any).member.findUnique({
+              where: { id: postCreatorMemberId },
+              select: { fcmToken: true }
+            });
+            if (creatorMember?.fcmToken) {
+              sendNotificationToToken(
+                creatorMember.fcmToken,
+                "Content Removed / பதிவு நீக்கப்பட்டது",
+                "Your post was removed by Admin / உங்களது பதிவு நிர்வாகியால் நீக்கப்பட்டுள்ளது.",
+                { type: 'CONTENT_REMOVED', postId: report.postId }
+              ).catch(e => console.error("Error sending FCM generic removal notification:", e));
+            }
           }
         }
 
@@ -5078,6 +5146,16 @@ export const resolvers = {
         await (prisma as any).post.delete({
           where: { id: report.postId }
         });
+
+        // Emit Socket event to notify all users to remove the post from feed
+        if (io) {
+          io.emit('postDeleted', { postId: report.postId });
+        }
+      }
+
+      // Emit Socket event to update the admin queue
+      if (io) {
+        io.emit('reportResolved', { reportId: report.id, status: nextStatus, type: 'POST' });
       }
 
       return true;
@@ -5103,10 +5181,16 @@ export const resolvers = {
                 include: { location: true }
               }
             }
-          }
+          },
+          reportedBy: true
         }
       });
       if (!report) throw new Error("Report not found");
+
+      // Prevent duplicate resolutions
+      if (report.status !== 'PENDING') {
+        throw new Error("This report has already been resolved.");
+      }
 
       const commLoc = report.post.community.location;
 
@@ -5132,13 +5216,29 @@ export const resolvers = {
         }
       }
 
+      let nextStatus = 'PENDING';
+      const io = (global as any).io;
+
       // Perform action
       if (action === 'IGNORE') {
+        nextStatus = 'IGNORED';
         await (prisma as any).communityPostReport.update({
           where: { id: report.id },
           data: { status: 'IGNORED' }
         });
+
+        // Send FCM notification to reporter
+        if (report.reportedBy?.fcmToken) {
+          sendNotificationToToken(
+            report.reportedBy.fcmToken,
+            "Report Update / புகார் பரிசீலனை",
+            "Your report on community post has been reviewed and closed / உங்களது புகார் பரிசீலிக்கப்பட்டு மூடப்பட்டது.",
+            { type: 'REPORT_RESOLVED', reportId: report.id, status: nextStatus }
+          ).catch(e => console.error("Error sending FCM notification to reporter:", e));
+        }
+
       } else if (action === 'WARN') {
+        nextStatus = 'WARNED';
         if (!warningMessage) throw new Error("Warning message is required to warn the user.");
 
         const creatorMember = await (prisma as any).member.findFirst({
@@ -5159,13 +5259,25 @@ export const resolvers = {
               communityPostId: report.postId
             }
           });
+
+          // Send FCM notification to creator
+          if (creatorMember.fcmToken) {
+            sendNotificationToToken(
+              creatorMember.fcmToken,
+              "Warning: Content Flagged / எச்சரிக்கை",
+              `Your community post received a warning: ${warningMessage} / உங்களது பதிவு எச்சரிக்கப்பட்டுள்ளது: ${warningMessage}`,
+              { type: 'CONTENT_WARNING', postId: report.postId, warningMessage }
+            ).catch(e => console.error("Error sending FCM warning notification:", e));
+          }
         }
 
         await (prisma as any).communityPostReport.update({
           where: { id: report.id },
           data: { status: 'WARNED' }
         });
+
       } else if (action === 'DELETE') {
+        nextStatus = 'DELETED';
         if (warningMessage) {
           const creatorMember = await (prisma as any).member.findFirst({
             where: {
@@ -5185,6 +5297,34 @@ export const resolvers = {
                 communityPostId: report.postId
               }
             });
+
+            // Send FCM notification to creator
+            if (creatorMember.fcmToken) {
+              sendNotificationToToken(
+                creatorMember.fcmToken,
+                "Content Removed / பதிவு நீக்கப்பட்டது",
+                `Your community post was removed: ${warningMessage} / உங்களது பதிவு நீக்கப்பட்டுள்ளது: ${warningMessage}`,
+                { type: 'CONTENT_REMOVED', postId: report.postId, reason: warningMessage }
+              ).catch(e => console.error("Error sending FCM removal notification:", e));
+            }
+          }
+        } else {
+          // Send generic notification to creator
+          const creatorMember = await (prisma as any).member.findFirst({
+            where: {
+              phone: (await (prisma as any).user.findUnique({
+                where: { id: report.post.createdById },
+                select: { phone: true }
+              }))?.phone
+            }
+          });
+          if (creatorMember?.fcmToken) {
+            sendNotificationToToken(
+              creatorMember.fcmToken,
+              "Content Removed / பதிவு நீக்கப்பட்டது",
+              "Your community post was removed by Admin / உங்களது பதிவு நிர்வாகியால் நீக்கப்பட்டுள்ளது.",
+              { type: 'CONTENT_REMOVED', postId: report.postId }
+            ).catch(e => console.error("Error sending FCM generic removal notification:", e));
           }
         }
 
@@ -5195,9 +5335,14 @@ export const resolvers = {
         await (prisma as any).communityPost.delete({
           where: { id: report.postId }
         });
+
+        // Emit Socket event to notify all users to remove the post from feed
+        if (io) {
+          io.emit('postDeleted', { postId: report.postId });
+        }
+
       } else if (action === 'REMOVE_MEMBER') {
-        // Remove the poster from the community
-        // Determine who created the post - could be Admin (createdById) or Member (memberId)
+        nextStatus = 'DELETED';
         let posterMemberId: number | null = null;
 
         if (report.post.memberId) {
@@ -5237,12 +5382,31 @@ export const resolvers = {
               }
             });
           }
+
+          // Send FCM notification to creator about community membership removal
+          const creatorMember = await (prisma as any).member.findUnique({
+            where: { id: posterMemberId },
+            select: { fcmToken: true }
+          });
+          if (creatorMember?.fcmToken) {
+            sendNotificationToToken(
+              creatorMember.fcmToken,
+              "Removed from Community / குழுவில் இருந்து நீக்கப்பட்டீர்கள்",
+              `You have been removed from the community due to violation: ${warningMessage || ''} / விதிமுறை மீறல் காரணமாக நீங்கள் குழுவில் இருந்து நீக்கப்பட்டீர்கள்.`,
+              { type: 'COMMUNITY_MEMBER_REMOVED', communityId: report.post.communityId }
+            ).catch(e => console.error("Error sending FCM membership removal notification:", e));
+          }
         }
 
         await (prisma as any).communityPostReport.update({
           where: { id: report.id },
           data: { status: 'DELETED' }
         });
+      }
+
+      // Emit Socket event to update the admin queue
+      if (io) {
+        io.emit('reportResolved', { reportId: report.id, status: nextStatus, type: 'COMMUNITY_POST' });
       }
 
       return true;
@@ -5729,9 +5893,14 @@ export const resolvers = {
 
       const report = await (prisma as any).pollReport.findUnique({
         where: { id: Number(reportId) },
-        include: { poll: true }
+        include: { poll: true, reportedBy: true }
       });
       if (!report) throw new Error("Report not found");
+
+      // Prevent duplicate resolutions
+      if (report.status !== 'PENDING') {
+        throw new Error("This report has already been resolved.");
+      }
 
       const pollLoc = await (prisma as any).location.findUnique({
         where: { id: report.poll.locationId }
@@ -5753,12 +5922,28 @@ export const resolvers = {
         }
       }
 
+      let nextStatus = 'PENDING';
+      const io = (global as any).io;
+
       if (action === 'IGNORE') {
+        nextStatus = 'IGNORED';
         await (prisma as any).pollReport.update({
           where: { id: report.id },
           data: { status: 'IGNORED' }
         });
+
+        // Send FCM notification to reporter
+        if (report.reportedBy?.fcmToken) {
+          sendNotificationToToken(
+            report.reportedBy.fcmToken,
+            "Report Update / புகார் பரிசீலனை",
+            "Your report on poll has been reviewed and closed / உங்களது புகார் பரிசீலிக்கப்பட்டு மூடப்பட்டது.",
+            { type: 'REPORT_RESOLVED', reportId: report.id, status: nextStatus }
+          ).catch(e => console.error("Error sending FCM notification to reporter:", e));
+        }
+
       } else if (action === 'WARN') {
+        nextStatus = 'WARNED';
         if (!warningMessage) throw new Error("Warning message is required to warn the user.");
         
         const pollCreatorMemberId = await getPollCreatorMemberId(report.poll);
@@ -5771,6 +5956,20 @@ export const resolvers = {
               pollId: report.pollId
             }
           });
+
+          // Send FCM notification to creator
+          const creatorMember = await (prisma as any).member.findUnique({
+            where: { id: pollCreatorMemberId },
+            select: { fcmToken: true }
+          });
+          if (creatorMember?.fcmToken) {
+            sendNotificationToToken(
+              creatorMember.fcmToken,
+              "Warning: Content Flagged / எச்சரிக்கை",
+              `Your poll received a warning: ${warningMessage} / உங்களது வாக்கெடுப்பு எச்சரிக்கப்பட்டுள்ளது: ${warningMessage}`,
+              { type: 'CONTENT_WARNING', pollId: report.pollId, warningMessage }
+            ).catch(e => console.error("Error sending FCM warning notification:", e));
+          }
         }
 
         await (prisma as any).pollReport.update({
@@ -5778,6 +5977,7 @@ export const resolvers = {
           data: { status: 'WARNED' }
         });
       } else if (action === 'DELETE') {
+        nextStatus = 'DELETED';
         if (warningMessage) {
           const pollCreatorMemberId = await getPollCreatorMemberId(report.poll);
           if (pollCreatorMemberId) {
@@ -5789,12 +5989,53 @@ export const resolvers = {
                 pollId: report.pollId
               }
             });
+
+            // Send FCM notification to creator
+            const creatorMember = await (prisma as any).member.findUnique({
+              where: { id: pollCreatorMemberId },
+              select: { fcmToken: true }
+            });
+            if (creatorMember?.fcmToken) {
+              sendNotificationToToken(
+                creatorMember.fcmToken,
+                "Content Removed / பதிவு நீக்கப்பட்டது",
+                `Your poll was removed: ${warningMessage} / உங்களது வாக்கெடுப்பு நீக்கப்பட்டுள்ளது: ${warningMessage}`,
+                { type: 'CONTENT_REMOVED', pollId: report.pollId, reason: warningMessage }
+              ).catch(e => console.error("Error sending FCM removal notification:", e));
+            }
+          }
+        } else {
+          // Send generic notification to creator
+          const pollCreatorMemberId = await getPollCreatorMemberId(report.poll);
+          if (pollCreatorMemberId) {
+            const creatorMember = await (prisma as any).member.findUnique({
+              where: { id: pollCreatorMemberId },
+              select: { fcmToken: true }
+            });
+            if (creatorMember?.fcmToken) {
+              sendNotificationToToken(
+                creatorMember.fcmToken,
+                "Content Removed / பதிவு நீக்கப்பட்டது",
+                "Your poll was removed by Admin / உங்களது வாக்கெடுப்பு நிர்வாகியால் நீக்கப்பட்டுள்ளது.",
+                { type: 'CONTENT_REMOVED', pollId: report.pollId }
+              ).catch(e => console.error("Error sending FCM generic removal notification:", e));
+            }
           }
         }
 
         await (prisma as any).poll.delete({
           where: { id: report.pollId }
         });
+
+        // Emit socket to delete poll for all users
+        if (io) {
+          io.emit('pollDeleted', { pollId: report.pollId });
+        }
+      }
+
+      // Emit Socket event to update the admin queue
+      if (io) {
+        io.emit('reportResolved', { reportId: report.id, status: nextStatus, type: 'POLL' });
       }
 
       return true;
