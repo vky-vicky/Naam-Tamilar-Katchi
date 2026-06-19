@@ -1347,7 +1347,8 @@ export const resolvers = {
         pendingFromUserTable,
         newMembersTodayFromMember,
         newMembersTodayFromUser,
-        approvedTodayFromMember,
+        approvedOrRejectedTodayFromMember,
+        approvedOrRejectedTodayFromUser,
         totalTowns,
         totalStreets,
         activeEvents,
@@ -1380,9 +1381,13 @@ export const resolvers = {
         (prisma as any).user.count({
           where: { role: 'MEMBER', createdAt: { gte: todayStart, lte: todayEnd }, ...memberLocFilter }
         }),
-        // Approved today from Member table
+        // Approved/Rejected today from Member table
         (prisma as any).member.count({
-          where: { approvalStatus: 'APPROVED', updatedAt: { gte: todayStart, lte: todayEnd }, ...memberLocFilter }
+          where: { approvalStatus: { in: ['APPROVED', 'REJECTED'] }, updatedAt: { gte: todayStart, lte: todayEnd }, ...memberLocFilter }
+        }),
+        // Approved/Rejected today from User table
+        (prisma as any).user.count({
+          where: { role: 'MEMBER', approvalStatus: { in: ['APPROVED', 'REJECTED'] }, updatedAt: { gte: todayStart, lte: todayEnd }, ...memberLocFilter }
         }),
         // Total Towns (AREA)
         (prisma as any).location.count({
@@ -1392,17 +1397,26 @@ export const resolvers = {
         (prisma as any).location.count({
           where: { type: 'STREET', ...locationIdFilter }
         }),
-        // Active Events
+        // Events created today
         (prisma as any).event.count({
-          where: { status: 'ACTIVE', ...memberLocFilter }
+          where: { createdAt: { gte: todayStart, lte: todayEnd }, ...memberLocFilter }
         }),
-        // Emergency requests pending today
+        // Emergency requests created or reviewed today
         (prisma as any).emergencyRequest.count({
-          where: { status: 'PENDING', createdAt: { gte: todayStart, lte: todayEnd }, ...memberLocFilter }
+          where: {
+            ...memberLocFilter,
+            OR: [
+              { createdAt: { gte: todayStart, lte: todayEnd } },
+              {
+                updatedAt: { gte: todayStart, lte: todayEnd },
+                status: { in: ['APPROVED_SUB_ADMIN', 'APPROVED_ADMIN', 'APPROVED_STATE', 'REJECTED'] }
+              }
+            ]
+          }
         }),
-        // Active broadcasts today
+        // Broadcasts created today
         (prisma as any).broadcast.count({
-          where: { isActive: true, createdAt: { gte: todayStart, lte: todayEnd }, ...memberLocFilter }
+          where: { createdAt: { gte: todayStart, lte: todayEnd }, ...memberLocFilter }
         }),
       ]);
 
@@ -1430,7 +1444,7 @@ export const resolvers = {
 
       const pendingApprovals = pendingFromMemberTable + pendingFromUserTable;
       const newMembersToday = newMembersTodayFromMember + newMembersTodayFromUser;
-      const approvedToday = approvedTodayFromMember;
+      const approvedToday = approvedOrRejectedTodayFromMember + approvedOrRejectedTodayFromUser;
 
       return {
         locationName,
@@ -6155,7 +6169,7 @@ export const resolvers = {
             }
           }
         });
-      } else {
+
         // Send FCM notification to post owner when liked (not when unliked)
         try {
           const postWithCreator = await (prisma as any).post.findUnique({
