@@ -31,9 +31,9 @@ async function main() {
     veda = await prisma.location.create({ data: { name: 'Vedaranyam', type: 'TALUK', parentId: naga.id, password: 'admin123' } });
   }
 
-  let pushpa = await prisma.location.findFirst({ where: { name: 'Pushpavanam', type: 'AREA', parentId: veda.id } });
+  let pushpa = await prisma.location.findFirst({ where: { name: 'புஷ்பவனம்', type: 'AREA', parentId: veda.id } });
   if (!pushpa) {
-    pushpa = await prisma.location.create({ data: { name: 'Pushpavanam', type: 'AREA', parentId: veda.id, password: 'admin123' } });
+    pushpa = await prisma.location.create({ data: { name: 'புஷ்பவனம்', type: 'AREA', parentId: veda.id, password: 'admin123' } });
   }
 
   // 4. Create Users (Roles)
@@ -71,7 +71,7 @@ async function main() {
     where: { phone: '9000000003' },
     update: { locationId: pushpa.id, approvalStatus: 'APPROVED' },
     create: { 
-      name: 'Pushpavanam Sub-Admin', 
+      name: 'புஷ்பவனம் Sub-Admin', 
       phone: '9000000003', 
       password: 'admin123', 
       role: 'SUB_ADMIN',
@@ -82,7 +82,7 @@ async function main() {
   });
 
   // 5. Create Members with mixed Approval Status
-  const streets = ['Kanjamalai street', 'Main Road'];
+  const streets = ['கஞ்சமலைக்காடு', 'புஷ்பவனம்'];
   const realisticNames = ["Arulmozhi", "Senthamizhan", "Vetrivel", "Anbazhagan", "Kayalvizhi", "Tamilarasan", "Ezhil", "Iniyan", "Thamizhisai", "Karkivel"];
 
   for (const sName of streets) {
