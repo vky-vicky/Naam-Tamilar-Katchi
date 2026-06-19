@@ -1318,7 +1318,21 @@ export const resolvers = {
       let locationName = 'Tamil Nadu';
 
       const contextUser = context?.user;
-      const effectiveLocationId: number | null = locationId ?? (contextUser?.locationId ?? null);
+      let effectiveLocationId: number | null = locationId ?? (contextUser?.locationId ?? null);
+
+      if (contextUser && contextUser.role !== 'SUPER_ADMIN') {
+        const adminLocId = contextUser.locationId;
+        if (!adminLocId) {
+          effectiveLocationId = -1; // force empty result
+        } else if (effectiveLocationId) {
+          const allowedIds = [adminLocId, ...(await getChildLocationIds(adminLocId))];
+          if (!allowedIds.includes(Number(effectiveLocationId))) {
+            effectiveLocationId = adminLocId; // restrict to admin's assigned location scope
+          }
+        } else {
+          effectiveLocationId = adminLocId;
+        }
+      }
 
       // Pre-compute all location IDs ONCE before any queries
       let dashLocationIds: number[] | null = null;
@@ -2193,10 +2207,17 @@ export const resolvers = {
             include: { user: { include: { location: true } } }
           }).then((logs: any[]) => logs.map((l: any) => {
             const isProfile = l.action.toLowerCase().includes('profile');
+            const isApprove = l.action.toLowerCase().includes('approve');
+            const isReject = l.action.toLowerCase().includes('reject');
+            let title = 'Role Changed';
+            if (isProfile) title = 'Profile Updated';
+            else if (isApprove) title = 'Request Approved';
+            else if (isReject) title = 'Request Rejected';
+
             return {
               id: l.id,
               activityType: 'ROLE_CHANGE',
-              title: isProfile ? 'Profile Updated' : 'Role Changed',
+              title,
               description: l.details || (isProfile ? `Profile updated for user ${l.user?.name || ''}` : `Role changed for user ${l.user?.name || ''}`),
               createdAt: toIST(l.createdAt),
               member: l.user ? {
@@ -3058,6 +3079,7 @@ export const resolvers = {
       }
 
       const where: any = { approvalStatus: 'PENDING' };
+      const userWhere: any = { role: 'MEMBER', approvalStatus: 'PENDING' };
 
       // Role‑based location scoping
       if (user.role === 'SUPER_ADMIN') {
@@ -3065,32 +3087,52 @@ export const resolvers = {
         if (locationId) {
           const childIds = await getChildLocationIds(Number(locationId));
           where.locationId = { in: [Number(locationId), ...childIds] };
+          userWhere.locationId = { in: [Number(locationId), ...childIds] };
         }
       } else {
         // ADMIN / SUB_ADMIN – scope to their own location subtree
-        let scopeId = user.locationId;
-        if (locationId && user.locationId) {
-          const allowedIds = [user.locationId, ...(await getChildLocationIds(user.locationId))];
+        const scopeId = user.locationId;
+        if (!scopeId) {
+          // If admin has no assigned location scope, return empty
+          return [];
+        }
+        let targetId = scopeId;
+        if (locationId) {
+          const allowedIds = [scopeId, ...(await getChildLocationIds(scopeId))];
           if (allowedIds.includes(Number(locationId))) {
-            scopeId = Number(locationId);
+            targetId = Number(locationId);
+          } else {
+            // Trying to access outside assigned scope -> not allowed
+            return [];
           }
         }
-        if (scopeId) {
-          const childIds = await getChildLocationIds(Number(scopeId));
-          where.locationId = { in: [Number(scopeId), ...childIds] };
-        }
+        const childIds = await getChildLocationIds(targetId);
+        where.locationId = { in: [targetId, ...childIds] };
+        userWhere.locationId = { in: [targetId, ...childIds] };
       }
 
-      const pending = await (prisma as any).member.findMany({
-        where,
-        orderBy: { createdAt: 'desc' },
-        include: { location: true, profession: true },
-      });
+      const [pendingFromMember, pendingFromUser] = await Promise.all([
+        (prisma as any).member.findMany({
+          where,
+          include: { location: true, profession: true },
+          orderBy: { createdAt: 'desc' },
+        }),
+        (prisma as any).user.findMany({
+          where: userWhere,
+          include: { location: true },
+          orderBy: { createdAt: 'desc' },
+        })
+      ]);
 
-      return pending.map((m: any) => ({
-        ...m,
-        createdAt: toIsoString(m.createdAt),
-      }));
+      const combined = [...pendingFromMember, ...pendingFromUser.map(userToMemberShape)];
+      const uniquePending = Array.from(new Map(combined.map(item => [item.phone, item])).values());
+
+      return uniquePending
+        .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        .map((m: any) => ({
+          ...m,
+          createdAt: toIsoString(m.createdAt),
+        }));
     },
 
     // ─────────────────────────────────────────────────────────────
@@ -3417,6 +3459,27 @@ export const resolvers = {
       // Track who approved the member
       if (status === 'APPROVED' && context?.user?.id) {
         data.approvedById = context.user.id;
+      }
+
+      // Write Audit Log for the action
+      try {
+        const updaterId = Number(context.user.id);
+        const updaterUser = await (prisma as any).user.findUnique({
+          where: { id: updaterId }
+        }) || await (prisma as any).member.findUnique({
+          where: { id: updaterId }
+        });
+        const updaterName = formatUserDesignation(updaterUser, 'Admin');
+
+        await (prisma as any).auditLog.create({
+          data: {
+            userId: updaterId,
+            action: status === 'APPROVED' ? 'member_approve' : 'member_reject',
+            details: `Request ${status === 'APPROVED' ? 'Accepted' : 'Rejected'} by ${updaterName}`
+          }
+        });
+      } catch (err) {
+        console.error('Error writing approval/rejection audit log:', err);
       }
 
       if (Number(id) < 0 || Number(id) >= 1000000) {
