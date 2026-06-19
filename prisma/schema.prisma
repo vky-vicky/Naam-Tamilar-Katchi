@@ -14,74 +14,74 @@ model Location {
   password      String?
   createdAt     DateTime           @default(now())
   updatedAt     DateTime           @updatedAt
+  broadcasts    Broadcast[]
   targets       CampaignTarget[]
+  communities   Community[]
+  requests      EmergencyRequest[]
+  events        Event[]
   parent        Location?          @relation("LocationHierarchy", fields: [parentId], references: [id])
   children      Location[]         @relation("LocationHierarchy")
   members       Member[]
-  users         User[]
-  events        Event[]
-  requests      EmergencyRequest[]
-  posts         Post[]
   notifications Notification[]
-  broadcasts    Broadcast[]
-  communities   Community[]
   polls         Poll[]
+  posts         Post[]
+  users         User[]
 
   @@index([parentId])
   @@index([type])
 }
 
 model Member {
-  id                 Int                 @id @default(autoincrement())
-  name               String
-  surname            String?
-  phone              String              @unique
-  password           String?
-  image              String?
-  dateOfBirth        String?
-  gender             String?
-  bloodGroup         String?
-  allergies          String?
-  conditions         String?
-  emergencyContact   String?
-  role               String              @default("Member")
-  professionId       Int?
-  profession         Profession?         @relation(fields: [professionId], references: [id])
-  locationId         Int
-  location           Location            @relation(fields: [locationId], references: [id])
-  approvalStatus     ApprovalStatus      @default(PENDING)
-  consent            Boolean             @default(true)
-  isActive           Boolean             @default(true)
-  createdAt          DateTime            @default(now())
-  updatedAt          DateTime            @updatedAt
-  createdById        Int?
-  createdBy          User?               @relation("MemberCreator", fields: [createdById], references: [id])
-  approvedById       Int?
-  approvedBy         User?               @relation("MemberApprover", fields: [approvedById], references: [id])
-  fcmToken           String?
-  messageLogs        MessageLog[]
-  requests           EmergencyRequest[]
-  eventResponses     EventResponse[]
-  communityMembers   CommunityMember[]
-  emergencyResponses EmergencyResponse[]
-  polls              Poll[]
-  pollVotes          PollVote[]
-  postLikes          PostLike[]
-  communityPostLikes CommunityPostLike[]
-  district           String?
-  constituency       String?
-  area               String?
-  street             String?
-  enrollments        MemberPlanEnrollment[]
-  payments           ContributionPayment[]
-  contributionProfile ContributionProfile?
-  postReports          PostReport[]
+  id                   Int                    @id @default(autoincrement())
+  name                 String
+  surname              String?
+  phone                String                 @unique
+  password             String?
+  image                String?
+  dateOfBirth          String?
+  gender               String?
+  bloodGroup           String?
+  allergies            String?
+  conditions           String?
+  emergencyContact     String?
+  role                 String                 @default("Member")
+  professionId         Int?
+  locationId           Int
+  approvalStatus       ApprovalStatus         @default(PENDING)
+  consent              Boolean                @default(true)
+  isActive             Boolean                @default(true)
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+  createdById          Int?
+  approvedById         Int?
+  fcmToken             String?
+  district             String?
+  constituency         String?
+  area                 String?
+  street               String?
+  communityMembers     CommunityMember[]
+  communityPosts       CommunityPost[]
+  communityPostLikes   CommunityPostLike[]
   communityPostReports CommunityPostReport[]
-  warnings             UserWarning[]          @relation("MemberWarnings")
+  payments             ContributionPayment[]
+  contributionProfile  ContributionProfile?
+  deletedNotifications DeletedNotification[]  @relation("MemberDeletedNotifications")
+  requests             EmergencyRequest[]
+  emergencyResponses   EmergencyResponse[]
+  eventResponses       EventResponse[]
+  approvedBy           User?                  @relation("MemberApprover", fields: [approvedById], references: [id])
+  createdBy            User?                  @relation("MemberCreator", fields: [createdById], references: [id])
+  location             Location               @relation(fields: [locationId], references: [id])
+  profession           Profession?            @relation(fields: [professionId], references: [id])
+  enrollments          MemberPlanEnrollment[]
+  messageLogs          MessageLog[]
+  polls                Poll[]
   pollLikes            PollLike[]
   pollReports          PollReport[]
-  communityPosts       CommunityPost[]
-  deletedNotifications DeletedNotification[]  @relation("MemberDeletedNotifications")
+  pollVotes            PollVote[]
+  postLikes            PostLike[]
+  postReports          PostReport[]
+  warnings             UserWarning[]          @relation("MemberWarnings")
 
   @@index([locationId])
   @@index([professionId])
@@ -90,49 +90,49 @@ model Member {
 model Profession {
   id        Int      @id @default(autoincrement())
   name      String   @unique
-  members   Member[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  members   Member[]
 }
 
 model User {
-  id              Int                @id @default(autoincrement())
-  name            String
-  surname         String?
-  phone           String             @unique
-  password        String
-  role            UserRole           @default(MEMBER)
-  approvalStatus  ApprovalStatus     @default(PENDING)
-  locationId      Int?
-  parentId        Int?
-  parent          User?              @relation("Hierarchy", fields: [parentId], references: [id])
-  children        User[]             @relation("Hierarchy")
-  isActive        Boolean            @default(true)
-  createdAt       DateTime           @default(now())
-  updatedAt       DateTime           @updatedAt
-  auditLogs       AuditLog[]
-  campaigns       Campaign[]
-  createdEvents   Event[]
-  createdRequests EmergencyRequest[]
-  createdMembers  Member[]           @relation("MemberCreator")
-  approvedMembers Member[]           @relation("MemberApprover")
-  fcmToken        String?
-  image           String?
-  dateOfBirth     String?
-  gender          String?
-  bloodGroup      String?
-  profession      String?
-  location        Location?          @relation(fields: [locationId], references: [id])
-  communityPosts  CommunityPost[]
-  broadcasts      Broadcast[]
-  polls           Poll[]
-  notifications   Notification[]
-  warningsCreated UserWarning[]          @relation("AdminWarnings")
+  id                   Int                   @id @default(autoincrement())
+  name                 String
+  surname              String?
+  phone                String                @unique
+  password             String
+  role                 UserRole              @default(MEMBER)
+  approvalStatus       ApprovalStatus        @default(PENDING)
+  locationId           Int?
+  parentId             Int?
+  isActive             Boolean               @default(true)
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+  fcmToken             String?
+  image                String?
+  dateOfBirth          String?
+  gender               String?
+  bloodGroup           String?
+  profession           String?
+  district             String?
+  constituency         String?
+  area                 String?
+  street               String?
+  auditLogs            AuditLog[]
+  broadcasts           Broadcast[]
+  campaigns            Campaign[]
+  communityPosts       CommunityPost[]
   deletedNotifications DeletedNotification[] @relation("UserDeletedNotifications")
-  district        String?
-  constituency    String?
-  area            String?
-  street          String?
+  createdRequests      EmergencyRequest[]
+  createdEvents        Event[]
+  approvedMembers      Member[]              @relation("MemberApprover")
+  createdMembers       Member[]              @relation("MemberCreator")
+  notifications        Notification[]
+  polls                Poll[]
+  location             Location?             @relation(fields: [locationId], references: [id])
+  parent               User?                 @relation("Hierarchy", fields: [parentId], references: [id])
+  children             User[]                @relation("Hierarchy")
+  warningsCreated      UserWarning[]         @relation("AdminWarnings")
 
   @@index([role])
   @@index([approvalStatus])
@@ -199,41 +199,38 @@ model Event {
   description String?
   date        DateTime
   locationId  Int
-  location    Location        @relation(fields: [locationId], references: [id])
   status      EventStatus     @default(ACTIVE)
   createdById Int
-  createdBy   User            @relation(fields: [createdById], references: [id])
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
+  createdBy   User            @relation(fields: [createdById], references: [id])
+  location    Location        @relation(fields: [locationId], references: [id])
   responses   EventResponse[]
 }
 
 model EventResponse {
   id        Int        @id @default(autoincrement())
   eventId   Int
-  event     Event      @relation(fields: [eventId], references: [id])
   memberId  Int
-  member    Member     @relation(fields: [memberId], references: [id])
   status    RSVPStatus
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
+  event     Event      @relation(fields: [eventId], references: [id])
+  member    Member     @relation(fields: [memberId], references: [id])
 
   @@unique([eventId, memberId])
 }
 
 model EmergencyRequest {
-  id              Int                 @id @default(autoincrement())
-  title           String
-  description     String?
-  type            String              @default("EMERGENCY")
-  status          RequestStatus       @default(PENDING)
-  locationId      Int
-  location        Location            @relation(fields: [locationId], references: [id])
-  memberId        Int?
-  member          Member?             @relation(fields: [memberId], references: [id])
-  createdById     Int?
-  createdBy       User?               @relation(fields: [createdById], references: [id])
-  audience        String? // Ex: "ALL_CAPTAINS", "STREET_MEMBERS"
+  id               Int                 @id @default(autoincrement())
+  title            String
+  description      String?
+  type             String              @default("EMERGENCY")
+  status           RequestStatus       @default(PENDING)
+  locationId       Int
+  memberId         Int?
+  createdById      Int?
+  audience         String?
   contactName      String?
   contactPhone     String?
   expiryDate       DateTime?
@@ -250,61 +247,64 @@ model EmergencyRequest {
   forwardedAt      DateTime?
   createdAt        DateTime            @default(now())
   updatedAt        DateTime            @updatedAt
+  createdBy        User?               @relation(fields: [createdById], references: [id])
+  location         Location            @relation(fields: [locationId], references: [id])
+  member           Member?             @relation(fields: [memberId], references: [id])
   responses        EmergencyResponse[]
 }
 
 model EmergencyResponse {
   id                 Int              @id @default(autoincrement())
   emergencyRequestId Int
-  emergencyRequest   EmergencyRequest @relation(fields: [emergencyRequestId], references: [id], onDelete: Cascade)
   memberId           Int
-  member             Member           @relation(fields: [memberId], references: [id], onDelete: Cascade)
   status             RSVPStatus
   note               String?
   createdAt          DateTime         @default(now())
   updatedAt          DateTime         @updatedAt
+  emergencyRequest   EmergencyRequest @relation(fields: [emergencyRequestId], references: [id], onDelete: Cascade)
+  member             Member           @relation(fields: [memberId], references: [id], onDelete: Cascade)
 
   @@unique([emergencyRequestId, memberId])
 }
 
 model Post {
-  id            Int       @id @default(autoincrement())
+  id            Int          @id @default(autoincrement())
   content       String
-  category      String?   @default("Discussion")
+  category      String?      @default("Discussion")
   images        String[]
   authorName    String
   authorRole    String?
-  likes         Int       @default(0)
+  likes         Int          @default(0)
   locationId    Int
-  location      Location  @relation(fields: [locationId], references: [id])
-  comments      Comment[]
-  likesList     PostLike[]
-  reports       PostReport[]
-  createdAt     DateTime  @default(now())
+  createdAt     DateTime     @default(now())
   createdById   Int?
   createdByType String?
-  status        String    @default("ACTIVE")
+  status        String       @default("ACTIVE")
+  comments      Comment[]
+  location      Location     @relation(fields: [locationId], references: [id])
+  likesList     PostLike[]
+  reports       PostReport[]
 }
 
 model Poll {
-  id          Int          @id @default(autoincrement())
+  id          Int           @id @default(autoincrement())
   question    String
   locationId  Int
-  location    Location     @relation(fields: [locationId], references: [id])
   communityId Int?
-  community   Community?   @relation(fields: [communityId], references: [id], onDelete: Cascade)
   memberId    Int?
-  member      Member?      @relation(fields: [memberId], references: [id])
   createdById Int?
-  createdBy   User?        @relation(fields: [createdById], references: [id])
   expiresAt   DateTime
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
-  options     PollOption[]
-  votes       PollVote[]
-  likesList   PollLike[]
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  community   Community?    @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  createdBy   User?         @relation(fields: [createdById], references: [id])
+  location    Location      @relation(fields: [locationId], references: [id])
+  member      Member?       @relation(fields: [memberId], references: [id])
   comments    PollComment[]
+  likesList   PollLike[]
+  options     PollOption[]
   reports     PollReport[]
+  votes       PollVote[]
 
   @@index([locationId])
   @@index([communityId])
@@ -313,20 +313,20 @@ model Poll {
 model PollOption {
   id     Int        @id @default(autoincrement())
   pollId Int
-  poll   Poll       @relation(fields: [pollId], references: [id], onDelete: Cascade)
   text   String
+  poll   Poll       @relation(fields: [pollId], references: [id], onDelete: Cascade)
   votes  PollVote[]
 }
 
 model PollVote {
   id        Int        @id @default(autoincrement())
   pollId    Int
-  poll      Poll       @relation(fields: [pollId], references: [id], onDelete: Cascade)
   optionId  Int
-  option    PollOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
   memberId  Int
-  member    Member     @relation(fields: [memberId], references: [id], onDelete: Cascade)
   createdAt DateTime   @default(now())
+  member    Member     @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  option    PollOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  poll      Poll       @relation(fields: [pollId], references: [id], onDelete: Cascade)
 
   @@unique([pollId, memberId])
 }
@@ -337,31 +337,365 @@ model Comment {
   authorName String
   authorRole String?
   postId     Int
-  post       Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
   createdAt  DateTime @default(now())
+  post       Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
 }
 
 model Notification {
-  id          Int       @id @default(autoincrement())
+  id          Int                   @id @default(autoincrement())
   title       String
   message     String
-  type        String // "EVENT", "REQUEST", "ALERT", "BROADCAST", "COMMUNITY", "MEMBER_REQUEST"
-  time        String? // e.g. "2h ago"
+  type        String
+  time        String?
   purpose     String?
   entityType  String?
   entityId    Int?
-  status      String    @default("ACTIVE")
+  status      String                @default("ACTIVE")
   metadata    Json?
   locationId  Int
-  location    Location  @relation(fields: [locationId], references: [id])
   createdById Int?
-  createdBy   User?     @relation(fields: [createdById], references: [id])
-  createdAt   DateTime  @default(now())
+  createdAt   DateTime              @default(now())
   deletedBy   DeletedNotification[]
+  createdBy   User?                 @relation(fields: [createdById], references: [id])
+  location    Location              @relation(fields: [locationId], references: [id])
 
   @@index([locationId])
   @@index([type])
   @@index([entityType, entityId])
+}
+
+model Broadcast {
+  id          Int          @id @default(autoincrement())
+  title       String
+  message     String
+  image       String?
+  scope       LocationType
+  locationId  Int
+  createdById Int
+  isActive    Boolean      @default(true)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  createdBy   User         @relation(fields: [createdById], references: [id])
+  location    Location     @relation(fields: [locationId], references: [id])
+
+  @@index([locationId])
+  @@index([createdById])
+  @@index([scope])
+}
+
+model Community {
+  id                  Int                @id @default(autoincrement())
+  role                UserRole?
+  locationId          Int?
+  name                String             @unique
+  description         String?
+  image               String?
+  allowMemberMessages Boolean            @default(true)
+  isMuted             Boolean            @default(false)
+  mutedUntil          DateTime?
+  pinnedMessageId     Int?
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+  location            Location?          @relation(fields: [locationId], references: [id])
+  members             CommunityMember[]
+  messages            CommunityMessage[]
+  posts               CommunityPost[]
+  polls               Poll[]
+}
+
+model CommunityPost {
+  id          Int                   @id @default(autoincrement())
+  title       String
+  content     String
+  category    String?               @default("Information")
+  images      String[]
+  communityId Int
+  createdById Int?
+  likes       Int                   @default(0)
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+  status      String                @default("ACTIVE")
+  memberId    Int?
+  comments    CommunityComment[]
+  community   Community             @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  createdBy   User?                 @relation(fields: [createdById], references: [id])
+  member      Member?               @relation(fields: [memberId], references: [id])
+  likesList   CommunityPostLike[]
+  reports     CommunityPostReport[]
+}
+
+model CommunityMember {
+  id          Int       @id @default(autoincrement())
+  communityId Int
+  memberId    Int
+  isMuted     Boolean   @default(false)
+  mutedUntil  DateTime?
+  unreadCount Int       @default(0)
+  lastReadAt  DateTime?
+  createdAt   DateTime  @default(now())
+  community   Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  member      Member    @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@unique([communityId, memberId])
+}
+
+model CommunityComment {
+  id         Int           @id @default(autoincrement())
+  content    String
+  authorName String
+  authorRole String?
+  postId     Int
+  createdAt  DateTime      @default(now())
+  post       CommunityPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+}
+
+model CommunityMessage {
+  id               Int                        @id @default(autoincrement())
+  communityId      Int
+  senderId         Int
+  senderType       String
+  message          String
+  messageType      String                     @default("TEXT")
+  mediaUrl         String?
+  mediaType        String?
+  fileName         String?
+  metadata         Json?
+  status           String                     @default("SENT")
+  replyToMessageId Int?
+  editedAt         DateTime?
+  isDeleted        Boolean                    @default(false)
+  deletedAt        DateTime?
+  createdAt        DateTime                   @default(now())
+  community        Community                  @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  replyTo          CommunityMessage?          @relation("CommunityMessageReplies", fields: [replyToMessageId], references: [id])
+  replies          CommunityMessage[]         @relation("CommunityMessageReplies")
+  reactions        CommunityMessageReaction[]
+  reads            CommunityMessageRead[]
+
+  @@index([communityId, createdAt])
+  @@index([senderId, senderType])
+}
+
+model CommunityMessageReaction {
+  id          Int              @id @default(autoincrement())
+  messageId   Int
+  reactorId   Int
+  reactorType String
+  emoji       String
+  createdAt   DateTime         @default(now())
+  message     CommunityMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, reactorId, reactorType])
+  @@index([messageId])
+}
+
+model CommunityMessageRead {
+  id         Int              @id @default(autoincrement())
+  messageId  Int
+  readerId   Int
+  readerType String
+  readAt     DateTime         @default(now())
+  message    CommunityMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, readerId, readerType])
+  @@index([messageId])
+}
+
+model ContributionPlan {
+  id               Int                    @id @default(autoincrement())
+  name             String
+  description      String?
+  monthlyAmount    Float
+  startDate        DateTime
+  isActive         Boolean                @default(true)
+  autoRenewEnabled Boolean                @default(true)
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+  enrollments      MemberPlanEnrollment[]
+
+  @@index([isActive])
+}
+
+model MemberPlanEnrollment {
+  id        Int                   @id @default(autoincrement())
+  memberId  Int
+  planId    Int
+  joinedAt  DateTime              @default(now())
+  autoRenew Boolean               @default(true)
+  status    EnrollmentStatus      @default(ACTIVE)
+  updatedAt DateTime              @updatedAt
+  payments  ContributionPayment[]
+  member    Member                @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  plan      ContributionPlan      @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@unique([memberId, planId])
+  @@index([memberId])
+  @@index([planId])
+  @@index([status])
+}
+
+model ContributionPayment {
+  id            Int                   @id @default(autoincrement())
+  enrollmentId  Int?
+  memberId      Int
+  amount        Float
+  month         Int
+  year          Int
+  status        PaymentStatus         @default(PENDING)
+  orderId       String?               @unique
+  transactionId String?               @unique
+  paymentMethod String?
+  paidAt        DateTime?
+  receiptNumber String?               @unique
+  receiptUrl    String?
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+  enrollment    MemberPlanEnrollment? @relation(fields: [enrollmentId], references: [id])
+  member        Member                @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@unique([memberId, month, year])
+  @@index([memberId])
+  @@index([status])
+  @@index([month, year])
+}
+
+model ContributionProfile {
+  id                Int               @id @default(autoincrement())
+  memberId          Int               @unique
+  totalPaidMonths   Int               @default(0)
+  currentStreak     Int               @default(0)
+  totalContribution Float             @default(0)
+  badge             ContributionBadge @default(BRONZE)
+  contributionRank  Int?
+  updatedAt         DateTime          @updatedAt
+  member            Member            @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@index([badge])
+  @@index([totalContribution(sort: Desc)])
+}
+
+model PostLike {
+  id        Int      @id @default(autoincrement())
+  postId    Int
+  memberId  Int
+  createdAt DateTime @default(now())
+  member    Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, memberId])
+}
+
+model CommunityPostLike {
+  id        Int           @id @default(autoincrement())
+  postId    Int
+  memberId  Int
+  createdAt DateTime      @default(now())
+  member    Member        @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  post      CommunityPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, memberId])
+}
+
+model PostReport {
+  id           Int          @id @default(autoincrement())
+  postId       Int
+  reportedById Int
+  reason       String
+  status       ReportStatus @default(PENDING)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  post         Post         @relation(fields: [postId], references: [id], onDelete: Cascade)
+  reportedBy   Member       @relation(fields: [reportedById], references: [id], onDelete: Cascade)
+
+  @@unique([postId, reportedById])
+  @@index([postId])
+  @@index([reportedById])
+}
+
+model CommunityPostReport {
+  id           Int           @id @default(autoincrement())
+  postId       Int
+  reportedById Int
+  reason       String
+  status       ReportStatus  @default(PENDING)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  post         CommunityPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  reportedBy   Member        @relation(fields: [reportedById], references: [id], onDelete: Cascade)
+
+  @@unique([postId, reportedById])
+  @@index([postId])
+  @@index([reportedById])
+}
+
+model UserWarning {
+  id              Int      @id @default(autoincrement())
+  memberId        Int
+  adminId         Int
+  message         String
+  postId          Int?
+  communityPostId Int?
+  pollId          Int?
+  createdAt       DateTime @default(now())
+  admin           User     @relation("AdminWarnings", fields: [adminId], references: [id], onDelete: Cascade)
+  member          Member   @relation("MemberWarnings", fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@index([memberId])
+  @@index([adminId])
+}
+
+model PollLike {
+  id        Int      @id @default(autoincrement())
+  pollId    Int
+  memberId  Int
+  createdAt DateTime @default(now())
+  member    Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  poll      Poll     @relation(fields: [pollId], references: [id], onDelete: Cascade)
+
+  @@unique([pollId, memberId])
+}
+
+model PollComment {
+  id         Int      @id @default(autoincrement())
+  content    String
+  authorName String
+  authorRole String?
+  pollId     Int
+  createdAt  DateTime @default(now())
+  poll       Poll     @relation(fields: [pollId], references: [id], onDelete: Cascade)
+}
+
+model PollReport {
+  id           Int          @id @default(autoincrement())
+  pollId       Int
+  reportedById Int
+  reason       String
+  status       ReportStatus @default(PENDING)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  poll         Poll         @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  reportedBy   Member       @relation(fields: [reportedById], references: [id], onDelete: Cascade)
+
+  @@unique([pollId, reportedById])
+  @@index([pollId])
+  @@index([reportedById])
+}
+
+model DeletedNotification {
+  id             Int          @id @default(autoincrement())
+  notificationId Int
+  userId         Int?
+  memberId       Int?
+  createdAt      DateTime     @default(now())
+  member         Member?      @relation("MemberDeletedNotifications", fields: [memberId], references: [id], onDelete: Cascade)
+  notification   Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  user           User?        @relation("UserDeletedNotifications", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([notificationId, userId])
+  @@unique([notificationId, memberId])
+  @@index([notificationId])
+  @@index([userId])
+  @@index([memberId])
 }
 
 enum LocationType {
@@ -435,216 +769,6 @@ enum MessageStatus {
   FAILED
 }
 
-model Broadcast {
-  id          Int          @id @default(autoincrement())
-  title       String
-  message     String
-  image       String?
-  scope       LocationType // STATE, DISTRICT, TALUK, AREA, STREET — broadcast reach level
-  locationId  Int
-  location    Location     @relation(fields: [locationId], references: [id])
-  createdById Int
-  createdBy   User         @relation(fields: [createdById], references: [id])
-  isActive    Boolean      @default(true)
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
-
-  @@index([locationId])
-  @@index([createdById])
-  @@index([scope])
-}
-
-model Community {
-  id                  Int                @id @default(autoincrement())
-  role                UserRole? // Role the group targets (e.g., DOCTOR)
-  locationId          Int? // Location scope of the group
-  location            Location?          @relation(fields: [locationId], references: [id])
-  name                String             @unique
-  description         String?
-  image               String?
-  allowMemberMessages Boolean            @default(true)
-  isMuted             Boolean            @default(false)
-  mutedUntil          DateTime?
-  pinnedMessageId     Int?
-  posts               CommunityPost[]
-  members             CommunityMember[]
-  messages            CommunityMessage[]
-  polls               Poll[]
-  createdAt           DateTime           @default(now())
-  updatedAt           DateTime           @updatedAt
-}
-
-model CommunityPost {
-  id          Int                @id @default(autoincrement())
-  title       String
-  content     String
-  category    String?            @default("Information")
-  images      String[]
-  communityId Int
-  community   Community          @relation(fields: [communityId], references: [id], onDelete: Cascade)
-  createdById Int?
-  createdBy   User?              @relation(fields: [createdById], references: [id])
-  memberId    Int?
-  member      Member?            @relation(fields: [memberId], references: [id])
-  likes       Int                @default(0)
-  comments    CommunityComment[]
-  likesList   CommunityPostLike[]
-  reports     CommunityPostReport[]
-  createdAt   DateTime           @default(now())
-  updatedAt   DateTime           @updatedAt
-  status      String             @default("ACTIVE")
-}
-
-model CommunityMember {
-  id          Int       @id @default(autoincrement())
-  communityId Int
-  community   Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
-  memberId    Int
-  member      Member    @relation(fields: [memberId], references: [id], onDelete: Cascade)
-  isMuted     Boolean   @default(false)
-  mutedUntil  DateTime?
-  unreadCount Int       @default(0)
-  lastReadAt  DateTime?
-  createdAt   DateTime  @default(now())
-
-  @@unique([communityId, memberId])
-}
-
-model CommunityComment {
-  id         Int           @id @default(autoincrement())
-  content    String
-  authorName String
-  authorRole String?
-  postId     Int
-  post       CommunityPost @relation(fields: [postId], references: [id], onDelete: Cascade)
-  createdAt  DateTime      @default(now())
-}
-
-model CommunityMessage {
-  id               Int                        @id @default(autoincrement())
-  communityId      Int
-  senderId         Int
-  senderType       String
-  message          String
-  messageType      String                     @default("TEXT")
-  mediaUrl         String?
-  mediaType        String?
-  fileName         String?
-  metadata         Json?
-  status           String                     @default("SENT")
-  replyToMessageId Int?
-  editedAt         DateTime?
-  isDeleted        Boolean                    @default(false)
-  deletedAt        DateTime?
-  createdAt        DateTime                   @default(now())
-  community        Community                  @relation(fields: [communityId], references: [id], onDelete: Cascade)
-  replyTo          CommunityMessage?          @relation("CommunityMessageReplies", fields: [replyToMessageId], references: [id])
-  replies          CommunityMessage[]         @relation("CommunityMessageReplies")
-  reactions        CommunityMessageReaction[]
-  reads            CommunityMessageRead[]
-
-  @@index([communityId, createdAt])
-  @@index([senderId, senderType])
-}
-
-model CommunityMessageReaction {
-  id          Int              @id @default(autoincrement())
-  messageId   Int
-  reactorId   Int
-  reactorType String
-  emoji       String
-  createdAt   DateTime         @default(now())
-  message     CommunityMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
-
-  @@unique([messageId, reactorId, reactorType])
-  @@index([messageId])
-}
-
-model CommunityMessageRead {
-  id         Int              @id @default(autoincrement())
-  messageId  Int
-  readerId   Int
-  readerType String
-  readAt     DateTime         @default(now())
-  message    CommunityMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
-
-  @@unique([messageId, readerId, readerType])
-  @@index([messageId])
-}
-
-model ContributionPlan {
-  id               Int                    @id @default(autoincrement())
-  name             String
-  description      String?
-  monthlyAmount    Float
-  startDate        DateTime
-  isActive         Boolean                @default(true)
-  autoRenewEnabled Boolean                @default(true)
-  createdAt        DateTime               @default(now())
-  updatedAt        DateTime               @updatedAt
-  enrollments      MemberPlanEnrollment[]
-
-  @@index([isActive])
-}
-
-model MemberPlanEnrollment {
-  id          Int                  @id @default(autoincrement())
-  memberId    Int
-  member      Member               @relation(fields: [memberId], references: [id], onDelete: Cascade)
-  planId      Int
-  plan        ContributionPlan     @relation(fields: [planId], references: [id], onDelete: Cascade)
-  joinedAt    DateTime             @default(now())
-  autoRenew   Boolean              @default(true)
-  status      EnrollmentStatus     @default(ACTIVE)
-  updatedAt   DateTime             @updatedAt
-  payments    ContributionPayment[]
-
-  @@unique([memberId, planId])
-  @@index([memberId])
-  @@index([planId])
-  @@index([status])
-}
-
-model ContributionPayment {
-  id            Int                  @id @default(autoincrement())
-  enrollmentId  Int?
-  enrollment    MemberPlanEnrollment? @relation(fields: [enrollmentId], references: [id], onDelete: SetNull)
-  memberId      Int
-  member        Member               @relation(fields: [memberId], references: [id], onDelete: Cascade)
-  amount        Float
-  month         Int
-  year          Int
-  status        PaymentStatus        @default(PENDING)
-  orderId       String?              @unique
-  transactionId String?              @unique
-  paymentMethod String?
-  paidAt        DateTime?
-  receiptNumber String?              @unique
-  receiptUrl    String?
-  createdAt     DateTime             @default(now())
-  updatedAt     DateTime             @updatedAt
-
-  @@unique([memberId, month, year])
-  @@index([memberId])
-  @@index([status])
-  @@index([month, year])
-}
-
-model ContributionProfile {
-  id                Int               @id @default(autoincrement())
-  memberId          Int               @unique
-  member            Member            @relation(fields: [memberId], references: [id], onDelete: Cascade)
-  totalPaidMonths   Int               @default(0)
-  currentStreak     Int               @default(0)
-  totalContribution Float             @default(0)
-  badge             ContributionBadge @default(BRONZE)
-  contributionRank  Int?
-  updatedAt         DateTime          @updatedAt
-
-  @@index([badge])
-  @@index([totalContribution(sort: Desc)])
-}
-
 enum EnrollmentStatus {
   ACTIVE
   PAUSED
@@ -670,133 +794,9 @@ enum ReminderNotificationType {
   WHATSAPP
 }
 
-model PostLike {
-  id        Int      @id @default(autoincrement())
-  postId    Int
-  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
-  memberId  Int
-  member    Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
-  createdAt DateTime @default(now())
-
-  @@unique([postId, memberId])
-}
-
-model CommunityPostLike {
-  id        Int           @id @default(autoincrement())
-  postId    Int
-  post      CommunityPost @relation(fields: [postId], references: [id], onDelete: Cascade)
-  memberId  Int
-  member    Member        @relation(fields: [memberId], references: [id], onDelete: Cascade)
-  createdAt DateTime      @default(now())
-
-  @@unique([postId, memberId])
-}
-
 enum ReportStatus {
   PENDING
   IGNORED
   WARNED
   DELETED
-}
-
-model PostReport {
-  id           Int          @id @default(autoincrement())
-  postId       Int
-  post         Post         @relation(fields: [postId], references: [id], onDelete: Cascade)
-  reportedById Int
-  reportedBy   Member       @relation(fields: [reportedById], references: [id], onDelete: Cascade)
-  reason       String
-  status       ReportStatus @default(PENDING)
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
-
-  @@unique([postId, reportedById])
-  @@index([postId])
-  @@index([reportedById])
-}
-
-model CommunityPostReport {
-  id           Int           @id @default(autoincrement())
-  postId       Int
-  post         CommunityPost @relation(fields: [postId], references: [id], onDelete: Cascade)
-  reportedById Int
-  reportedBy   Member        @relation(fields: [reportedById], references: [id], onDelete: Cascade)
-  reason       String
-  status       ReportStatus  @default(PENDING)
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
-
-  @@unique([postId, reportedById])
-  @@index([postId])
-  @@index([reportedById])
-}
-
-model UserWarning {
-  id              Int      @id @default(autoincrement())
-  memberId        Int
-  member          Member   @relation("MemberWarnings", fields: [memberId], references: [id], onDelete: Cascade)
-  adminId         Int
-  admin           User     @relation("AdminWarnings", fields: [adminId], references: [id], onDelete: Cascade)
-  message         String
-  postId          Int?
-  communityPostId Int?
-  pollId          Int?
-  createdAt       DateTime @default(now())
-
-  @@index([memberId])
-  @@index([adminId])
-}
-
-model PollLike {
-  id        Int      @id @default(autoincrement())
-  pollId    Int
-  poll      Poll     @relation(fields: [pollId], references: [id], onDelete: Cascade)
-  memberId  Int
-  member    Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
-  createdAt DateTime @default(now())
-
-  @@unique([pollId, memberId])
-}
-
-model PollComment {
-  id         Int      @id @default(autoincrement())
-  content    String
-  authorName String
-  authorRole String?
-  pollId     Int
-  poll       Poll     @relation(fields: [pollId], references: [id], onDelete: Cascade)
-  createdAt  DateTime @default(now())
-}
-
-model PollReport {
-  id           Int          @id @default(autoincrement())
-  pollId       Int
-  poll         Poll         @relation(fields: [pollId], references: [id], onDelete: Cascade)
-  reportedById Int
-  reportedBy   Member       @relation(fields: [reportedById], references: [id], onDelete: Cascade)
-  reason       String
-  status       ReportStatus @default(PENDING)
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
-
-  @@unique([pollId, reportedById])
-  @@index([pollId])
-  @@index([reportedById])
-}
-
-model DeletedNotification {
-  id             Int          @id @default(autoincrement())
-  notificationId Int
-  notification   Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
-  userId         Int?
-  user           User?        @relation("UserDeletedNotifications", fields: [userId], references: [id], onDelete: Cascade)
-  memberId       Int?
-  member         Member?      @relation("MemberDeletedNotifications", fields: [memberId], references: [id], onDelete: Cascade)
-  createdAt      DateTime     @default(now())
-
-  @@unique([notificationId, userId])
-  @@unique([notificationId, memberId])
-  @@index([notificationId])
-  @@index([userId])
-  @@index([memberId])
 }

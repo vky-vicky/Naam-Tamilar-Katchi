@@ -4240,11 +4240,22 @@ export const resolvers = {
     },
 
     respondToEvent: async (_: any, { eventId, memberId, status }: any, context: any) => {
+      const event = await (prisma as any).event.findUnique({
+        where: { id: eventId }
+      });
+      if (!event) {
+        throw new Error("Event not found");
+      }
+
+      const user = context?.user;
+      if (user && user.type !== 'member' && event.createdById === Number(user.id)) {
+        throw new Error("Event creators/organizers are not allowed to RSVP to their own events.");
+      }
+
       let finalMemberId = Number(memberId);
       
       const isMappedUser = finalMemberId >= 1000000;
       const targetUserId = isMappedUser ? (finalMemberId - 1000000) : null;
-      const user = context?.user;
       
       let phone: string | null = null;
       let userRec = null;
@@ -5434,10 +5445,13 @@ export const resolvers = {
       const expiresAt = new Date();
       expiresAt.setDate(expiresAt.getDate() + durationDays);
       
+      const role = isMember ? 'MEMBER' : (context.user.role || 'MEMBER');
+      const userLocId = context.user.locationId ? Number(context.user.locationId) : null;
+
       let finalLocationId = streetId || areaId || talukId || districtId || locationId;
       if (!finalLocationId) {
-        if (context.user.locationId) {
-          finalLocationId = Number(context.user.locationId);
+        if (userLocId) {
+          finalLocationId = userLocId;
         }
       }
       if (!finalLocationId) {
@@ -5446,6 +5460,37 @@ export const resolvers = {
       }
       if (!finalLocationId) {
         throw new Error(I18nService.translate("location_required", context?.language));
+      }
+
+      const targetLocIdNum = Number(finalLocationId);
+      const targetLoc = await (prisma as any).location.findUnique({
+        where: { id: targetLocIdNum }
+      });
+      if (!targetLoc) {
+        throw new Error(I18nService.translate("target_location_not_found", context?.language));
+      }
+
+      // Enforce role-based location lock constraints for poll creation
+      if (role === 'MEMBER') {
+        if (!userLocId || targetLocIdNum !== userLocId) {
+          throw new Error(I18nService.translate("member_outside_scope" as any, context?.language));
+        }
+      } else if (role === 'ADMIN') {
+        if (!userLocId) {
+          throw new Error(I18nService.translate("admin_no_scope", context?.language));
+        }
+        const targetAncestors = await getAncestorLocationIds(targetLocIdNum);
+        if (!targetAncestors.includes(userLocId)) {
+          throw new Error(I18nService.translate("admin_outside_scope", context?.language));
+        }
+      } else if (role === 'SUB_ADMIN') {
+        if (!userLocId) {
+          throw new Error(I18nService.translate("subadmin_no_scope", context?.language));
+        }
+        const targetAncestors = await getAncestorLocationIds(targetLocIdNum);
+        if (!targetAncestors.includes(userLocId)) {
+          throw new Error(I18nService.translate("subadmin_outside_scope", context?.language));
+        }
       }
       
       const poll = await (prisma as any).poll.create({
@@ -7114,6 +7159,13 @@ export const resolvers = {
       });
       return response ? response.status : null;
     },
+    isCreator: (parent: any, _: any, context: any) => {
+      const user = context?.user;
+      if (!user) return false;
+      const isMember = user.type === 'member' || user.role === 'MEMBER';
+      if (isMember) return false;
+      return parent.createdById === Number(user.id);
+    },
     createdBy: (parent: any) => (prisma as any).user.findUnique({ where: { id: parent.createdById } }),
     location: (parent: any) => (prisma as any).location.findUnique({ where: { id: parent.locationId } }),
   },
@@ -7344,7 +7396,7 @@ export const resolvers = {
   },
 
   Poll: {
-    expiresAt: (parent: any) => toIST(parent.expiresAt),
+    expiresAt: (parent: any) => toIsoString(parent.expiresAt),
     createdAt: (parent: any) => toIsoString(parent.createdAt),
     options: async (parent: any) => {
       if (parent.options) return parent.options;
@@ -7354,13 +7406,14 @@ export const resolvers = {
       return (prisma as any).pollVote.count({ where: { pollId: parent.id } });
     },
     userVoteOptionId: async (parent: any, _: any, context: any) => {
-      if (!context?.user || context.user.role !== 'MEMBER') return null;
-      const memberId = Number(context.user.id);
+      if (!context?.user) return null;
+      const member = await getOrCreateMemberForUser(context.user);
+      if (!member) return null;
       const vote = await (prisma as any).pollVote.findUnique({
         where: {
           pollId_memberId: {
             pollId: parent.id,
-            memberId
+            memberId: member.id
           }
         }
       });

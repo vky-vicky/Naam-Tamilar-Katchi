@@ -158,6 +158,7 @@ export const typeDefs = gql`
     responses: [EventResponse!]!
     stats: EventStats!
     userResponse: String
+    isCreator: Boolean!
   }
 
   type EventStats {

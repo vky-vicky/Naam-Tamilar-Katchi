@@ -65,6 +65,10 @@ const translations = {
     en: 'Unauthorized: Members are not allowed to perform this action.',
     ta: 'அனுமதி இல்லை: உறுப்பினர்கள் இந்தச் செயலைச் செய்ய அனுமதி இல்லை.'
   },
+  member_outside_scope: {
+    en: 'Unauthorized: Members can only create polls for their own location.',
+    ta: 'அனுமதி இல்லை: உறுப்பினர்கள் தங்களின் சொந்த இடத்திற்கு மட்டுமே வாக்கெடுப்பை உருவாக்க முடியும்.'
+  },
   event_not_found: {
     en: 'Event not found',
     ta: 'நிகழ்வு கண்டறியப்படவில்லை'
