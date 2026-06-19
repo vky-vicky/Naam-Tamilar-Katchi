@@ -458,7 +458,11 @@ async function getBroadcastListForContext({ locationId, scope, broadcastId, isAc
   }
 
   if (scope) where.scope = scope;
-  if (isActive !== undefined && isActive !== null) where.isActive = Boolean(isActive);
+  if (role === 'MEMBER') {
+    where.isActive = true;
+  } else if (isActive !== undefined && isActive !== null) {
+    where.isActive = Boolean(isActive);
+  }
 
   const broadcasts = await (prisma as any).broadcast.findMany({
     where,
@@ -2494,6 +2498,23 @@ export const resolvers = {
         where.locationId = { in: targetLocationIds };
       }
 
+      // Get user's account creation time to filter out old notifications
+      let userCreatedAt = new Date(0);
+      if (context.user.type === 'admin') {
+        const dbUser = await (prisma as any).user.findUnique({
+          where: { id: Number(context.user.id) },
+          select: { createdAt: true }
+        });
+        if (dbUser) userCreatedAt = dbUser.createdAt;
+      } else if (context.user.type === 'member') {
+        const dbMember = await (prisma as any).member.findUnique({
+          where: { id: Number(context.user.id) },
+          select: { createdAt: true }
+        });
+        if (dbMember) userCreatedAt = dbMember.createdAt;
+      }
+      where.createdAt = { gte: userCreatedAt };
+
       // Get all deleted notification IDs for this user
       const deletedNotifications = await (prisma as any).deletedNotification.findMany({
         where: context.user.type === 'admin'
@@ -2529,6 +2550,26 @@ export const resolvers = {
           : { notificationId: Number(id), memberId: Number(context.user.id) }
       });
       if (isDeleted) return null;
+
+      // Check if the notification is older than the user's account creation time
+      let userCreatedAt = new Date(0);
+      if (context.user.type === 'admin') {
+        const dbUser = await (prisma as any).user.findUnique({
+          where: { id: Number(context.user.id) },
+          select: { createdAt: true }
+        });
+        if (dbUser) userCreatedAt = dbUser.createdAt;
+      } else if (context.user.type === 'member') {
+        const dbMember = await (prisma as any).member.findUnique({
+          where: { id: Number(context.user.id) },
+          select: { createdAt: true }
+        });
+        if (dbMember) userCreatedAt = dbMember.createdAt;
+      }
+
+      if (notification.createdAt < userCreatedAt) {
+        return null;
+      }
 
       const role = context.user.role;
       const userLocId = context.user.locationId;
@@ -2634,7 +2675,7 @@ export const resolvers = {
       };
     },
 
-    getEventList: async (_: any, { locationId, status, eventId }: any) => {
+    getEventList: async (_: any, { locationId, status, eventId }: any, context: any) => {
       const where: any = {};
       if (eventId) {
         where.id = eventId;
@@ -2645,25 +2686,44 @@ export const resolvers = {
           const allLocationIds = [...ancestorIds, locationId, ...childIds];
           where.locationId = { in: allLocationIds };
         }
-        if (status) {
-          const now = new Date();
-          const oneDayFromNow = new Date(Date.now() + 24 * 60 * 60 * 1000);
-          
+
+        const userRole = context?.user?.role;
+        const now = new Date();
+
+        if (userRole === 'MEMBER') {
           if (status === 'COMPLETED' || status === 'EXPIRED') {
-            where.OR = [
-              { status: 'COMPLETED' },
-              { status: 'EXPIRED' },
-              { date: { lt: now } }
-            ];
-            where.status = { notIn: ['CANCELLED', 'INACTIVE'] };
-          } else if (status === 'ACTIVE') {
+            return [];
+          }
+          const targetStatus = status || 'ACTIVE';
+          if (targetStatus === 'ACTIVE') {
             where.status = 'ACTIVE';
-            where.date = { gte: now }; // active future events
-          } else if (status === 'UPCOMING') {
+            where.date = { gte: now };
+          } else if (targetStatus === 'UPCOMING') {
             where.status = 'ACTIVE';
-            where.date = { gt: oneDayFromNow }; // upcoming events starting after 24 hours
+            const oneDayFromNow = new Date(Date.now() + 24 * 60 * 60 * 1000);
+            where.date = { gt: oneDayFromNow };
           } else {
-            where.status = status;
+            return [];
+          }
+        } else {
+          if (status) {
+            const oneDayFromNow = new Date(Date.now() + 24 * 60 * 60 * 1000);
+            if (status === 'COMPLETED' || status === 'EXPIRED') {
+              where.OR = [
+                { status: 'COMPLETED' },
+                { status: 'EXPIRED' },
+                { date: { lt: now } }
+              ];
+              where.status = { notIn: ['CANCELLED', 'INACTIVE'] };
+            } else if (status === 'ACTIVE') {
+              where.status = 'ACTIVE';
+              where.date = { gte: now };
+            } else if (status === 'UPCOMING') {
+              where.status = 'ACTIVE';
+              where.date = { gt: oneDayFromNow };
+            } else {
+              where.status = status;
+            }
           }
         }
       }
@@ -2686,6 +2746,9 @@ export const resolvers = {
 
       const userRole = context?.user?.role;
       if (status) {
+        if (userRole === 'MEMBER' && (status === 'COMPLETED' || status === 'REJECTED')) {
+          return [];
+        }
         where.status = status;
       } else {
         // Default visibility filters based on role
@@ -2696,8 +2759,8 @@ export const resolvers = {
         } else if (userRole === 'SUB_ADMIN') {
           where.status = { in: ['PENDING_SUB_ADMIN', 'APPROVED_SUB_ADMIN', 'PENDING_ADMIN', 'APPROVED_ADMIN', 'PENDING_SUPER_ADMIN', 'APPROVED_STATE', 'COMPLETED', 'REJECTED'] };
         } else {
-          // Members or unauthenticated users only see approved and live requests
-          where.status = { in: ['APPROVED_SUB_ADMIN', 'APPROVED_ADMIN', 'APPROVED_STATE', 'COMPLETED'] };
+          // Members or unauthenticated users only see approved and live requests (excluding COMPLETED)
+          where.status = { in: ['APPROVED_SUB_ADMIN', 'APPROVED_ADMIN', 'APPROVED_STATE'] };
         }
       }
       
