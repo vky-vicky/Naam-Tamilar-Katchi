@@ -297,6 +297,7 @@ export const typeDefs = gql`
     authorName: String!
     authorRole: String!
     createdAt: String!
+    createdBy: User
   }
 
   type CommunityPost {
@@ -421,6 +422,7 @@ export const typeDefs = gql`
     hasWarning: Boolean!
     reports: [PostReport!]!
     isLiked: Boolean!
+    createdBy: User
   }
 
   type PollOption {

@@ -7299,6 +7299,41 @@ export const resolvers = {
         }
       });
       return count > 0;
+    },
+    createdBy: async (parent: any) => {
+      if (parent.createdById) {
+        if (parent.createdByType === 'member') {
+          const member = await (prisma as any).member.findUnique({
+            where: { id: parent.createdById }
+          });
+          if (member) {
+            return {
+              id: member.id,
+              name: member.name,
+              surname: member.surname || '',
+              phone: member.phone,
+              role: 'MEMBER',
+              image: member.image || null
+            };
+          }
+        } else {
+          const user = await (prisma as any).user.findUnique({
+            where: { id: parent.createdById }
+          });
+          if (user) {
+            return user;
+          }
+        }
+      }
+
+      return {
+        id: parent.createdById || parent.id,
+        name: parent.authorName || 'Member',
+        surname: '',
+        phone: '',
+        role: parent.authorRole || 'MEMBER',
+        image: null
+      };
     }
   },
 
@@ -7433,7 +7468,17 @@ export const resolvers = {
   },
 
   Comment: {
-    createdAt: (parent: any) => toIsoString(parent.createdAt)
+    createdAt: (parent: any) => toIsoString(parent.createdAt),
+    createdBy: (parent: any) => {
+      return {
+        id: parent.id,
+        name: parent.authorName || 'Member',
+        surname: '',
+        phone: '',
+        role: parent.authorRole || 'MEMBER',
+        image: null
+      };
+    }
   },
 
   CommunityPost: {
