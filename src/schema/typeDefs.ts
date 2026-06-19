@@ -924,6 +924,7 @@ export const typeDefs = gql`
     createdAt: String!
     member: RecentActivityMember
     location: RecentActivityLocation
+    status: String
   }
 
   type RecentActivityMember {

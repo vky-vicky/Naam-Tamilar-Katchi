@@ -26,8 +26,8 @@ const translations = {
     ta: 'துணை நிர்வாகி (Sub Admin) பொறுப்பிற்கு பகுதி அல்லது தெருவைத் தேர்ந்தெடுப்பது கட்டாயமாகும்.'
   },
   subadmin_level_error: {
-    en: 'Sub Admin role can only be assigned at Area or Street level.',
-    ta: 'துணை நிர்வாகி (Sub Admin) பொறுப்பை பகுதி அல்லது தெரு அளவிலான இடத்திற்கு மட்டுமே ஒதுக்க முடியும்.'
+    en: 'Sub Admin role can only be assigned at District, Taluk, or Area level.',
+    ta: 'துணை நிர்வாகி (Sub Admin) பொறுப்பை மாவட்டம், தாலுகா அல்லது பகுதி அளவிலான இடத்திற்கு மட்டுமே ஒதுக்க முடியும்.'
   },
   user_not_found: {
     en: 'User not found',
@@ -102,8 +102,8 @@ const translations = {
     ta: 'இடம் தேவைப்படுகிறது. தயவுசெய்து ஒரு இடத்தை (தெரு, பகுதி, தாலுகா, மாவட்டம், அல்லது இடத்தின் குறியீடு) குறிப்பிடவும்.'
   },
   phone_already_registered: {
-    en: 'Mobile number already exists.',
-    ta: 'கைபேசி எண் ஏற்கனவே பயன்படுத்தப்பட்டுள்ளது.'
+    en: 'This mobile number is already registered.',
+    ta: 'இந்த கைபேசி எண் ஏற்கனவே பதிவு செய்யப்பட்டுள்ளது.'
   },
   invalid_referenced_data: {
     en: 'Invalid referenced data (e.g. location or profession does not exist).',
@@ -124,6 +124,18 @@ const translations = {
   invalid_surname_format: {
     en: 'Surname must contain only English and Tamil letters with spaces.',
     ta: 'குடும்ப பெயர் (இனிஷியல்/இண்டிகேஷன்) ஆங்கிலம் மற்றும் தமிழ் எழுத்துக்கள் மற்றும் இடைவெளிகளை மட்டுமே கொண்டிருக்க வேண்டும்.'
+  },
+  invalid_phone_format: {
+    en: 'Please enter a valid 10-digit mobile number.',
+    ta: 'தயவுசெய்து சரியான 10 இலக்க கைபேசி எண்ணை உள்ளிடவும்.'
+  },
+  member_level_error: {
+    en: 'Member role can only be assigned at District, Taluk, Area, or Street level.',
+    ta: 'உறுப்பினர் (Member) பொறுப்பை மாவட்டம், தாலுகா, பகுதி அல்லது தெரு அளவிலான இடத்திற்கு மட்டுமே ஒதுக்க முடியும்.'
+  },
+  new_location_required_for_role_change: {
+    en: 'New location selection is required for a role change.',
+    ta: 'பொறுப்பு மாற்றத்திற்கு புதிய இடத்தை தேர்ந்தெடுப்பது கட்டாயமாகும்.'
   }
 };
 

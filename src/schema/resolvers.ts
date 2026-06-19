@@ -11,11 +11,28 @@ function getReadableError(err: any, lang: string = 'en') {
   const target = Array.isArray(err?.meta?.target) ? err.meta.target.join(', ') : '';
   const message = err?.message ?? '';
 
-  if (prismaCode === 'P2002' || (message.includes('Unique constraint failed') && message.includes('phone'))) {
+  if (
+    prismaCode === 'P2002' || 
+    (message.includes('Unique constraint failed') && message.includes('phone')) ||
+    message === 'phone_already_registered' ||
+    message === 'USER_PHONE_ALREADY_EXISTS' ||
+    message.includes('Mobile number already exists') ||
+    message.includes('கைபேசி எண் ஏற்கனவே பயன்படுத்தப்பட்டுள்ளது') ||
+    message.includes('is already registered') ||
+    message.includes('ஏற்கனவே பதிவு செய்யப்பட்டுள்ளது')
+  ) {
     return {
-      code: 'USER_PHONE_ALREADY_EXISTS',
+      code: 'REQUEST_FAILED',
       message: I18nService.translate('phone_already_registered', lang),
       detail: target ? `Duplicate unique field: ${target}` : 'Duplicate phone number'
+    };
+  }
+
+  if (message === 'invalid_phone_format') {
+    return {
+      code: 'REQUEST_FAILED',
+      message: I18nService.translate('invalid_phone_format', lang),
+      detail: 'Phone number must be exactly 10 digits'
     };
   }
 
@@ -557,19 +574,15 @@ async function validateRoleLocationLevel(role: string, locationId: number, lang:
     }
   } else if (normRole === 'ADMIN') {
     if (type !== 'DISTRICT' && type !== 'TALUK') {
-      if (type === 'STATE') {
-        throw new Error(I18nService.translate("district_or_taluk_selection_mandatory" as any, lang));
-      } else {
-        throw new Error(I18nService.translate("admin_level_error" as any, lang));
-      }
+      throw new Error(I18nService.translate("admin_level_error" as any, lang));
     }
   } else if (normRole === 'SUB_ADMIN') {
-    if (type !== 'AREA' && type !== 'STREET') {
-      if (type === 'STATE' || type === 'DISTRICT' || type === 'TALUK') {
-        throw new Error(I18nService.translate("area_or_street_selection_mandatory" as any, lang));
-      } else {
-        throw new Error(I18nService.translate("subadmin_level_error" as any, lang));
-      }
+    if (type !== 'DISTRICT' && type !== 'TALUK' && type !== 'AREA') {
+      throw new Error(I18nService.translate("subadmin_level_error" as any, lang));
+    }
+  } else if (normRole === 'MEMBER') {
+    if (type !== 'DISTRICT' && type !== 'TALUK' && type !== 'AREA' && type !== 'STREET') {
+      throw new Error(I18nService.translate("member_level_error" as any, lang));
     }
   }
 }
@@ -643,6 +656,24 @@ async function writeUpdateAuditLogs(
           details: roleDetails
         }
       });
+
+      // Emit Socket.io events to notify clients to refresh
+      const io = (global as any).io;
+      if (io) {
+        io.emit('dashboardRefresh');
+        io.emit('usersModuleRefresh');
+        io.emit('communityRefresh');
+        io.emit('broadcastRefresh');
+        io.emit('eventsRefresh');
+        io.emit('emergencyRefresh');
+        io.emit('notificationsRefresh');
+        io.emit('activityLogsRefresh');
+        io.emit('userRoleChanged', {
+          userId: targetId,
+          oldRole: currentRole,
+          newRole: targetRole
+        });
+      }
     }
 
     // 4. Audit for Profile Update
@@ -1301,11 +1332,21 @@ export const resolvers = {
       const combined = [...members, ...users.map(userToMemberShape)];
       const uniqueMembers = Array.from(new Map(combined.map(item => [item.phone, item])).values());
 
+      let allowedLocationIds: number[] = [];
+      if (context?.user?.locationId && (context?.user?.role === 'ADMIN' || context?.user?.role === 'SUB_ADMIN')) {
+        const childIds = await getChildLocationIds(Number(context.user.locationId));
+        allowedLocationIds = [Number(context.user.locationId), ...childIds];
+      }
+
       return uniqueMembers
         .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
         .slice(offset, offset + limit)
         .map((m: any) => {
-          const canSeePhone = context?.user?.role === 'SUPER_ADMIN' || (context?.user?.role === 'ADMIN' && context?.user?.locationId === m.locationId);
+          const isSelf = context?.user?.phone === m.phone;
+          const canSeePhone = 
+            context?.user?.role === 'SUPER_ADMIN' || 
+            isSelf ||
+            ((context?.user?.role === 'ADMIN' || context?.user?.role === 'SUB_ADMIN') && allowedLocationIds.includes(m.locationId));
           return {
             ...m,
             role: m.role ? m.role.toUpperCase() : m.role,
@@ -1777,10 +1818,6 @@ export const resolvers = {
         throw new Error(I18nService.translate("unauthorized_login", context?.language));
       }
 
-      if (user.role === 'MEMBER') {
-        return [];
-      }
-
       let targetLocationId: number | null = null;
 
       if (user.role === 'SUPER_ADMIN') {
@@ -1788,19 +1825,19 @@ export const resolvers = {
           targetLocationId = locationId;
         }
       } else {
-        // ADMIN or SUB_ADMIN
+        // ADMIN, SUB_ADMIN, or MEMBER - scope strictly to their assigned location scope
         if (!user.locationId) {
-          return []; // Admin with no assigned location sees nothing
+          return []; // Assigned location required
         }
 
-        const adminLocationIds = [user.locationId, ...(await getChildLocationIds(user.locationId))];
+        const allowedLocationIds = [user.locationId, ...(await getChildLocationIds(user.locationId))];
 
         if (locationId) {
-          // If a filter is requested, verify it is within the admin's scope
-          if (adminLocationIds.includes(locationId)) {
+          // If a filter is requested, verify it is within the user's scope
+          if (allowedLocationIds.includes(locationId)) {
             targetLocationId = locationId;
           } else {
-            // Trying to filter outside scope, restrict to their assigned location
+            // Outside scope, fall back to their assigned location scope
             targetLocationId = user.locationId;
           }
         } else {
@@ -1893,7 +1930,7 @@ export const resolvers = {
           }).then((events: any[]) => events.map((e: any) => ({
             id: e.id,
             activityType: 'EVENT',
-            title: e.title,
+            title: e.status === 'CANCELLED' ? 'Event Cancelled' : (e.status === 'COMPLETED' ? 'Event Completed' : 'Event Created'),
             description: e.description,
             createdAt: toIST(e.createdAt),
             member: e.createdBy ? {
@@ -1905,7 +1942,8 @@ export const resolvers = {
             location: e.location ? {
               id: e.location.id,
               name: e.location.name
-            } : null
+            } : null,
+            status: e.status === 'CANCELLED' ? 'CANCELLED' : (e.status === 'COMPLETED' ? 'COMPLETED' : 'CREATED')
           })))
         );
       }
@@ -1917,28 +1955,57 @@ export const resolvers = {
             take: takeLimit,
             orderBy: { createdAt: 'desc' },
             include: { member: true, location: true, createdBy: true }
-          }).then((requests: any[]) => requests.map((r: any) => ({
-            id: r.id,
-            activityType: 'EMERGENCY',
-            title: r.title,
-            description: r.description,
-            createdAt: toIST(r.createdAt),
-            member: r.member ? {
-              id: r.member.id,
-              name: r.member.name,
-              phone: r.member.phone,
-              role: r.member.role
-            } : (r.createdBy ? {
-              id: r.createdBy.id,
-              name: r.createdBy.name,
-              phone: r.createdBy.phone,
-              role: r.createdBy.role
-            } : null),
-            location: r.location ? {
-              id: r.location.id,
-              name: r.location.name
-            } : null
-          })))
+          }).then((requests: any[]) => requests.map((r: any) => {
+            const isPending = r.status === 'PENDING';
+            const isApproved = ['APPROVED_SUB_ADMIN', 'APPROVED_ADMIN', 'APPROVED_STATE'].includes(r.status);
+            const isRejected = r.status === 'REJECTED';
+            const isForwarded = ['PENDING_ADMIN', 'PENDING_SUPER_ADMIN', 'PENDING_SUB_ADMIN'].includes(r.status);
+            const isCompleted = r.status === 'COMPLETED';
+
+            let title = 'Emergency Request';
+            let status = 'CREATED';
+
+            if (isPending) {
+              title = 'Emergency Created';
+              status = 'CREATED';
+            } else if (isApproved) {
+              title = 'Emergency Approved';
+              status = 'APPROVED';
+            } else if (isRejected) {
+              title = 'Emergency Rejected';
+              status = 'REJECTED';
+            } else if (isForwarded) {
+              title = 'Emergency Forwarded';
+              status = 'FORWARDED';
+            } else if (isCompleted) {
+              title = 'Emergency Completed';
+              status = 'COMPLETED';
+            }
+
+            return {
+              id: r.id,
+              activityType: 'EMERGENCY',
+              title,
+              description: r.description,
+              createdAt: toIST(r.createdAt),
+              member: r.member ? {
+                id: r.member.id,
+                name: r.member.name,
+                phone: r.member.phone,
+                role: r.member.role
+              } : (r.createdBy ? {
+                id: r.createdBy.id,
+                name: r.createdBy.name,
+                phone: r.createdBy.phone,
+                role: r.createdBy.role
+              } : null),
+              location: r.location ? {
+                id: r.location.id,
+                name: r.location.name
+              } : null,
+              status
+            };
+          }))
         );
       }
 
@@ -1962,7 +2029,7 @@ export const resolvers = {
             (prisma as any).member.findMany({
               where: {
                 ...filter,
-                approvalStatus: 'APPROVED',
+                approvalStatus: { in: ['APPROVED', 'REJECTED'] },
                 ...memberApprovalSearch,
                 ...dateFilter
               },
@@ -1973,7 +2040,7 @@ export const resolvers = {
             (prisma as any).user.findMany({
               where: {
                 ...filter,
-                approvalStatus: 'APPROVED',
+                approvalStatus: { in: ['APPROVED', 'REJECTED'] },
                 role: 'MEMBER',
                 ...userApprovalSearch,
                 ...dateFilter
@@ -1986,11 +2053,14 @@ export const resolvers = {
             const memberActivities = members.map((m: any) => {
               const approvedByName = m.approvedBy ? formatUserDesignation(m.approvedBy) : (m.createdBy ? formatUserDesignation(m.createdBy) : 'Admin');
               const actionText = m.approvedById ? 'approved' : 'added';
+              const isRejected = m.approvalStatus === 'REJECTED';
               return {
                 id: m.id,
                 activityType: 'MEMBER',
-                title: m.approvedById ? 'Member Approved' : 'Member Added',
-                description: `Member request ${actionText} for ${m.name} ${m.surname || ''} by ${approvedByName}`,
+                title: isRejected ? 'Member Rejected' : (m.approvedById ? 'Member Approved' : 'Member Added'),
+                description: isRejected
+                  ? `Member request rejected for ${m.name} ${m.surname || ''} by Admin`
+                  : `Member request ${actionText} for ${m.name} ${m.surname || ''} by ${approvedByName}`,
                 createdAt: toIST(m.createdAt),
                 member: {
                   id: m.id,
@@ -2001,17 +2071,21 @@ export const resolvers = {
                 location: m.location ? {
                   id: m.location.id,
                   name: m.location.name
-                } : null
+                } : null,
+                status: isRejected ? 'REJECTED' : 'APPROVED'
               };
             });
 
             const userActivities = users.map((u: any) => {
               const addedByName = formatUserDesignation(u.parent, 'Admin');
+              const isRejected = u.approvalStatus === 'REJECTED';
               return {
                 id: 1000000 + u.id,
                 activityType: 'MEMBER',
-                title: 'Member Added',
-                description: `Member ${u.name} ${u.surname || ''} added by ${addedByName}`,
+                title: isRejected ? 'Member Rejected' : 'Member Added',
+                description: isRejected
+                  ? `Member request rejected for ${u.name} ${u.surname || ''} by Admin`
+                  : `Member ${u.name} ${u.surname || ''} added by ${addedByName}`,
                 createdAt: toIST(u.createdAt),
                 member: {
                   id: 1000000 + u.id,
@@ -2022,7 +2096,8 @@ export const resolvers = {
                 location: u.location ? {
                   id: u.location.id,
                   name: u.location.name
-                } : null
+                } : null,
+                status: isRejected ? 'REJECTED' : 'APPROVED'
               };
             });
 
@@ -2078,7 +2153,8 @@ export const resolvers = {
               location: u.location ? {
                 id: u.location.id,
                 name: u.location.name
-              } : null
+              } : null,
+              status: 'APPROVED'
             };
           }))
         );
@@ -2126,7 +2202,8 @@ export const resolvers = {
               location: u.location ? {
                 id: u.location.id,
                 name: u.location.name
-              } : null
+              } : null,
+              status: 'APPROVED'
             };
           }))
         );
@@ -2154,7 +2231,8 @@ export const resolvers = {
             location: b.location ? {
               id: b.location.id,
               name: b.location.name
-            } : null
+            } : null,
+            status: 'CREATED'
           })))
         );
       }
@@ -2171,10 +2249,16 @@ export const resolvers = {
 
         const andFilters: any[] = [
           {
-            OR: [
-              { action: { contains: 'role', mode: 'insensitive' } },
-              { action: { contains: 'profile', mode: 'insensitive' } }
-            ]
+            action: {
+              in: [
+                'role_change',
+                'profile_update',
+                'member_approve',
+                'member_reject',
+                'post_warned',
+                'post_deleted'
+              ]
+            }
           }
         ];
 
@@ -2206,13 +2290,31 @@ export const resolvers = {
             orderBy: { createdAt: 'desc' },
             include: { user: { include: { location: true } } }
           }).then((logs: any[]) => logs.map((l: any) => {
-            const isProfile = l.action.toLowerCase().includes('profile');
-            const isApprove = l.action.toLowerCase().includes('approve');
-            const isReject = l.action.toLowerCase().includes('reject');
+            const action = l.action;
             let title = 'Role Changed';
-            if (isProfile) title = 'Profile Updated';
-            else if (isApprove) title = 'Request Approved';
-            else if (isReject) title = 'Request Rejected';
+            let status = 'APPROVED';
+
+            if (action === 'profile_update') {
+              title = 'Profile Updated';
+              status = 'APPROVED';
+            } else if (action === 'member_approve') {
+              title = 'Member Approved';
+              status = 'APPROVED';
+            } else if (action === 'member_reject') {
+              title = 'Member Rejected';
+              status = 'REJECTED';
+            } else if (action === 'post_warned') {
+              title = 'Warning Sent';
+              status = 'WARNING';
+            } else if (action === 'post_deleted') {
+              title = 'Post Removed';
+              status = 'REJECTED';
+            } else if (action === 'role_change') {
+              title = 'Role Changed';
+              status = 'APPROVED';
+            }
+
+            const isProfile = action === 'profile_update';
 
             return {
               id: l.id,
@@ -2229,7 +2331,8 @@ export const resolvers = {
               location: l.user?.location ? {
                 id: l.user.location.id,
                 name: l.user.location.name
-              } : null
+              } : null,
+              status
             };
           }))
         );
@@ -2509,7 +2612,9 @@ export const resolvers = {
         }
       } else if (role === 'ADMIN' || role === 'SUB_ADMIN') {
         if (!userLocId) return [];
-        const adminLocationIds = [userLocId, ...(await getChildLocationIds(userLocId))];
+        const childIds = await getChildLocationIds(userLocId);
+        const ancestorIds = await getAncestorLocationIds(userLocId);
+        const adminLocationIds = Array.from(new Set([userLocId, ...childIds, ...ancestorIds]));
 
         let targetLocationIds = adminLocationIds;
         if (locationId) {
@@ -2532,23 +2637,6 @@ export const resolvers = {
         }
         where.locationId = { in: targetLocationIds };
       }
-
-      // Get user's account creation time to filter out old notifications
-      let userCreatedAt = new Date(0);
-      if (context.user.type === 'admin') {
-        const dbUser = await (prisma as any).user.findUnique({
-          where: { id: Number(context.user.id) },
-          select: { createdAt: true }
-        });
-        if (dbUser) userCreatedAt = dbUser.createdAt;
-      } else if (context.user.type === 'member') {
-        const dbMember = await (prisma as any).member.findUnique({
-          where: { id: Number(context.user.id) },
-          select: { createdAt: true }
-        });
-        if (dbMember) userCreatedAt = dbMember.createdAt;
-      }
-      where.createdAt = { gte: userCreatedAt };
 
       // Get all deleted notification IDs for this user
       const deletedNotifications = await (prisma as any).deletedNotification.findMany({
@@ -2586,31 +2674,13 @@ export const resolvers = {
       });
       if (isDeleted) return null;
 
-      // Check if the notification is older than the user's account creation time
-      let userCreatedAt = new Date(0);
-      if (context.user.type === 'admin') {
-        const dbUser = await (prisma as any).user.findUnique({
-          where: { id: Number(context.user.id) },
-          select: { createdAt: true }
-        });
-        if (dbUser) userCreatedAt = dbUser.createdAt;
-      } else if (context.user.type === 'member') {
-        const dbMember = await (prisma as any).member.findUnique({
-          where: { id: Number(context.user.id) },
-          select: { createdAt: true }
-        });
-        if (dbMember) userCreatedAt = dbMember.createdAt;
-      }
-
-      if (notification.createdAt < userCreatedAt) {
-        return null;
-      }
-
       const role = context.user.role;
       const userLocId = context.user.locationId;
       if (role === 'ADMIN' || role === 'SUB_ADMIN') {
         if (!userLocId) throw new Error('Unauthorized notification scope');
-        const allowedIds = [userLocId, ...(await getChildLocationIds(userLocId))];
+        const childIds = await getChildLocationIds(userLocId);
+        const ancestorIds = await getAncestorLocationIds(userLocId);
+        const allowedIds = Array.from(new Set([userLocId, ...childIds, ...ancestorIds]));
         if (!allowedIds.includes(notification.locationId)) throw new Error('Unauthorized notification scope');
       } else if (role === 'MEMBER') {
         if (!userLocId) throw new Error('Unauthorized notification scope');
@@ -3214,6 +3284,9 @@ export const resolvers = {
       if (rest.surname && rest.surname.trim() !== '' && !NAME_REGEX.test(rest.surname)) {
         throw new Error("invalid_surname_format");
       }
+      if (rest.phone && !/^\d{10}$/.test(rest.phone)) {
+        throw new Error("invalid_phone_format");
+      }
       const normalizedBloodGroup = normalizeBloodGroup(rest.bloodGroup);
       if (!normalizedBloodGroup) {
         throw new Error("please_select_blood_group");
@@ -3227,7 +3300,7 @@ export const resolvers = {
         const duplicateUser = await (prisma as any).user.findFirst({ where: { phone: rest.phone } });
         const duplicateMember = await (prisma as any).member.findFirst({ where: { phone: rest.phone } });
         if (duplicateUser || duplicateMember) {
-          throw new Error(I18nService.translate("phone_already_registered", context?.language));
+          throw new Error("phone_already_registered");
         }
       }
 
@@ -3263,19 +3336,39 @@ export const resolvers = {
       }
 
       if (context?.user) {
-        const requesterRole = context.user.role;
-        if (requesterRole === 'ADMIN' || requesterRole === 'SUB_ADMIN') {
-          if (rest.role === 'SUPER_ADMIN') {
-            throw new Error("Unauthorized: Non-Super Admin cannot create Super Admin");
+        const updaterRole = context.user.role;
+        const updaterLocId = context.user.locationId;
+        const targetRole = rest.role ? rest.role.toUpperCase().trim() : 'MEMBER';
+
+        if (updaterRole === 'MEMBER') {
+          throw new Error("Unauthorized: Member has no user management permission.");
+        }
+
+        if (updaterRole === 'SUB_ADMIN') {
+          if (targetRole !== 'MEMBER') {
+            throw new Error("Unauthorized: Sub Admin can only create Members.");
           }
           if (finalLocationId) {
             await validateLocationTargeting(
               Number(context.user.id),
-              requesterRole,
-              context.user.locationId,
+              updaterRole,
+              updaterLocId,
               Number(finalLocationId),
               context?.language
             );
+          }
+        }
+
+        if (updaterRole === 'ADMIN') {
+          if (targetRole !== 'MEMBER' && targetRole !== 'SUB_ADMIN') {
+            throw new Error("Unauthorized: Admin can only create Members or Sub Admins.");
+          }
+          if (finalLocationId) {
+            const updaterDistrict = (await getLocationFields(updaterLocId)).district;
+            const targetDistrict = (await getLocationFields(finalLocationId)).district;
+            if (!updaterDistrict || updaterDistrict !== targetDistrict) {
+              throw new Error("Unauthorized: Target location is outside your assigned district scope.");
+            }
           }
         }
       }
@@ -3334,6 +3427,9 @@ export const resolvers = {
       if (rest.surname && rest.surname.trim() !== '' && !NAME_REGEX.test(rest.surname)) {
         throw new Error("invalid_surname_format");
       }
+      if (rest.phone && !/^\d{10}$/.test(rest.phone)) {
+        throw new Error("invalid_phone_format");
+      }
       const normalizedBloodGroupMember = normalizeBloodGroup(rest.bloodGroup);
       if (!normalizedBloodGroupMember) {
         throw new Error("please_select_blood_group");
@@ -3347,7 +3443,7 @@ export const resolvers = {
         const duplicateUser = await (prisma as any).user.findFirst({ where: { phone: rest.phone } });
         const duplicateMember = await (prisma as any).member.findFirst({ where: { phone: rest.phone } });
         if (duplicateUser || duplicateMember) {
-          throw new Error(I18nService.translate("phone_already_registered", context?.language));
+          throw new Error("phone_already_registered");
         }
       }
 
@@ -3399,16 +3495,39 @@ export const resolvers = {
       }
 
       if (context?.user) {
-        const requesterRole = context.user.role;
-        if (requesterRole === 'ADMIN' || requesterRole === 'SUB_ADMIN') {
+        const updaterRole = context.user.role;
+        const updaterLocId = context.user.locationId;
+        const targetRole = targetRoleForValidation;
+
+        if (updaterRole === 'MEMBER') {
+          throw new Error("Unauthorized: Member has no user management permission.");
+        }
+
+        if (updaterRole === 'SUB_ADMIN') {
+          if (targetRole !== 'MEMBER') {
+            throw new Error("Unauthorized: Sub Admin can only create Members.");
+          }
           if (finalLocationId) {
             await validateLocationTargeting(
               Number(context.user.id),
-              requesterRole,
-              context.user.locationId,
+              updaterRole,
+              updaterLocId,
               Number(finalLocationId),
               context?.language
             );
+          }
+        }
+
+        if (updaterRole === 'ADMIN') {
+          if (targetRole !== 'MEMBER' && targetRole !== 'SUB_ADMIN') {
+            throw new Error("Unauthorized: Admin can only create Members or Sub Admins.");
+          }
+          if (finalLocationId) {
+            const updaterDistrict = (await getLocationFields(updaterLocId)).district;
+            const targetDistrict = (await getLocationFields(finalLocationId)).district;
+            if (!updaterDistrict || updaterDistrict !== targetDistrict) {
+              throw new Error("Unauthorized: Target location is outside your assigned district scope.");
+            }
           }
         }
       }
@@ -3629,7 +3748,7 @@ export const resolvers = {
         const duplicateUser = await (prisma as any).user.findFirst({ where: { phone: rest.phone } });
         const duplicateMember = await (prisma as any).member.findFirst({ where: { phone: rest.phone } });
         if (duplicateUser || duplicateMember) {
-          throw new Error(I18nService.translate("phone_already_registered", context?.language));
+          throw new Error("phone_already_registered");
         }
       }
 
@@ -3647,16 +3766,9 @@ export const resolvers = {
         throw new Error("Unauthorized: You cannot change your own role.");
       }
 
-      // Block normal members from changing roles
-      if (isRoleExplicitlyChanged && updaterRole === 'MEMBER') {
-        throw new Error(I18nService.translate("member_not_allowed", context?.language));
-      }
-
-      // Enforce location requirement for admin roles
-      if (['SUPER_ADMIN', 'ADMIN', 'SUB_ADMIN'].includes(targetRole)) {
-        if (!targetLocId) {
-          throw new Error(I18nService.translate("location_required", context?.language));
-        }
+      // New role-ku required location select panna vendum (must select a location for the new role on role change)
+      if (isRoleExplicitlyChanged && !finalLocationId) {
+        throw new Error(I18nService.translate("new_location_required_for_role_change", context?.language));
       }
 
       // Validate location matches the target role level requirements
@@ -3664,28 +3776,74 @@ export const resolvers = {
         await validateRoleLocationLevel(targetRole, targetLocId, context?.language);
       }
 
-      // Permission Check and Location Targeting Validation
+      // Permission Check and Location Targeting Validation based on role-change permission rules
       if (updaterRole !== 'SUPER_ADMIN') {
-        if (isRoleExplicitlyChanged) {
-          if (targetRole === 'SUPER_ADMIN') {
-            throw new Error("Unauthorized: Non-Super Admin cannot promote to Super Admin");
+        if (updaterRole === 'MEMBER') {
+          if (!isEditingSelf) {
+            throw new Error(I18nService.translate("unauthorized_edit_member", context?.language));
           }
-          if (currentRole === 'ADMIN' || currentRole === 'SUPER_ADMIN') {
-            throw new Error("Unauthorized: Only Super Admin can change Admin roles");
+          if (isRoleExplicitlyChanged) {
+            throw new Error("Unauthorized: Member cannot change roles.");
           }
-        }
-        if (currentRole === 'ADMIN' && !isEditingSelf) {
-          throw new Error("Unauthorized: Non-Super Admin cannot modify other Admins");
-        }
+        } else if (updaterRole === 'SUB_ADMIN') {
+          // Sub Admin cannot change roles
+          if (isRoleExplicitlyChanged) {
+            throw new Error("Unauthorized: Sub Admin cannot change roles.");
+          }
+          // Can only edit Members
+          if (!isEditingSelf) {
+            if (currentRole !== 'MEMBER') {
+              throw new Error("Unauthorized: Sub Admin can only edit Members.");
+            }
+            if (targetRole !== 'MEMBER') {
+              throw new Error("Unauthorized: Sub Admin can only assign Member role.");
+            }
+            // Target location must be within Sub Admin's location scope
+            if (targetLocId) {
+              await validateLocationTargeting(
+                Number(context.user.id),
+                updaterRole,
+                updaterLocId,
+                Number(targetLocId),
+                context?.language
+              );
+            }
+          }
+        } else if (updaterRole === 'ADMIN') {
+          // Admin can change Member <-> Sub Admin roles only.
+          if (isRoleExplicitlyChanged) {
+            if (
+              (currentRole !== 'MEMBER' && currentRole !== 'SUB_ADMIN') ||
+              (targetRole !== 'MEMBER' && targetRole !== 'SUB_ADMIN')
+            ) {
+              throw new Error("Unauthorized: Admin can only change roles between Member and Sub Admin.");
+            }
+          } else {
+            // Even if not changing role, cannot edit Admin or Super Admin
+            if (!isEditingSelf && (currentRole === 'ADMIN' || currentRole === 'SUPER_ADMIN')) {
+              throw new Error("Unauthorized: Admin cannot modify other Admins or Super Admins.");
+            }
+          }
 
-        if (targetLocId && updaterRole !== 'MEMBER') {
-          await validateLocationTargeting(
-            Number(context.user.id),
-            updaterRole,
-            updaterLocId,
-            Number(targetLocId),
-            context?.language
-          );
+          // Assigned District-kulla mattum manage pannalam
+          if (!isEditingSelf) {
+            const updaterDistrict = (await getLocationFields(updaterLocId)).district;
+            if (!updaterDistrict) {
+              throw new Error("Unauthorized: Admin has no assigned district scope.");
+            }
+            const targetCurrentLocId = isUserTable ? targetUser.locationId : targetMember.locationId;
+            const targetCurrentDistrict = (await getLocationFields(targetCurrentLocId)).district;
+            
+            if (targetCurrentDistrict !== updaterDistrict) {
+              throw new Error("Unauthorized: Target user is outside your assigned district scope.");
+            }
+            if (targetLocId) {
+              const targetNewDistrict = (await getLocationFields(targetLocId)).district;
+              if (targetNewDistrict !== updaterDistrict) {
+                throw new Error("Unauthorized: New location is outside your assigned district scope.");
+              }
+            }
+          }
         }
       }
 
