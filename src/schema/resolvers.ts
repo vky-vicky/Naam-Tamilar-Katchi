@@ -4315,6 +4315,37 @@ export const resolvers = {
         if (updatedEvent) {
           io.emit('eventResponseUpdated', { eventId, response });
           io.emit('event', updatedEvent);
+
+          // Send FCM to event creator when someone accepts/joins
+          if (status === 'ACCEPTED' && updatedEvent.createdById) {
+            try {
+              const creator = await (prisma as any).user.findUnique({
+                where: { id: updatedEvent.createdById },
+                select: { fcmToken: true, phone: true }
+              });
+              // Try user's FCM token first
+              let creatorFcmToken = creator?.fcmToken;
+              // Fallback: try member record's FCM token
+              if (!creatorFcmToken && creator?.phone) {
+                const creatorMember = await (prisma as any).member.findUnique({
+                  where: { phone: creator.phone },
+                  select: { fcmToken: true }
+                });
+                creatorFcmToken = creatorMember?.fcmToken;
+              }
+              if (creatorFcmToken) {
+                const responderName = response.member?.name || 'ஒருவர்';
+                sendNotificationToToken(
+                  creatorFcmToken,
+                  "நிகழ்வில் சேர்ந்தார்! / Event RSVP",
+                  `${responderName} உங்கள் நிகழ்வில் கலந்துகொள்கிறார். / accepted your event.`,
+                  { type: 'EVENT_RSVP', eventId: String(eventId), responderId: String(finalMemberId), status }
+                ).catch(e => console.error("Error sending event RSVP FCM:", e));
+              }
+            } catch (e) {
+              console.error("Error sending event response notification:", e);
+            }
+          }
         }
       }
 
@@ -5834,9 +5865,35 @@ export const resolvers = {
         });
       }
 
-      return (prisma as any).poll.findUnique({
+      const poll = await (prisma as any).poll.findUnique({
         where: { id: pollId }
       });
+
+      // Send FCM notification to poll creator when liked (not when unliked)
+      if (!existingLike && poll) {
+        try {
+          const pollCreatorMemberId = await getPollCreatorMemberId(poll);
+          // Only notify if the liker is different from the poll creator
+          if (pollCreatorMemberId && pollCreatorMemberId !== memberId) {
+            const creatorMember = await (prisma as any).member.findUnique({
+              where: { id: pollCreatorMemberId },
+              select: { fcmToken: true }
+            });
+            if (creatorMember?.fcmToken) {
+              sendNotificationToToken(
+                creatorMember.fcmToken,
+                "உங்கள் வாக்கெடுப்புக்கு லைக் வந்தது! / Poll Liked",
+                `${member.name || 'Someone'} உங்கள் வாக்கெடுப்பை லைக் செய்தார். / liked your poll.`,
+                { type: 'POLL_LIKED', pollId: String(pollId), likedBy: String(memberId) }
+              ).catch(e => console.error("Error sending poll like FCM:", e));
+            }
+          }
+        } catch (e) {
+          console.error("Error sending poll like notification:", e);
+        }
+      }
+
+      return poll;
     },
 
     addPollComment: async (_: any, { pollId, content, authorName, authorRole }: any) => {
@@ -6098,6 +6155,34 @@ export const resolvers = {
             }
           }
         });
+      } else {
+        // Send FCM notification to post owner when liked (not when unliked)
+        try {
+          const postWithCreator = await (prisma as any).post.findUnique({
+            where: { id: postId },
+            select: { createdById: true, createdByType: true, authorName: true }
+          });
+          if (postWithCreator) {
+            const postCreatorMemberId = await getPostCreatorMemberId(postWithCreator);
+            // Only notify if the liker is different from the post creator
+            if (postCreatorMemberId && postCreatorMemberId !== memberId) {
+              const creatorMember = await (prisma as any).member.findUnique({
+                where: { id: postCreatorMemberId },
+                select: { fcmToken: true, name: true }
+              });
+              if (creatorMember?.fcmToken) {
+                sendNotificationToToken(
+                  creatorMember.fcmToken,
+                  "உங்கள் பதிவுக்கு லைக் வந்தது! / Post Liked",
+                  `${member.name || 'Someone'} உங்கள் பதிவை லைக் செய்தார். / liked your post.`,
+                  { type: 'POST_LIKED', postId: String(postId), likedBy: String(memberId) }
+                ).catch(e => console.error("Error sending post like FCM:", e));
+              }
+            }
+          }
+        } catch (e) {
+          console.error("Error sending like notification:", e);
+        }
       }
 
       // Safeguard: make sure likes count doesn't drop below 0
@@ -6121,10 +6206,31 @@ export const resolvers = {
         }
       });
       
-      // Send notification to post author's location (optional, simplified)
-      const post = await (prisma as any).post.findUnique({ where: { id: Number(postId) } });
-      if (post && post.locationId) {
-        sendNotificationToLocation(Number(post.locationId), "New Comment", `${authorName || 'Someone'} commented on a post`, { type: 'ALERT', postId: post.id }).catch(e => console.error(e));
+      // Send notification specifically to post owner (not location-wide)
+      const post = await (prisma as any).post.findUnique({
+        where: { id: Number(postId) },
+        select: { createdById: true, createdByType: true, authorName: true, locationId: true, id: true }
+      });
+      if (post) {
+        try {
+          const postCreatorMemberId = await getPostCreatorMemberId(post);
+          if (postCreatorMemberId) {
+            const creatorMember = await (prisma as any).member.findUnique({
+              where: { id: postCreatorMemberId },
+              select: { fcmToken: true }
+            });
+            if (creatorMember?.fcmToken) {
+              sendNotificationToToken(
+                creatorMember.fcmToken,
+                "உங்கள் பதிவில் கருத்து வந்தது! / New Comment",
+                `${authorName || 'Someone'} உங்கள் பதிவில் கருத்து தெரிவித்தார். / commented on your post.`,
+                { type: 'POST_COMMENTED', postId: String(post.id), commentBy: authorName || '' }
+              ).catch(e => console.error("Error sending comment FCM to owner:", e));
+            }
+          }
+        } catch (e) {
+          console.error("Error sending comment notification to owner:", e);
+        }
       }
       
       return comment;
