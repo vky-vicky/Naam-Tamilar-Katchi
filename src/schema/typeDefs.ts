@@ -714,6 +714,7 @@ export const typeDefs = gql`
       rejectReason: String
     ): EmergencyRequest!
     createPost(
+      title: String
       content: String!
       category: String
       images: [String!]

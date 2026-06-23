@@ -1288,12 +1288,16 @@ export const resolvers = {
 
       if (professionName) {
         filter.profession = { name: professionName };
+        
       }
       if (bloodGroup) filter.bloodGroup = bloodGroup;
-      if (role) {
+      if (role && !['all', 'all roles', 'all_roles', 'allroles'].includes(role.toLowerCase().trim())) {
         filter.role = { equals: role, mode: 'insensitive' };
-        userFilter.role = role.toUpperCase();
+        userFilter.role = role.toUpperCase().trim().replace(/[\s-]+/g, '_');
+      } else {
+        userFilter.role = { in: ['ADMIN', 'SUB_ADMIN', 'MEMBER'] };
       }
+
       
       if (search) {
         filter.OR = [
@@ -1338,8 +1342,32 @@ export const resolvers = {
         allowedLocationIds = [Number(context.user.locationId), ...childIds];
       }
 
-      return uniqueMembers
-        .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      // Filter out SUPER_ADMIN role (just in case they come in from any other query/table)
+      const filteredMembers = uniqueMembers.filter((m: any) => {
+        const normalizedRole = m.role ? m.role.toUpperCase().trim().replace(/[\s-]+/g, '_') : '';
+        return normalizedRole !== 'SUPER_ADMIN';
+      });
+
+      // Role sorting priority helper
+      const getRolePriority = (r: string) => {
+        if (!r) return 99;
+        const normalized = r.toUpperCase().trim().replace(/[\s-]+/g, '_');
+        if (normalized === 'ADMIN') return 1;
+        if (normalized === 'SUB_ADMIN') return 2;
+        if (normalized === 'MEMBER') return 3;
+        return 99;
+      };
+
+      const sortedMembers = filteredMembers.sort((a: any, b: any) => {
+        const priorityA = getRolePriority(a.role);
+        const priorityB = getRolePriority(b.role);
+        if (priorityA !== priorityB) {
+          return priorityA - priorityB;
+        }
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      });
+
+      return sortedMembers
         .slice(offset, offset + limit)
         .map((m: any) => {
           const isSelf = context?.user?.phone === m.phone;
@@ -1847,10 +1875,15 @@ export const resolvers = {
       }
 
       let filter: any = {};
+      let broadcastEventFilter: any = {};
       let allLocationIds: number[] = [];
       if (targetLocationId) {
         allLocationIds = [targetLocationId, ...(await getChildLocationIds(targetLocationId))];
         filter.locationId = { in: allLocationIds };
+
+        const ancestorIds = await getAncestorLocationIds(targetLocationId);
+        const broadcastEventLocationIds = [...ancestorIds, targetLocationId, ...allLocationIds.slice(1)];
+        broadcastEventFilter.locationId = { in: Array.from(new Set(broadcastEventLocationIds)) };
       }
 
       // Build date range filter
@@ -1923,7 +1956,7 @@ export const resolvers = {
       if (shouldQuery('EVENT')) {
         promises.push(
           (prisma as any).event.findMany({
-            where: { ...filter, ...eventSearch, ...dateFilter },
+            where: { ...broadcastEventFilter, ...eventSearch, ...dateFilter },
             take: takeLimit,
             orderBy: { createdAt: 'desc' },
             include: { location: true, createdBy: true }
@@ -2212,7 +2245,7 @@ export const resolvers = {
       if (shouldQuery('BROADCAST')) {
         promises.push(
           (prisma as any).broadcast.findMany({
-            where: { ...filter, ...broadcastSearch, ...dateFilter },
+            where: { ...broadcastEventFilter, ...broadcastSearch, ...dateFilter },
             take: takeLimit,
             orderBy: { createdAt: 'desc' },
             include: { location: true, createdBy: true }
@@ -2605,6 +2638,25 @@ export const resolvers = {
       const userLocId = context.user.locationId;
       const where: any = {};
 
+      let joinedAt: Date | null = null;
+      if (context.user.type === 'admin') {
+        const adminUser = await (prisma as any).user.findUnique({
+          where: { id: Number(context.user.id) },
+          select: { createdAt: true }
+        });
+        if (adminUser) joinedAt = adminUser.createdAt;
+      } else {
+        const memberUser = await (prisma as any).member.findUnique({
+          where: { id: Number(context.user.id) },
+          select: { createdAt: true }
+        });
+        if (memberUser) joinedAt = memberUser.createdAt;
+      }
+
+      if (joinedAt) {
+        where.createdAt = { gte: joinedAt };
+      }
+
       if (role === 'SUPER_ADMIN') {
         if (locationId) {
           const allLocationIds = [locationId, ...(await getChildLocationIds(locationId))];
@@ -2665,6 +2717,26 @@ export const resolvers = {
         include: { location: true, createdBy: true }
       });
       if (!notification) return null;
+
+      // Check if the notification was created before the user's registration (joinedAt)
+      let joinedAt: Date | null = null;
+      if (context.user.type === 'admin') {
+        const adminUser = await (prisma as any).user.findUnique({
+          where: { id: Number(context.user.id) },
+          select: { createdAt: true }
+        });
+        if (adminUser) joinedAt = adminUser.createdAt;
+      } else {
+        const memberUser = await (prisma as any).member.findUnique({
+          where: { id: Number(context.user.id) },
+          select: { createdAt: true }
+        });
+        if (memberUser) joinedAt = memberUser.createdAt;
+      }
+
+      if (joinedAt && notification.createdAt < joinedAt) {
+        return null;
+      }
 
       // Check if deleted by the user
       const isDeleted = await (prisma as any).deletedNotification.findFirst({
@@ -4994,6 +5066,74 @@ export const resolvers = {
         }
       }
 
+      if (currentStatus === 'APPROVED_ADMIN') {
+        if (userRole !== 'ADMIN' && userRole !== 'SUPER_ADMIN') {
+          throw new Error("Only Admin or above can forward this request");
+        }
+
+        if (normalizedAction === 'FORWARD') {
+          const updated = await (prisma as any).emergencyRequest.update({
+            where: { id: request.id },
+            data: { 
+              status: 'PENDING_SUPER_ADMIN',
+              forwardedBy: 'Admin',
+              forwardedAt: new Date()
+            },
+            include: { location: true, createdBy: true, member: true }
+          });
+
+          const stateId = await findParentLocationOfType(request.locationId, 'STATE');
+          const targetNotifyLocationId = stateId || request.locationId;
+
+          await sendSystemNotification({
+            title: "Blood Request Escalate to Super Admin",
+            message: `Blood request pending Super Admin review: ${request.title}`,
+            type: 'MEMBER_REQUEST',
+            locationId: targetNotifyLocationId,
+            purpose: 'Forwarded emergency blood request pending Super Admin review.',
+            entityType: 'EMERGENCY',
+            entityId: request.id,
+            data: { requestId: request.id }
+          });
+
+          return updated;
+        }
+      }
+
+      if (currentStatus === 'APPROVED_SUB_ADMIN') {
+        if (userRole !== 'SUB_ADMIN' && userRole !== 'ADMIN' && userRole !== 'SUPER_ADMIN') {
+          throw new Error("Only Sub Admin or above can forward this request");
+        }
+
+        if (normalizedAction === 'FORWARD') {
+          const updated = await (prisma as any).emergencyRequest.update({
+            where: { id: request.id },
+            data: { 
+              status: 'PENDING_ADMIN',
+              forwardedBy: 'Sub Admin',
+              forwardedAt: new Date()
+            },
+            include: { location: true, createdBy: true, member: true }
+          });
+
+          const talukId = await findParentLocationOfType(request.locationId, 'TALUK');
+          const targetNotifyLocationId = talukId || request.locationId;
+
+          await sendSystemNotification({
+            title: "Blood Request Escalate to Admin",
+            message: `Blood request pending Admin review: ${request.title}`,
+            type: 'MEMBER_REQUEST',
+            locationId: targetNotifyLocationId,
+            purpose: 'Forwarded emergency blood request pending admin review.',
+            entityType: 'EMERGENCY',
+            entityId: request.id,
+            data: { requestId: request.id }
+          });
+
+          return updated;
+        }
+      }
+
       if (currentStatus === 'PENDING_SUPER_ADMIN') {
         if (userRole !== 'SUPER_ADMIN') {
           throw new Error("Only Super Admin can review this request");
@@ -5037,9 +5177,14 @@ export const resolvers = {
       const createdById = context?.user ? Number(context.user.id) : null;
       const createdByType = context?.user?.type || null;
 
+      let finalContent = args.content;
+      if (args.title && args.title.trim() !== '') {
+        finalContent = `**${args.title.trim()}**\n\n${args.content}`;
+      }
+
       const post = await (prisma as any).post.create({
         data: {
-          content: args.content,
+          content: finalContent,
           category: args.category || "Discussion",
           images: postImages,
           authorName: args.authorName,
@@ -7572,19 +7717,19 @@ export const resolvers = {
     },
     district: async (parent: any, _: any, context: any) => {
       const name = parent.district || (await getLocationFields(parent.locationId)).district;
-      return translateLocationName(name, context?.language || 'en');
+      return translateLocationName(name, context?.language || 'en') || "";
     },
     constituency: async (parent: any, _: any, context: any) => {
       const name = parent.constituency || (await getLocationFields(parent.locationId)).constituency;
-      return translateLocationName(name, context?.language || 'en');
+      return translateLocationName(name, context?.language || 'en') || "";
     },
     area: async (parent: any, _: any, context: any) => {
       const name = parent.area || (await getLocationFields(parent.locationId)).area;
-      return translateLocationName(name, context?.language || 'en');
+      return translateLocationName(name, context?.language || 'en') || "";
     },
     street: async (parent: any, _: any, context: any) => {
       const name = parent.street || (await getLocationFields(parent.locationId)).street;
-      return translateLocationName(name, context?.language || 'en');
+      return translateLocationName(name, context?.language || 'en') || "";
     },
     profilePicture: (parent: any) => parent.image,
   },
@@ -7598,19 +7743,19 @@ export const resolvers = {
     createdAt: (parent: any) => toIsoString(parent.createdAt),
     district: async (parent: any, _: any, context: any) => {
       const name = parent.district || (await getLocationFields(parent.locationId)).district;
-      return translateLocationName(name, context?.language || 'en');
+      return translateLocationName(name, context?.language || 'en') || "";
     },
     constituency: async (parent: any, _: any, context: any) => {
       const name = parent.constituency || (await getLocationFields(parent.locationId)).constituency;
-      return translateLocationName(name, context?.language || 'en');
+      return translateLocationName(name, context?.language || 'en') || "";
     },
     area: async (parent: any, _: any, context: any) => {
       const name = parent.area || (await getLocationFields(parent.locationId)).area;
-      return translateLocationName(name, context?.language || 'en');
+      return translateLocationName(name, context?.language || 'en') || "";
     },
     street: async (parent: any, _: any, context: any) => {
       const name = parent.street || (await getLocationFields(parent.locationId)).street;
-      return translateLocationName(name, context?.language || 'en');
+      return translateLocationName(name, context?.language || 'en') || "";
     },
     profilePicture: (parent: any) => parent.image,
   },
@@ -8104,6 +8249,8 @@ export const resolvers = {
 
   Comment: {
     createdAt: (parent: any) => toIsoString(parent.createdAt),
+    authorName: (parent: any) => parent.authorName || 'Member',
+    authorRole: (parent: any) => parent.authorRole || 'MEMBER',
     createdBy: (parent: any) => {
       return {
         id: parent.id,
@@ -8141,16 +8288,18 @@ export const resolvers = {
       return parent.images || [];
     },
     category: (parent: any, _: any, context: any) => {
+      const cat = parent.category || 'Information';
       const lang = context?.language || 'en';
       if (lang.startsWith('ta')) {
         const translations: Record<string, string> = {
           'Discussion': 'கலந்துரையாடல்',
           'Announcement': 'அறிவிப்பு',
-          'Event': 'நிகழ்வு'
+          'Event': 'நிகழ்வு',
+          'Information': 'தகவல்'
         };
-        return translations[parent.category] || parent.category;
+        return translations[cat] || cat;
       }
-      return parent.category;
+      return cat;
     },
     authorName: async (parent: any) => {
       // Check Admin (User table) first
@@ -8165,7 +8314,7 @@ export const resolvers = {
         const member = await (prisma as any).member.findUnique({ where: { id: parent.memberId }, select: { name: true } });
         if (member?.name) return member.name;
       }
-      return null;
+      return 'Member';
     },
     authorRole: async (parent: any) => {
       // Check Admin (User table) first
