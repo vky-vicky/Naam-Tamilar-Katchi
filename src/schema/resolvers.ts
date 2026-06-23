@@ -5663,7 +5663,7 @@ export const resolvers = {
         io.emit('reportResolved', { reportId: report.id, status: nextStatus, type: 'POST' });
       }
 
-      return { success: true, message: "Report resolved successfully.", action };
+      return { id: report.id, postId: report.postId, success: true, message: "Report resolved successfully.", action };
     },
 
     resolveCommunityPostReport: async (_: any, { reportId, action, warningMessage }: any, context: any) => {
@@ -5914,7 +5914,7 @@ export const resolvers = {
         io.emit('reportResolved', { reportId: report.id, status: nextStatus, type: 'COMMUNITY_POST' });
       }
 
-      return { success: true, message: "Report resolved successfully.", action };
+      return { id: report.id, postId: report.postId, success: true, message: "Report resolved successfully.", action };
     },
 
     moderatePost: async (_: any, { postId, action, warningMessage }: any, context: any) => {
@@ -6099,7 +6099,7 @@ export const resolvers = {
         });
       }
 
-      return { success: true, message: "Post action completed successfully.", action };
+      return { id: post.id, postId: post.id, success: true, message: "Post action completed successfully.", action };
     },
 
     createPoll: async (_: any, { question, options, durationDays, locationId, districtId, talukId, areaId, streetId, communityId }: any, context: any) => {

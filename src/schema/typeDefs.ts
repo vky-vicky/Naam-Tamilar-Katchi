@@ -543,6 +543,8 @@ export const typeDefs = gql`
   }
 
   type ModerationResult {
+    id: Int
+    postId: Int
     success: Boolean!
     message: String!
     action: String
