@@ -541,6 +541,12 @@ export const typeDefs = gql`
     DELETE
   }
 
+  type ModerationResult {
+    success: Boolean!
+    message: String!
+    action: String
+  }
+
   type Query {
     getLocationList(parentId: Int, type: LocationType): [Location!]!
     getLocationDetails(id: Int!): Location
@@ -746,9 +752,9 @@ export const typeDefs = gql`
     ): Boolean!
     reportPost(postId: Int!, reason: String!): PostReport!
     reportCommunityPost(postId: Int!, reason: String!): CommunityPostReport!
-    resolvePostReport(reportId: Int!, action: ReportAction!, warningMessage: String): Boolean!
-    resolveCommunityPostReport(reportId: Int!, action: ReportAction!, warningMessage: String): Boolean!
-    moderatePost(postId: Int!, action: ModerationAction!, warningMessage: String): Boolean!
+    resolvePostReport(reportId: Int!, action: ReportAction!, warningMessage: String): ModerationResult!
+    resolveCommunityPostReport(reportId: Int!, action: ReportAction!, warningMessage: String): ModerationResult!
+    moderatePost(postId: Int!, action: ModerationAction!, warningMessage: String): ModerationResult!
     createPoll(
       question: String!
       options: [String!]!

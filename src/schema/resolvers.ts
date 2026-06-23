@@ -1289,7 +1289,7 @@ async function formatCommunityMessage(message: any) {
 export const resolvers = {
   Query: {
     me: async (_: any, __: any, context: any) => {
-      if (!context.user) return null;
+      if (!context.user || !context.user.id) return null;
       
       // Use context.user.type to decide which table — NOT role
       // type='member' → Member table, type='admin' → User table
@@ -5663,7 +5663,7 @@ export const resolvers = {
         io.emit('reportResolved', { reportId: report.id, status: nextStatus, type: 'POST' });
       }
 
-      return true;
+      return { success: true, message: "Report resolved successfully.", action };
     },
 
     resolveCommunityPostReport: async (_: any, { reportId, action, warningMessage }: any, context: any) => {
@@ -5914,7 +5914,7 @@ export const resolvers = {
         io.emit('reportResolved', { reportId: report.id, status: nextStatus, type: 'COMMUNITY_POST' });
       }
 
-      return true;
+      return { success: true, message: "Report resolved successfully.", action };
     },
 
     moderatePost: async (_: any, { postId, action, warningMessage }: any, context: any) => {
@@ -6099,7 +6099,7 @@ export const resolvers = {
         });
       }
 
-      return true;
+      return { success: true, message: "Post action completed successfully.", action };
     },
 
     createPoll: async (_: any, { question, options, durationDays, locationId, districtId, talukId, areaId, streetId, communityId }: any, context: any) => {
@@ -7882,28 +7882,21 @@ export const resolvers = {
   Member: {
     createdAt: (parent: any) => toIsoString(parent.createdAt),
     profession: async (parent: any, _: any, context: any) => {
-      let name = null;
+      const lang = context?.language || 'en';
+
       if (parent.professionId) {
         const prof = await (prisma as any).profession.findUnique({ where: { id: parent.professionId } });
-        name = prof?.name || null;
+        if (prof) {
+          if (lang.startsWith('ta')) {
+            return prof.name; // Tamil name stored in name field
+          }
+          return prof.nameEn || prof.name; // English in nameEn, fallback to name
+        }
       } else if (parent.profession) {
-        name = parent.profession;
+        return parent.profession;
       }
 
-      if (!name) return null;
-
-      const lang = context?.language || 'en';
-      if (lang.startsWith('ta')) {
-        const translations: Record<string, string> = {
-          'Doctor': 'மருத்துவர்',
-          'Lawyer': 'வழக்கறிஞர்',
-          'Farmer': 'விவசாயி',
-          'Engineer': 'பொறியாளர்',
-          'Student': 'மாணவர்'
-        };
-        return translations[name] || name;
-      }
-      return name;
+      return null;
     },
     activityHistory: async (parent: any) => {
       const [events, requests] = await Promise.all([
@@ -7972,7 +7965,11 @@ export const resolvers = {
 
   Location: {
     name: (parent: any, _: any, context: any) => {
-      return translateLocationName(parent.name, context?.language || 'en');
+      const lang = context?.language || 'en';
+      if (lang.startsWith('ta')) {
+        return parent.name; // Tamil name stored in the name field
+      }
+      return parent.nameEn || parent.name; // English name stored in nameEn, fallback to name
     },
     parent: async (parent: any) => {
       if (!parent.parentId) return null;
@@ -7992,16 +7989,9 @@ export const resolvers = {
     name: (parent: any, _: any, context: any) => {
       const lang = context?.language || 'en';
       if (lang.startsWith('ta')) {
-        const translations: Record<string, string> = {
-          'Doctor': 'மருத்துவர்',
-          'Lawyer': 'வழக்கறிஞர்',
-          'Farmer': 'விவசாயி',
-          'Engineer': 'பொறியாளர்',
-          'Student': 'மாணவர்'
-        };
-        return translations[parent.name] || parent.name;
+        return parent.name; // Tamil name stored in the name field
       }
-      return parent.name;
+      return parent.nameEn || parent.name; // English name stored in nameEn, fallback to name
     }
   },
 
@@ -8831,7 +8821,7 @@ export const resolvers = {
       year: payment.year,
       planName: payment.enrollment?.plan?.name || 'Contribution Plan',
       paidAt: payment.paidAt ? new Date(payment.paidAt).toISOString() : new Date().toISOString(),
-      razorpayPaymentId: payment.razorpayPaymentId || null
+      razorpayPaymentId: payment.transactionId || null
     };
   },
 
@@ -8939,7 +8929,6 @@ export const resolvers = {
       data: {
         memberId,
         enrollmentId: enrollment.id,
-        planId: args.planId,
         month: now.getMonth() + 1,
         year: now.getFullYear(),
         amount: plan.monthlyAmount,
@@ -8990,14 +8979,13 @@ export const resolvers = {
     const currentMonth = now.getMonth() + 1;
     const currentYear = now.getFullYear();
     let payment = await (prisma as any).contributionPayment.findFirst({
-      where: { memberId, planId: args.planId, month: currentMonth, year: currentYear }
+      where: { memberId, enrollmentId: enrollment.id, month: currentMonth, year: currentYear }
     });
     if (!payment) {
       payment = await (prisma as any).contributionPayment.create({
         data: {
           memberId,
           enrollmentId: enrollment.id,
-          planId: args.planId,
           month: currentMonth,
           year: currentYear,
           amount: enrollment.plan.monthlyAmount,
@@ -9011,7 +8999,7 @@ export const resolvers = {
     // Store order ID on the payment
     await (prisma as any).contributionPayment.update({
       where: { id: payment.id },
-      data: { razorpayOrderId: orderResult.orderId }
+      data: { orderId: orderResult.orderId }
     });
     return {
       orderId: orderResult.orderId,
@@ -9029,7 +9017,7 @@ export const resolvers = {
       return { success: false, payment: null, message: 'Payment signature verification failed' };
     }
     const payment = await (prisma as any).contributionPayment.findFirst({
-      where: { razorpayOrderId: razorpay_order_id }
+      where: { orderId: razorpay_order_id }
     });
     if (!payment) {
       return { success: false, payment: null, message: 'Payment record not found' };
@@ -9038,7 +9026,7 @@ export const resolvers = {
       where: { id: payment.id },
       data: {
         status: 'PAID',
-        razorpayPaymentId: razorpay_payment_id,
+        transactionId: razorpay_payment_id,
         paidAt: new Date()
       }
     });
@@ -9074,3 +9062,5 @@ export const resolvers = {
     return true;
   },
 };
+
+
