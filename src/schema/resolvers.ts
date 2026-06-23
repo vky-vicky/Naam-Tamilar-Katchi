@@ -4023,14 +4023,19 @@ export const resolvers = {
         Object.assign(updateData, locFields);
       }
 
-      if (professionName) {
-        const profession = await (prisma as any).profession.upsert({
-          where: { name: professionName },
-          update: {},
-          create: { name: professionName }
-        });
-        updateData.professionId = profession.id;
-        updateData.profession = professionName;
+      if (professionName !== undefined) {
+        if (professionName && String(professionName).trim() !== '' && String(professionName).trim().toLowerCase() !== 'select') {
+          const profession = await (prisma as any).profession.upsert({
+            where: { name: professionName },
+            update: {},
+            create: { name: professionName }
+          });
+          updateData.professionId = profession.id;
+          updateData.profession = professionName;
+        } else {
+          updateData.professionId = null;
+          updateData.profession = null;
+        }
       }
 
       // Handle transitions & synchronization
@@ -4071,10 +4076,13 @@ export const resolvers = {
             });
           }
 
+          const memberUpdateData = { ...updateData };
+          delete memberUpdateData.profession;
+
           const updatedMember = await (prisma as any).member.update({
             where: { id: targetId },
             data: {
-              ...updateData,
+              ...memberUpdateData,
               role: targetRole
             },
             include: { location: true, profession: true }
@@ -4199,10 +4207,13 @@ export const resolvers = {
       }
 
       // Standard member update + sync to matching User record
+      const memberUpdateData = { ...updateData };
+      delete memberUpdateData.profession;
+
       const updatedMember = await (prisma as any).member.update({
         where: { id: targetId },
         data: {
-          ...updateData,
+          ...memberUpdateData,
           role: targetRole
         },
         include: { location: true, profession: true }
