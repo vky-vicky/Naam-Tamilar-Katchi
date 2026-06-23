@@ -82,6 +82,24 @@ export async function getChildLocationIdsForFCM(parentId: number): Promise<numbe
 }
 
 /**
+ * Gets all ancestor location IDs for a given location
+ */
+export async function getAncestorLocationIdsForFCM(locationId: number): Promise<number[]> {
+  const ids: number[] = [];
+  let currentId: number | null = Number(locationId);
+  while (currentId) {
+    const loc: { parentId: number | null } | null = await (prisma as any).location.findUnique({
+      where: { id: currentId },
+      select: { parentId: true }
+    });
+    if (!loc) break;
+    if (loc.parentId) ids.push(loc.parentId);
+    currentId = loc.parentId;
+  }
+  return ids;
+}
+
+/**
  * Formats data payload for FCM
  */
 function formatDataPayload(data: any): Record<string, string> {
@@ -112,7 +130,8 @@ export async function sendNotificationToLocation(
 
   try {
     const childIds = await getChildLocationIdsForFCM(numericLocationId);
-    const targetLocations = [numericLocationId, ...childIds];
+    const ancestorIds = await getAncestorLocationIdsForFCM(numericLocationId);
+    const targetLocations = Array.from(new Set([numericLocationId, ...childIds, ...ancestorIds]));
 
     const [users, members, superAdminUsers, superAdminMembers] = await Promise.all([
       (prisma as any).user.findMany({

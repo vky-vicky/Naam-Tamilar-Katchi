@@ -748,7 +748,7 @@ export const typeDefs = gql`
       communityId: Int
     ): Poll!
     voteInPoll(pollId: Int!, optionId: Int!): Poll!
-    likePoll(id: Int!): Poll!
+    likePoll(id: Int, pollId: Int): Poll!
     addPollComment(
       pollId: Int!
       content: String!

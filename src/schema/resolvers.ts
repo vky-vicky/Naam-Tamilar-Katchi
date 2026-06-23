@@ -471,8 +471,15 @@ async function getBroadcastListForContext({ locationId, scope, broadcastId, isAc
     visibleLocationIds = Array.from(new Set([...ancestorIds, ...childIds]));
   } else {
     if (!userLocId) return [];
-    const ancestorIds = await getAncestorLocationIds(userLocId);
-    visibleLocationIds = ancestorIds;
+    const talukId = await findParentLocationOfType(userLocId, 'TALUK');
+    if (talukId) {
+      const childIds = await getChildLocationIds(talukId);
+      const ancestorIds = await getAncestorLocationIds(talukId);
+      visibleLocationIds = Array.from(new Set([talukId, ...childIds, ...ancestorIds]));
+    } else {
+      const ancestorIds = await getAncestorLocationIds(userLocId);
+      visibleLocationIds = ancestorIds;
+    }
   }
 
   const where: any = {};
@@ -2483,8 +2490,17 @@ export const resolvers = {
         };
       }));
 
-      // Sort first by locationScore descending, and then by createdAt descending (newest first)
+      // Sort first by administrative role (Admins/Sub-Admins top) and then by locationScore / date
       return scoredPosts.sort((a, b) => {
+        const aIsAdmin = ['SUPER_ADMIN', 'ADMIN', 'SUB_ADMIN'].includes(String(a.authorRole || '').toUpperCase());
+        const bIsAdmin = ['SUPER_ADMIN', 'ADMIN', 'SUB_ADMIN'].includes(String(b.authorRole || '').toUpperCase());
+
+        if (aIsAdmin && !bIsAdmin) return -1;
+        if (!aIsAdmin && bIsAdmin) return 1;
+        if (aIsAdmin && bIsAdmin) {
+          return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        }
+
         const aLocScore = a.locationScore || 0;
         const bLocScore = b.locationScore || 0;
         if (bLocScore !== aLocScore) {
@@ -2497,6 +2513,9 @@ export const resolvers = {
     getPollList: async (_: any, { locationId, communityId }: any, context: any) => {
       const where: any = {};
       const user = context?.user;
+
+      // Filter out expired polls
+      where.expiresAt = { gte: new Date() };
 
       if (communityId) {
         const community = await (prisma as any).community.findUnique({ where: { id: communityId } });
@@ -2915,9 +2934,17 @@ export const resolvers = {
         where.id = eventId;
       } else {
         if (locationId) {
-          const ancestorIds = await getAncestorLocationIds(locationId);
-          const childIds = await getChildLocationIds(locationId);
-          const allLocationIds = [...ancestorIds, locationId, ...childIds];
+          const talukId = await findParentLocationOfType(locationId, 'TALUK');
+          let allLocationIds: number[] = [];
+          if (talukId) {
+            const ancestorIds = await getAncestorLocationIds(talukId);
+            const childIds = await getChildLocationIds(talukId);
+            allLocationIds = [talukId, ...ancestorIds, ...childIds];
+          } else {
+            const ancestorIds = await getAncestorLocationIds(locationId);
+            const childIds = await getChildLocationIds(locationId);
+            allLocationIds = [locationId, ...ancestorIds, ...childIds];
+          }
           where.locationId = { in: allLocationIds };
         }
 
@@ -2972,9 +2999,17 @@ export const resolvers = {
     getEmergencyRequestList: async (_: any, { locationId, status }: any, context: any) => {
       const where: any = {};
       if (locationId) {
-        const ancestorIds = await getAncestorLocationIds(locationId);
-        const childIds = await getChildLocationIds(locationId);
-        const allLocationIds = [...ancestorIds, locationId, ...childIds];
+        const talukId = await findParentLocationOfType(locationId, 'TALUK');
+        let allLocationIds: number[] = [];
+        if (talukId) {
+          const ancestorIds = await getAncestorLocationIds(talukId);
+          const childIds = await getChildLocationIds(talukId);
+          allLocationIds = [talukId, ...ancestorIds, ...childIds];
+        } else {
+          const ancestorIds = await getAncestorLocationIds(locationId);
+          const childIds = await getChildLocationIds(locationId);
+          allLocationIds = [locationId, ...ancestorIds, ...childIds];
+        }
         where.locationId = { in: allLocationIds };
       }
 
@@ -3900,8 +3935,8 @@ export const resolvers = {
         throw new Error("Unauthorized: You cannot change your own role.");
       }
 
-      // New role-ku required location select panna vendum (must select a location for the new role on role change)
-      if (isRoleExplicitlyChanged && !finalLocationId) {
+      // New role-ku required location select panna vendum (must select a location for the new role on role change if not already set)
+      if (isRoleExplicitlyChanged && !targetLocId) {
         throw new Error(I18nService.translate("new_location_required_for_role_change", context?.language));
       }
 
@@ -4001,6 +4036,7 @@ export const resolvers = {
           create: { name: professionName }
         });
         updateData.professionId = profession.id;
+        updateData.profession = professionName;
       }
 
       // Handle transitions & synchronization
@@ -6270,14 +6306,15 @@ export const resolvers = {
       });
     },
 
-    likePoll: async (_: any, { id }: any, context: any) => {
+    likePoll: async (_: any, { id, pollId: inputPollId }: any, context: any) => {
       const lang = context?.language || 'en';
       if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", lang));
 
       const member = await getOrCreateMemberForUser(context.user);
       if (!member) throw new Error("Member profile not found");
 
-      const pollId = Number(id);
+      const pollId = Number(id || inputPollId);
+      if (!pollId) throw new Error("Poll ID is required");
       const memberId = member.id;
 
       const existingLike = await (prisma as any).pollLike.findUnique({
