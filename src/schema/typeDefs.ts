@@ -106,6 +106,7 @@ export const typeDefs = gql`
     bloodGroup: String
     dateOfBirth: String
     gender: String
+    profession: String
     district: String
     constituency: String
     area: String
