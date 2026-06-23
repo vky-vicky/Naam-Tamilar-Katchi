@@ -300,6 +300,10 @@ export const typeDefs = gql`
     authorRole: String!
     createdAt: String!
     createdBy: User
+    parentId: Int
+    replies: [Comment!]!
+    likesCount: Int!
+    isLiked: Boolean!
   }
 
   type CommunityPost {
@@ -471,6 +475,10 @@ export const typeDefs = gql`
     authorName: String!
     authorRole: String!
     createdAt: String!
+    parentId: Int
+    replies: [PollComment!]!
+    likesCount: Int!
+    isLiked: Boolean!
   }
 
   type PollReport {
@@ -755,15 +763,19 @@ export const typeDefs = gql`
       content: String!
       authorName: String!
       authorRole: String!
+      parentId: Int
     ): PollComment!
+    likePollComment(pollCommentId: Int!): PollComment!
     reportPoll(pollId: Int!, reason: String!): PollReport!
     resolvePollReport(reportId: Int!, action: ReportAction!, warningMessage: String): Boolean!
     likePost(id: Int, postId: Int): Post!
+    likeComment(commentId: Int!): Comment!
     addComment(
       postId: Int!
       content: String!
       authorName: String!
       authorRole: String!
+      parentId: Int
     ): Comment!
     createNotification(
       title: String!

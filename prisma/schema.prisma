@@ -82,6 +82,8 @@ model Member {
   postLikes            PostLike[]
   postReports          PostReport[]
   warnings             UserWarning[]          @relation("MemberWarnings")
+  commentLikes         CommentLike[]
+  pollCommentLikes     PollCommentLike[]
 
   @@index([locationId])
   @@index([professionId])
@@ -332,13 +334,28 @@ model PollVote {
 }
 
 model Comment {
-  id         Int      @id @default(autoincrement())
+  id         Int           @id @default(autoincrement())
   content    String
   authorName String
   authorRole String?
   postId     Int
-  createdAt  DateTime @default(now())
-  post       Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  parentId   Int?
+  createdAt  DateTime      @default(now())
+  post       Post          @relation(fields: [postId], references: [id], onDelete: Cascade)
+  parent     Comment?      @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies    Comment[]     @relation("CommentReplies")
+  likesList  CommentLike[]
+}
+
+model CommentLike {
+  id        Int      @id @default(autoincrement())
+  commentId Int
+  memberId  Int
+  createdAt DateTime @default(now())
+  comment   Comment  @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  member    Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@unique([commentId, memberId])
 }
 
 model Notification {
@@ -656,13 +673,28 @@ model PollLike {
 }
 
 model PollComment {
-  id         Int      @id @default(autoincrement())
+  id         Int               @id @default(autoincrement())
   content    String
   authorName String
   authorRole String?
   pollId     Int
-  createdAt  DateTime @default(now())
-  poll       Poll     @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  parentId   Int?
+  createdAt  DateTime          @default(now())
+  poll       Poll              @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  parent     PollComment?      @relation("PollCommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies    PollComment[]     @relation("PollCommentReplies")
+  likesList  PollCommentLike[]
+}
+
+model PollCommentLike {
+  id            Int         @id @default(autoincrement())
+  pollCommentId Int
+  memberId      Int
+  createdAt     DateTime    @default(now())
+  pollComment   PollComment @relation(fields: [pollCommentId], references: [id], onDelete: Cascade)
+  member        Member      @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@unique([pollCommentId, memberId])
 }
 
 model PollReport {

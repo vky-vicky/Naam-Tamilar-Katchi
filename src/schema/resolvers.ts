@@ -84,6 +84,38 @@ function safeResolver<T>(fn: (...args: any[]) => Promise<T>) {
   };
 }
 
+// Helper to parse flexible date formats: DDMMYYYY, DD/MM/YYYY, DD-MM-YYYY, YYYY-MM-DD, ISO
+function parseFlexibleDate(dateStr: string): Date {
+  if (!dateStr) throw new Error('Date is required');
+  const s = dateStr.trim();
+
+  // DDMMYYYY (e.g. "23062026")
+  if (/^\d{8}$/.test(s)) {
+    const day   = parseInt(s.substring(0, 2), 10);
+    const month = parseInt(s.substring(2, 4), 10) - 1;
+    const year  = parseInt(s.substring(4, 8), 10);
+    const d = new Date(year, month, day);
+    if (isNaN(d.getTime())) throw new Error(`Invalid date: ${dateStr}`);
+    return d;
+  }
+
+  // DD/MM/YYYY or DD-MM-YYYY
+  const dmyMatch = s.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
+  if (dmyMatch) {
+    const day   = parseInt(dmyMatch[1]!, 10);
+    const month = parseInt(dmyMatch[2]!, 10) - 1;
+    const year  = parseInt(dmyMatch[3]!, 10);
+    const d = new Date(year, month, day);
+    if (isNaN(d.getTime())) throw new Error(`Invalid date: ${dateStr}`);
+    return d;
+  }
+
+  // Standard ISO / any other format
+  const d = new Date(s);
+  if (isNaN(d.getTime())) throw new Error(`Invalid date format: ${dateStr}. Use DDMMYYYY, DD/MM/YYYY or YYYY-MM-DD`);
+  return d;
+}
+
 // Helper to get all child location IDs without one DB query per tree node.
 async function getChildLocationIds(locationId: number): Promise<number[]> {
   const numericLocationId = Number(locationId);
@@ -832,23 +864,28 @@ async function getOrCreateMemberForUser(user: any) {
   });
   if (!userRec) return null;
 
-  let member = await (prisma as any).member.findUnique({ where: { phone: userRec.phone } });
+  let member = await (prisma as any).member.findFirst({ where: { phone: userRec.phone } });
   if (!member) {
-    member = await (prisma as any).member.create({
-      data: {
-        name: userRec.name,
-        surname: userRec.surname,
-        phone: userRec.phone,
-        role: userRec.role === 'SUPER_ADMIN' ? 'SUPER_ADMIN' : (userRec.role === 'ADMIN' ? 'ADMIN' : (userRec.role === 'SUB_ADMIN' ? 'SUB_ADMIN' : 'Member')),
-        locationId: userRec.locationId || 1,
-        approvalStatus: 'APPROVED',
-        isActive: true,
-        district: userRec.district,
-        constituency: userRec.constituency,
-        area: userRec.area,
-        street: userRec.street
-      }
-    });
+    try {
+      member = await (prisma as any).member.create({
+        data: {
+          name: userRec.name,
+          surname: userRec.surname,
+          phone: userRec.phone,
+          role: userRec.role === 'SUPER_ADMIN' ? 'SUPER_ADMIN' : (userRec.role === 'ADMIN' ? 'ADMIN' : (userRec.role === 'SUB_ADMIN' ? 'SUB_ADMIN' : 'Member')),
+          locationId: userRec.locationId || 1,
+          approvalStatus: 'APPROVED',
+          isActive: true,
+          district: userRec.district,
+          constituency: userRec.constituency,
+          area: userRec.area,
+          street: userRec.street
+        }
+      });
+    } catch (e: any) {
+      member = await (prisma as any).member.findFirst({ where: { phone: userRec.phone } });
+      if (!member) throw e;
+    }
   }
   return member;
 }
@@ -4218,12 +4255,14 @@ export const resolvers = {
 
       let creatorId = dbUser.id;
 
+      const parsedDate = parseFlexibleDate(date);
+
       // 4. Create the event with a GUARANTEED valid creatorId
       const event = await (prisma as any).event.create({
         data: {
           title,
           description,
-          date: new Date(date),
+          date: parsedDate,
           locationId: Number(locationId),
           createdById: Number(creatorId)
         },
@@ -6101,25 +6140,28 @@ export const resolvers = {
       }
 
       // Enforce role-based location lock constraints for poll creation
-      if (role === 'MEMBER') {
-        if (!userLocId || targetLocIdNum !== userLocId) {
-          throw new Error(I18nService.translate("member_outside_scope" as any, context?.language));
-        }
-      } else if (role === 'ADMIN') {
-        if (!userLocId) {
-          throw new Error(I18nService.translate("admin_no_scope", context?.language));
-        }
-        const targetAncestors = await getAncestorLocationIds(targetLocIdNum);
-        if (!targetAncestors.includes(userLocId)) {
-          throw new Error(I18nService.translate("admin_outside_scope", context?.language));
-        }
-      } else if (role === 'SUB_ADMIN') {
-        if (!userLocId) {
-          throw new Error(I18nService.translate("subadmin_no_scope", context?.language));
-        }
-        const targetAncestors = await getAncestorLocationIds(targetLocIdNum);
-        if (!targetAncestors.includes(userLocId)) {
-          throw new Error(I18nService.translate("subadmin_outside_scope", context?.language));
+      // Skip location lock for community polls - they use community's location
+      if (!communityId) {
+        if (role === 'MEMBER') {
+          if (!userLocId || targetLocIdNum !== userLocId) {
+            throw new Error(I18nService.translate("member_outside_scope" as any, context?.language));
+          }
+        } else if (role === 'ADMIN') {
+          if (!userLocId) {
+            throw new Error(I18nService.translate("admin_no_scope", context?.language));
+          }
+          const targetAncestors = await getAncestorLocationIds(targetLocIdNum);
+          if (!targetAncestors.includes(userLocId)) {
+            throw new Error(I18nService.translate("admin_outside_scope", context?.language));
+          }
+        } else if (role === 'SUB_ADMIN') {
+          if (!userLocId) {
+            throw new Error(I18nService.translate("subadmin_no_scope", context?.language));
+          }
+          const targetAncestors = await getAncestorLocationIds(targetLocIdNum);
+          if (!targetAncestors.includes(userLocId)) {
+            throw new Error(I18nService.translate("subadmin_outside_scope", context?.language));
+          }
         }
       }
       
@@ -6157,20 +6199,27 @@ export const resolvers = {
          }
 
          // Also inject it into the community chat stream
-         const chatMsg = await (prisma as any).communityMessage.create({
-           data: {
-             communityId: Number(communityId),
-             senderId: createdById || memberId || 1,
-             senderType: createdById ? 'USER' : 'MEMBER',
-             message: question,
-             messageType: 'POLL',
-             metadata: { pollId: poll.id }
-           },
-           include: { replyTo: true, reactions: true }
-         });
-         if (io) {
-           const payload = await formatCommunityMessage(chatMsg);
-           io.to(`community:${communityId}`).emit('communityMessage', payload);
+         const senderId = createdById || memberId;
+         if (senderId) {
+           try {
+             const chatMsg = await (prisma as any).communityMessage.create({
+               data: {
+                 communityId: Number(communityId),
+                 senderId,
+                 senderType: createdById ? 'USER' : 'MEMBER',
+                 message: question,
+                 messageType: 'POLL',
+                 metadata: { pollId: poll.id }
+               },
+               include: { replyTo: true, reactions: true }
+             });
+             if (io) {
+               const payload = await formatCommunityMessage(chatMsg);
+               io.to(`community:${communityId}`).emit('communityMessage', payload);
+             }
+           } catch (chatErr) {
+             console.error('Failed to create community chat message for poll:', chatErr);
+           }
          }
       } else if (finalLocationId) {
          await sendSystemNotification({
@@ -6332,16 +6381,59 @@ export const resolvers = {
       return poll;
     },
 
-    addPollComment: async (_: any, { pollId, content, authorName, authorRole }: any) => {
+    addPollComment: async (_: any, { pollId, content, authorName, authorRole, parentId }: any) => {
       const comment = await (prisma as any).pollComment.create({
         data: {
           pollId,
           content,
           authorName,
-          authorRole
+          authorRole,
+          parentId: parentId ? Number(parentId) : null
         }
       });
       return comment;
+    },
+
+    likePollComment: async (_: any, { pollCommentId }: any, context: any) => {
+      const lang = context?.language || 'en';
+      if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", lang));
+
+      const member = await getOrCreateMemberForUser(context.user);
+      if (!member) throw new Error("Member profile not found");
+
+      const pCommentId = Number(pollCommentId);
+      const memberId = member.id;
+
+      const existingLike = await (prisma as any).pollCommentLike.findUnique({
+        where: {
+          pollCommentId_memberId: {
+            pollCommentId: pCommentId,
+            memberId
+          }
+        }
+      });
+
+      if (existingLike) {
+        await (prisma as any).pollCommentLike.delete({
+          where: {
+            pollCommentId_memberId: {
+              pollCommentId: pCommentId,
+              memberId
+            }
+          }
+        });
+      } else {
+        await (prisma as any).pollCommentLike.create({
+          data: {
+            pollCommentId: pCommentId,
+            memberId
+          }
+        });
+      }
+
+      return (prisma as any).pollComment.findUnique({
+        where: { id: pCommentId }
+      });
     },
 
     reportPoll: async (_: any, { pollId, reason }: any, context: any) => {
@@ -6633,13 +6725,56 @@ export const resolvers = {
       return updatedPost;
     },
 
-    addComment: async (_: any, { postId, content, authorName, authorRole }: any) => {
+    likeComment: async (_: any, { commentId }: any, context: any) => {
+      const lang = context?.language || 'en';
+      if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", lang));
+
+      const member = await getOrCreateMemberForUser(context.user);
+      if (!member) throw new Error("Member profile not found");
+
+      const cId = Number(commentId);
+      const memberId = member.id;
+
+      const existingLike = await (prisma as any).commentLike.findUnique({
+        where: {
+          commentId_memberId: {
+            commentId: cId,
+            memberId
+          }
+        }
+      });
+
+      if (existingLike) {
+        await (prisma as any).commentLike.delete({
+          where: {
+            commentId_memberId: {
+              commentId: cId,
+              memberId
+            }
+          }
+        });
+      } else {
+        await (prisma as any).commentLike.create({
+          data: {
+            commentId: cId,
+            memberId
+          }
+        });
+      }
+
+      return (prisma as any).comment.findUnique({
+        where: { id: cId }
+      });
+    },
+
+    addComment: async (_: any, { postId, content, authorName, authorRole, parentId }: any) => {
       const comment = await (prisma as any).comment.create({
         data: {
           postId,
           content,
           authorName,
-          authorRole
+          authorRole,
+          parentId: parentId ? Number(parentId) : null
         }
       });
       
@@ -6768,24 +6903,38 @@ export const resolvers = {
     },
 
     joinCommunity: async (_: any, { communityId, memberId }: any, context: any) => {
-      let resolvedMemberId = memberId;
+      const parsedCommunityId = Number(communityId);
+      let resolvedMemberId = memberId ? Number(memberId) : null;
+
       if (!resolvedMemberId && context?.user) {
+        if (context.user.type === 'admin') {
+          throw new Error('Admin users cannot join communities as members');
+        }
         resolvedMemberId = Number(context.user.id);
       }
-      if (!resolvedMemberId) {
+
+      if (!resolvedMemberId || isNaN(resolvedMemberId)) {
         throw new Error('Member ID is required to join community');
+      }
+
+      // Verify the member exists before joining
+      const memberExists = await (prisma as any).member.findUnique({
+        where: { id: resolvedMemberId }
+      });
+      if (!memberExists) {
+        throw new Error('Member not found. Please check your login.');
       }
 
       await (prisma as any).communityMember.upsert({
         where: {
           communityId_memberId: {
-            communityId,
+            communityId: parsedCommunityId,
             memberId: resolvedMemberId
           }
         },
         update: {},
         create: {
-          communityId,
+          communityId: parsedCommunityId,
           memberId: resolvedMemberId
         }
       });
@@ -6793,18 +6942,23 @@ export const resolvers = {
     },
 
     leaveCommunity: async (_: any, { communityId, memberId }: any, context: any) => {
-      let resolvedMemberId = memberId;
+      const parsedCommunityId = Number(communityId);
+      let resolvedMemberId = memberId ? Number(memberId) : null;
+
       if (!resolvedMemberId && context?.user) {
+        if (context.user.type === 'admin') {
+          throw new Error('Admin users cannot leave communities as members');
+        }
         resolvedMemberId = Number(context.user.id);
       }
-      if (!resolvedMemberId) {
+      if (!resolvedMemberId || isNaN(resolvedMemberId)) {
         throw new Error('Member ID is required to leave community');
       }
 
       const existing = await (prisma as any).communityMember.findUnique({
         where: {
           communityId_memberId: {
-            communityId,
+            communityId: parsedCommunityId,
             memberId: resolvedMemberId
           }
         }
@@ -6814,7 +6968,7 @@ export const resolvers = {
       await (prisma as any).communityMember.delete({
         where: {
           communityId_memberId: {
-            communityId,
+            communityId: parsedCommunityId,
             memberId: resolvedMemberId
           }
         }
@@ -8258,7 +8412,30 @@ export const resolvers = {
   },
 
   PollComment: {
-    createdAt: (parent: any) => toIsoString(parent.createdAt)
+    createdAt: (parent: any) => toIsoString(parent.createdAt),
+    replies: async (parent: any) => {
+      return (prisma as any).pollComment.findMany({
+        where: { parentId: parent.id },
+        orderBy: { createdAt: 'desc' }
+      });
+    },
+    likesCount: async (parent: any) => {
+      return (prisma as any).pollCommentLike.count({
+        where: { pollCommentId: parent.id }
+      });
+    },
+    isLiked: async (parent: any, _: any, context: any) => {
+      if (!context?.user) return false;
+      const member = await getOrCreateMemberForUser(context.user);
+      if (!member) return false;
+      const count = await (prisma as any).pollCommentLike.count({
+        where: {
+          pollCommentId: parent.id,
+          memberId: member.id
+        }
+      });
+      return count > 0;
+    }
   },
 
   PollLike: {
@@ -8316,6 +8493,29 @@ export const resolvers = {
         role: parent.authorRole || 'MEMBER',
         image: null
       };
+    },
+    replies: async (parent: any) => {
+      return (prisma as any).comment.findMany({
+        where: { parentId: parent.id },
+        orderBy: { createdAt: 'desc' }
+      });
+    },
+    likesCount: async (parent: any) => {
+      return (prisma as any).commentLike.count({
+        where: { commentId: parent.id }
+      });
+    },
+    isLiked: async (parent: any, _: any, context: any) => {
+      if (!context?.user) return false;
+      const member = await getOrCreateMemberForUser(context.user);
+      if (!member) return false;
+      const count = await (prisma as any).commentLike.count({
+        where: {
+          commentId: parent.id,
+          memberId: member.id
+        }
+      });
+      return count > 0;
     }
   },
 
