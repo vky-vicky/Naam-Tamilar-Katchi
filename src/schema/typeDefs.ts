@@ -70,6 +70,7 @@ export const typeDefs = gql`
   type Location {
     id: Int!
     name: String!
+    nameEn: String
     type: LocationType!
     parentId: Int
     parent: Location
@@ -109,11 +110,13 @@ export const typeDefs = gql`
     constituency: String
     area: String
     street: String
+    fcmToken: String
   }
 
   type Profession {
     id: Int!
     name: String!
+    nameEn: String
   }
 
   type Member {
@@ -144,6 +147,7 @@ export const typeDefs = gql`
     constituency: String
     area: String
     street: String
+    fcmToken: String
   }
 
 

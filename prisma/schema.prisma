@@ -9,6 +9,7 @@ datasource db {
 model Location {
   id            Int                @id @default(autoincrement())
   name          String
+  nameEn        String?
   type          LocationType
   parentId      Int?
   password      String?
@@ -92,6 +93,7 @@ model Member {
 model Profession {
   id        Int      @id @default(autoincrement())
   name      String   @unique
+  nameEn    String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   members   Member[]
@@ -405,7 +407,9 @@ model Community {
   role                UserRole?
   locationId          Int?
   name                String             @unique
+  nameEn              String?
   description         String?
+  descriptionEn       String?
   image               String?
   allowMemberMessages Boolean            @default(true)
   isMuted             Boolean            @default(false)

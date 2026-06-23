@@ -133,6 +133,8 @@ export async function sendNotificationToLocation(
     const ancestorIds = await getAncestorLocationIdsForFCM(numericLocationId);
     const targetLocations = Array.from(new Set([numericLocationId, ...childIds, ...ancestorIds]));
 
+    console.log(`[FCM] Target locations for notification: ${targetLocations.join(', ')}`);
+
     const [users, members, superAdminUsers, superAdminMembers] = await Promise.all([
       (prisma as any).user.findMany({
         where: { locationId: { in: targetLocations }, fcmToken: { not: null } },
@@ -152,6 +154,8 @@ export async function sendNotificationToLocation(
       })
     ]);
 
+    console.log(`[FCM] Found tokens — Users: ${users.length}, Members: ${members.length}, SuperAdminUsers: ${superAdminUsers.length}`);
+
     const tokens = [
       ...users.map((u: any) => u.fcmToken as string),
       ...members.map((m: any) => m.fcmToken as string),
@@ -162,10 +166,12 @@ export async function sendNotificationToLocation(
     const uniqueTokens = Array.from(new Set<string>(tokens as string[]));
 
     if (uniqueTokens.length === 0) {
-      console.log(`[FCM] No FCM tokens found for location ${numericLocationId} and its children.`);
+      console.warn(`[FCM] ⚠️ No FCM tokens found for location ${numericLocationId}. Notification NOT sent.`);
+      console.warn(`[FCM] ⚠️ Make sure members have called updateFcmToken after login!`);
       return;
     }
 
+    console.log(`[FCM] Sending "${title}" to ${uniqueTokens.length} unique device(s)...`);
     const stringData = formatDataPayload(data);
     const batchSize = 500;
 
@@ -182,7 +188,22 @@ export async function sendNotificationToLocation(
         tokens: batchTokens
       };
 
-      await admin.messaging().sendEachForMulticast(message);
+      const response = await admin.messaging().sendEachForMulticast(message);
+      console.log(`[FCM] ✅ Sent batch ${Math.floor(i/batchSize)+1}: Success=${response.successCount}, Failure=${response.failureCount}`);
+      response.responses.forEach((res, idx) => {
+        if (!res.success) {
+          console.error(`[FCM] ❌ Token failed [${batchTokens[idx]?.substring(0,20)}...]: ${res.error?.message}`);
+          // Clean up invalid tokens
+          if (res.error?.code === 'messaging/registration-token-not-registered' ||
+              res.error?.code === 'messaging/invalid-registration-token') {
+            const badToken = batchTokens[idx];
+            if (badToken) {
+              (prisma as any).member.updateMany({ where: { fcmToken: badToken }, data: { fcmToken: null } }).catch(() => {});
+              (prisma as any).user.updateMany({ where: { fcmToken: badToken }, data: { fcmToken: null } }).catch(() => {});
+            }
+          }
+        }
+      });
     }
   } catch (error) {
     console.error('[FCM] Error sending FCM notification:', error);
