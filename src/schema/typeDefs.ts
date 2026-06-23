@@ -578,7 +578,7 @@ export const typeDefs = gql`
     getContributionAnalytics: ContributionAnalytics!
     getPendingPayments(district: String, constituency: String, area: String): [PendingPayment!]!
     getContributionLeaderboard: ContributionLeaderboard!
-    getReportedPosts(status: ReportStatus): [PostReport!]!
+    getReportedPosts(locationId: Int, status: String): [Post!]!
     getReportedCommunityPosts(status: ReportStatus): [CommunityPostReport!]!
     getReportedPolls(status: ReportStatus): [PollReport!]!
     getUserWarnings(memberId: Int!): [UserWarning!]!

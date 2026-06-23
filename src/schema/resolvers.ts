@@ -1575,51 +1575,8 @@ export const resolvers = {
       };
     },
 
-    getReportedPosts: async (_: any, { status }: any, context: any) => {
-      const lang = context?.language || 'en';
-      if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", lang));
-
-      const role = context.user.role;
-      const userLocId = context.user.locationId;
-
-      if (role === 'MEMBER') {
-        throw new Error("Unauthorized: Only administrators can view reports.");
-      }
-
-      // Hierarchy rules for location levels
-      let allowedTypes: string[] = [];
-      if (role === 'SUB_ADMIN') {
-        allowedTypes = ['STREET', 'AREA'];
-      } else if (role === 'ADMIN') {
-        allowedTypes = ['TALUK', 'DISTRICT'];
-      } else if (role === 'SUPER_ADMIN') {
-        allowedTypes = ['STATE', 'DISTRICT', 'TALUK', 'AREA', 'STREET'];
-      }
-
-      let locationFilter: any = {};
-      if (role !== 'SUPER_ADMIN') {
-        if (!userLocId) return [];
-        const childIds = await getChildLocationIds(userLocId);
-        locationFilter = {
-          locationId: { in: [userLocId, ...childIds] }
-        };
-      }
-
-      const whereClause: any = {
-        status: status || 'PENDING',
-        post: {
-          ...locationFilter,
-          location: {
-            type: { in: allowedTypes }
-          }
-        }
-      };
-
-      return (prisma as any).postReport.findMany({
-        where: whereClause,
-        orderBy: { createdAt: 'desc' },
-        include: { post: true, reportedBy: true }
-      });
+    getReportedPosts: async (_: any, args: any, context: any) => {
+      return resolvers.Query.getReportedPostsList(_, args, context);
     },
 
     getModerationDashboardStats: async (_: any, { locationId }: any, context: any) => {
