@@ -6534,14 +6534,15 @@ export const resolvers = {
       return true;
     },
 
-    likePost: async (_: any, { id }: any, context: any) => {
+    likePost: async (_: any, { id, postId: inputPostId }: any, context: any) => {
       const lang = context?.language || 'en';
       if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", lang));
 
       const member = await getOrCreateMemberForUser(context.user);
       if (!member) throw new Error("Member profile not found");
 
-      const postId = Number(id);
+      const postId = Number(id || inputPostId);
+      if (!postId) throw new Error("Post ID is required");
       const memberId = member.id;
 
       // Check if user already liked the post

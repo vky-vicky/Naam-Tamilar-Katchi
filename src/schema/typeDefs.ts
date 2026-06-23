@@ -78,6 +78,7 @@ export const typeDefs = gql`
     childCount: Int!
     events: [Event!]!
     requests: [EmergencyRequest!]!
+    password: String
   }
 
   type LocationNode {
@@ -757,7 +758,7 @@ export const typeDefs = gql`
     ): PollComment!
     reportPoll(pollId: Int!, reason: String!): PollReport!
     resolvePollReport(reportId: Int!, action: ReportAction!, warningMessage: String): Boolean!
-    likePost(id: Int!): Post!
+    likePost(id: Int, postId: Int): Post!
     addComment(
       postId: Int!
       content: String!
