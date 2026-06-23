@@ -438,6 +438,23 @@ function buildNotificationActions(type: string, entity: any) {
   return [{ key: 'SHARE', label: 'Share', style: 'secondary' }];
 }
 
+async function getUserJoinedAt(context: any): Promise<Date | null> {
+  if (!context?.user) return null;
+  if (context.user.type === 'admin') {
+    const adminUser = await (prisma as any).user.findUnique({
+      where: { id: Number(context.user.id) },
+      select: { createdAt: true }
+    });
+    return adminUser ? adminUser.createdAt : null;
+  } else {
+    const memberUser = await (prisma as any).member.findUnique({
+      where: { id: Number(context.user.id) },
+      select: { createdAt: true }
+    });
+    return memberUser ? memberUser.createdAt : null;
+  }
+}
+
 async function getBroadcastListForContext({ locationId, scope, broadcastId, isActive }: any, context: any) {
   const user = context.user;
   if (!user) return [];
@@ -479,6 +496,11 @@ async function getBroadcastListForContext({ locationId, scope, broadcastId, isAc
     where.isActive = true;
   } else if (isActive !== undefined && isActive !== null) {
     where.isActive = Boolean(isActive);
+  }
+
+  const joinedAt = await getUserJoinedAt(context);
+  if (joinedAt) {
+    where.createdAt = { gte: joinedAt };
   }
 
   const broadcasts = await (prisma as any).broadcast.findMany({
@@ -2700,10 +2722,29 @@ export const resolvers = {
       const deletedIds = deletedNotifications.map((dn: any) => dn.notificationId);
       where.id = { notIn: deletedIds };
 
-      return (prisma as any).notification.findMany({
+      const notifications = await (prisma as any).notification.findMany({
         where,
         include: { location: true, createdBy: true },
         orderBy: { createdAt: 'desc' }
+      });
+
+      // Filter out MEMBER_REQUEST notifications that are not meant for the user's role
+      return notifications.filter((notif: any) => {
+        const notifType = String(notif.type || '').toUpperCase();
+        if (notifType === 'MEMBER_REQUEST') {
+          const msg = String(notif.message || notif.purpose || '').toLowerCase();
+          if (msg.includes('super admin')) {
+            return role === 'SUPER_ADMIN';
+          }
+          if (msg.includes('pending admin review') || msg.includes('escalate to admin')) {
+            return role === 'ADMIN' || role === 'SUPER_ADMIN';
+          }
+          if (msg.includes('sub admin')) {
+            return role === 'SUB_ADMIN' || role === 'ADMIN' || role === 'SUPER_ADMIN';
+          }
+          return role === 'SUB_ADMIN' || role === 'ADMIN' || role === 'SUPER_ADMIN';
+        }
+        return true;
       });
     },
 
@@ -2717,6 +2758,23 @@ export const resolvers = {
         include: { location: true, createdBy: true }
       });
       if (!notification) return null;
+
+      const role = context.user.role;
+      const notifType = String(notification.type || '').toUpperCase();
+      if (notifType === 'MEMBER_REQUEST') {
+        const msg = String(notification.message || notification.purpose || '').toLowerCase();
+        let isAuthorized = true;
+        if (msg.includes('super admin') && role !== 'SUPER_ADMIN') {
+          isAuthorized = false;
+        } else if ((msg.includes('pending admin review') || msg.includes('escalate to admin')) && role !== 'ADMIN' && role !== 'SUPER_ADMIN') {
+          isAuthorized = false;
+        } else if (msg.includes('sub admin') && role !== 'SUB_ADMIN' && role !== 'ADMIN' && role !== 'SUPER_ADMIN') {
+          isAuthorized = false;
+        } else if (role === 'MEMBER') {
+          isAuthorized = false;
+        }
+        if (!isAuthorized) return null;
+      }
 
       // Check if the notification was created before the user's registration (joinedAt)
       let joinedAt: Date | null = null;
@@ -2746,7 +2804,6 @@ export const resolvers = {
       });
       if (isDeleted) return null;
 
-      const role = context.user.role;
       const userLocId = context.user.locationId;
       if (role === 'ADMIN' || role === 'SUB_ADMIN') {
         if (!userLocId) throw new Error('Unauthorized notification scope');
@@ -2919,6 +2976,11 @@ export const resolvers = {
         const childIds = await getChildLocationIds(locationId);
         const allLocationIds = [...ancestorIds, locationId, ...childIds];
         where.locationId = { in: allLocationIds };
+      }
+
+      const joinedAt = await getUserJoinedAt(context);
+      if (joinedAt) {
+        where.createdAt = { gte: joinedAt };
       }
 
       const userRole = context?.user?.role;
@@ -6831,26 +6893,25 @@ export const resolvers = {
           const broadcastMsg = `📢 *${community.name}*\n🌟 *${title}*\n\n${content}`;
           await whatsappService.sendMessage(phoneNumbers, broadcastMsg);
 
-          for (const m of members) {
-            await (prisma as any).notification.create({
-              data: {
-                title: `${community.name}: ${title}`,
-                message: content,
-                type: 'COMMUNITY',
-                locationId: m.member.locationId,
-                createdById: isMember ? null : Number(context.user.id),
-                purpose: 'Share a community post with members in this group.',
-                entityType: 'COMMUNITY_POST',
-                entityId: post.id,
-                status: 'ACTIVE',
-                metadata: {
-                  communityId: Number(communityId),
-                  category: category || "Information"
-                },
-                time: 'Just now'
-              }
-            });
-          }
+          // Create a single notification for the community post to prevent duplication
+          await (prisma as any).notification.create({
+            data: {
+              title: `${community.name}: ${title}`,
+              message: content,
+              type: 'COMMUNITY',
+              locationId: community.locationId || context.user.locationId || 1,
+              createdById: isMember ? null : Number(context.user.id),
+              purpose: 'Share a community post with members in this group.',
+              entityType: 'COMMUNITY_POST',
+              entityId: post.id,
+              status: 'ACTIVE',
+              metadata: {
+                communityId: Number(communityId),
+                category: category || "Information"
+              },
+              time: 'Just now'
+            }
+          });
 
           sendNotificationToCommunity(
             Number(communityId),
