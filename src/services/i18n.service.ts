@@ -26,8 +26,8 @@ const translations = {
     ta: 'துணை நிர்வாகி (Sub Admin) பொறுப்பிற்கு பகுதி அல்லது தெருவைத் தேர்ந்தெடுப்பது கட்டாயமாகும்.'
   },
   subadmin_level_error: {
-    en: 'Sub Admin role can only be assigned at District, Taluk, or Area level.',
-    ta: 'துணை நிர்வாகி (Sub Admin) பொறுப்பை மாவட்டம், தாலுகா அல்லது பகுதி அளவிலான இடத்திற்கு மட்டுமே ஒதுக்க முடியும்.'
+    en: 'Sub Admin role can only be assigned at District, Taluk, Area, or Street level.',
+    ta: 'துணை நிர்வாகி (Sub Admin) பொறுப்பை மாவட்டம், தாலுகா, பகுதி அல்லது தெரு அளவிலான இடத்திற்கு மட்டுமே ஒதுக்க முடியும்.'
   },
   user_not_found: {
     en: 'User not found',

@@ -638,7 +638,7 @@ async function validateRoleLocationLevel(role: string, locationId: number, lang:
       throw new Error(I18nService.translate("admin_level_error" as any, lang));
     }
   } else if (normRole === 'SUB_ADMIN') {
-    if (type !== 'DISTRICT' && type !== 'TALUK' && type !== 'AREA') {
+    if (type !== 'DISTRICT' && type !== 'TALUK' && type !== 'AREA' && type !== 'STREET') {
       throw new Error(I18nService.translate("subadmin_level_error" as any, lang));
     }
   } else if (normRole === 'MEMBER') {
