@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "main": "dist/index.js",
-    "scripts": {
+  "scripts": {
     "dev": "nodemon --watch src --ext ts,json --exec npx tsx src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
@@ -35,6 +35,7 @@
     "@prisma/client": "^7.8.0",
     "@types/cors": "^2.8.19",
     "body-parser": "^2.2.2",
+    "cloudinary": "^2.10.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^4.22.1",

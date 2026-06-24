@@ -5,6 +5,7 @@ import { I18nService } from '../services/i18n.service.js';
 import { sendNotificationToLocation, sendNotificationToCommunity, sendNotificationToToken } from '../services/fcm.service.js';
 import { ContributionService } from '../services/contribution.service.js';
 import { RazorpayService } from '../services/razorpay.service.js';
+import { uploadToCloudinary } from '../services/cloudinary.service.js';
 
 function getReadableError(err: any, lang: string = 'en') {
   const prismaCode = err?.code;
@@ -116,19 +117,27 @@ function parseFlexibleDate(dateStr: string): Date {
   return d;
 }
 
-function validateImageUrls(urls: string | string[] | null | undefined) {
-  if (!urls) return;
+async function processAndValidateImageUrls(urls: string | string[] | null | undefined): Promise<string[]> {
+  if (!urls) return [];
   const urlList = Array.isArray(urls) ? urls : [urls];
+  const processedUrls: string[] = [];
+
   for (const url of urlList) {
     if (url && typeof url === 'string') {
       const trimmed = url.trim();
       if (trimmed !== '') {
-        if (trimmed.startsWith('file://') || trimmed.startsWith('/') || (!trimmed.startsWith('http://') && !trimmed.startsWith('https://'))) {
-          throw new Error('Invalid image URL: All images must be uploaded to the server and start with http:// or https://');
+        if (trimmed.startsWith('data:') || (trimmed.length > 200 && !trimmed.startsWith('http'))) {
+          const cloudinaryUrl = await uploadToCloudinary(trimmed);
+          processedUrls.push(cloudinaryUrl);
+        } else if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+          processedUrls.push(trimmed);
+        } else {
+          throw new Error('Invalid image: Images must be uploaded to the server or sent as base64. Local paths (file://) are not allowed.');
         }
       }
     }
   }
+  return processedUrls;
 }
 
 // Helper to get all child location IDs without one DB query per tree node.
@@ -1547,10 +1556,10 @@ export const resolvers = {
         allUsers,
         pendingFromMemberTable,
         pendingFromUserTable,
-        newMembersTodayFromMember,
-        newMembersTodayFromUser,
-        approvedOrRejectedTodayFromMember,
-        approvedOrRejectedTodayFromUser,
+        newMembersTodayFromMemberList,
+        newMembersTodayFromUserList,
+        approvedOrRejectedTodayFromMemberList,
+        approvedOrRejectedTodayFromUserList,
         totalTowns,
         totalStreets,
         activeEvents,
@@ -1576,20 +1585,24 @@ export const resolvers = {
           where: { role: 'MEMBER', approvalStatus: 'PENDING', ...memberLocFilter }
         }),
         // New members today from Member table
-        (prisma as any).member.count({
-          where: { createdAt: { gte: todayStart, lte: todayEnd }, ...memberLocFilter }
+        (prisma as any).member.findMany({
+          where: { createdAt: { gte: todayStart, lte: todayEnd }, ...memberLocFilter },
+          select: { phone: true, role: true }
         }),
         // New members today from User table
-        (prisma as any).user.count({
-          where: { role: 'MEMBER', createdAt: { gte: todayStart, lte: todayEnd }, ...memberLocFilter }
+        (prisma as any).user.findMany({
+          where: { role: 'MEMBER', createdAt: { gte: todayStart, lte: todayEnd }, ...memberLocFilter },
+          select: { phone: true, role: true }
         }),
         // Approved/Rejected today from Member table
-        (prisma as any).member.count({
-          where: { approvalStatus: { in: ['APPROVED', 'REJECTED'] }, updatedAt: { gte: todayStart, lte: todayEnd }, ...memberLocFilter }
+        (prisma as any).member.findMany({
+          where: { approvalStatus: { in: ['APPROVED', 'REJECTED'] }, updatedAt: { gte: todayStart, lte: todayEnd }, ...memberLocFilter },
+          select: { phone: true, role: true }
         }),
         // Approved/Rejected today from User table
-        (prisma as any).user.count({
-          where: { role: 'MEMBER', approvalStatus: { in: ['APPROVED', 'REJECTED'] }, updatedAt: { gte: todayStart, lte: todayEnd }, ...memberLocFilter }
+        (prisma as any).user.findMany({
+          where: { role: 'MEMBER', approvalStatus: { in: ['APPROVED', 'REJECTED'] }, updatedAt: { gte: todayStart, lte: todayEnd }, ...memberLocFilter },
+          select: { phone: true, role: true }
         }),
         // Total Towns (AREA)
         (prisma as any).location.count({
@@ -1645,8 +1658,32 @@ export const resolvers = {
       const totalMembers = uniquePeople.filter(p => p.role === 'MEMBER').length;
 
       const pendingApprovals = pendingFromMemberTable + pendingFromUserTable;
-      const newMembersToday = newMembersTodayFromMember + newMembersTodayFromUser;
-      const approvedToday = approvedOrRejectedTodayFromMember + approvedOrRejectedTodayFromUser;
+
+      // Deduplicate New Members Today and filter by final resolved role (must be MEMBER, not promoted ADMIN)
+      const formattedNewMembers = newMembersTodayFromMemberList.map((m: any) => ({
+        phone: m.phone,
+        role: m.role ? m.role.toUpperCase() : 'MEMBER'
+      }));
+      const formattedNewUsers = newMembersTodayFromUserList.map((u: any) => ({
+        phone: u.phone,
+        role: u.role === 'Member' ? 'MEMBER' : (u.role ? u.role.toUpperCase() : 'MEMBER')
+      }));
+      const combinedNew = [...formattedNewMembers, ...formattedNewUsers];
+      const uniqueNew = Array.from(new Map(combinedNew.map(item => [item.phone, item])).values());
+      const newMembersToday = uniqueNew.filter(p => p.role === 'MEMBER').length;
+
+      // Deduplicate Approved Today and filter by final resolved role (must be MEMBER, not promoted ADMIN)
+      const formattedApprovedMembers = approvedOrRejectedTodayFromMemberList.map((m: any) => ({
+        phone: m.phone,
+        role: m.role ? m.role.toUpperCase() : 'MEMBER'
+      }));
+      const formattedApprovedUsers = approvedOrRejectedTodayFromUserList.map((u: any) => ({
+        phone: u.phone,
+        role: u.role === 'Member' ? 'MEMBER' : (u.role ? u.role.toUpperCase() : 'MEMBER')
+      }));
+      const combinedApproved = [...formattedApprovedMembers, ...formattedApprovedUsers];
+      const uniqueApproved = Array.from(new Map(combinedApproved.map(item => [item.phone, item])).values());
+      const approvedToday = uniqueApproved.filter(p => p.role === 'MEMBER').length;
 
       return {
         locationName,
@@ -5373,7 +5410,7 @@ export const resolvers = {
 
     createPost: async (_: any, args: any, context: any) => {
       const postImages = args.images || (args.image ? [args.image] : []);
-      validateImageUrls(postImages);
+      const processedImages = await processAndValidateImageUrls(postImages);
       const createdById = context?.user ? Number(context.user.id) : null;
       const createdByType = context?.user?.type || null;
 
@@ -5386,7 +5423,7 @@ export const resolvers = {
         data: {
           content: finalContent,
           category: args.category || "Discussion",
-          images: postImages,
+          images: processedImages,
           authorName: args.authorName,
           authorRole: args.authorRole,
           locationId: args.locationId,
@@ -5404,9 +5441,6 @@ export const resolvers = {
     },
 
     editPost: async (_: any, { id, content, images }: any, context: any) => {
-      if (images) {
-        validateImageUrls(images);
-      }
       const lang = context?.language || 'en';
       if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", lang));
 
@@ -5422,11 +5456,16 @@ export const resolvers = {
         throw new Error("Unauthorized: Only the creator of the post can edit it.");
       }
 
+      let processedImages = post.images;
+      if (images) {
+        processedImages = await processAndValidateImageUrls(images);
+      }
+
       return (prisma as any).post.update({
         where: { id: post.id },
         data: {
           content,
-          images: images || post.images
+          images: processedImages
         }
       });
     },
@@ -7079,9 +7118,7 @@ export const resolvers = {
       return true;
     },
     createCommunityPost: async (_: any, { communityId, title, content, category, images, documents }: any, context: any) => {
-      if (images) {
-        validateImageUrls(images);
-      }
+      const processedImages = await processAndValidateImageUrls(images);
       if (!context.user) throw new Error(I18nService.translate("unauthorized_login", context?.language));
       
       if (!title || title.trim() === '') {
@@ -7109,7 +7146,7 @@ export const resolvers = {
       }
 
       const combinedAttachments = [
-        ...(images || []),
+        ...processedImages,
         ...(documents || [])
       ];
 
