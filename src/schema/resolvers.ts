@@ -116,6 +116,21 @@ function parseFlexibleDate(dateStr: string): Date {
   return d;
 }
 
+function validateImageUrls(urls: string | string[] | null | undefined) {
+  if (!urls) return;
+  const urlList = Array.isArray(urls) ? urls : [urls];
+  for (const url of urlList) {
+    if (url && typeof url === 'string') {
+      const trimmed = url.trim();
+      if (trimmed !== '') {
+        if (trimmed.startsWith('file://') || trimmed.startsWith('/') || (!trimmed.startsWith('http://') && !trimmed.startsWith('https://'))) {
+          throw new Error('Invalid image URL: All images must be uploaded to the server and start with http:// or https://');
+        }
+      }
+    }
+  }
+}
+
 // Helper to get all child location IDs without one DB query per tree node.
 async function getChildLocationIds(locationId: number): Promise<number[]> {
   const numericLocationId = Number(locationId);
@@ -5358,6 +5373,7 @@ export const resolvers = {
 
     createPost: async (_: any, args: any, context: any) => {
       const postImages = args.images || (args.image ? [args.image] : []);
+      validateImageUrls(postImages);
       const createdById = context?.user ? Number(context.user.id) : null;
       const createdByType = context?.user?.type || null;
 
@@ -5388,6 +5404,9 @@ export const resolvers = {
     },
 
     editPost: async (_: any, { id, content, images }: any, context: any) => {
+      if (images) {
+        validateImageUrls(images);
+      }
       const lang = context?.language || 'en';
       if (!context?.user) throw new Error(I18nService.translate("unauthorized_login", lang));
 
@@ -7060,6 +7079,9 @@ export const resolvers = {
       return true;
     },
     createCommunityPost: async (_: any, { communityId, title, content, category, images, documents }: any, context: any) => {
+      if (images) {
+        validateImageUrls(images);
+      }
       if (!context.user) throw new Error(I18nService.translate("unauthorized_login", context?.language));
       
       if (!title || title.trim() === '') {
