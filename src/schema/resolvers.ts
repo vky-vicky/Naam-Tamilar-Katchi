@@ -1886,7 +1886,7 @@ export const resolvers = {
       }
 
       const memberRecord = await (prisma as any).member.findUnique({
-        where: { id },
+        where: { id: targetId },
         include: { location: true, profession: true }
       });
       if (memberRecord && memberRecord.role) {
@@ -3846,7 +3846,7 @@ export const resolvers = {
       }
 
       const updatedMember = await (prisma as any).member.update({
-        where: { id },
+        where: { id: targetId },
         data: data,
         include: { location: true, approvedBy: true }
       });
@@ -4198,13 +4198,14 @@ export const resolvers = {
           userUpdateFields.role = 'MEMBER';
           userUpdateFields.profession = professionName || targetUser.profession || null;
 
-          await (prisma as any).user.update({
+          const updatedUser = await (prisma as any).user.update({
             where: { id: targetId },
-            data: userUpdateFields
+            data: userUpdateFields,
+            include: { location: true }
           });
 
           await writeUpdateAuditLogs(context, isUserTable, targetId, currentPhone, rest, args, currentRole, targetRole, isRoleExplicitlyChanged, targetUser, targetMember);
-          return dbMember;
+          return userToMemberShape(updatedUser);
         }
       }
 
