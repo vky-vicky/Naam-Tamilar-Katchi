@@ -283,12 +283,18 @@ async function sendSystemNotification({
   metadata?: any;
   data?: any;
 }) {
+  let targetLocationId = Number(locationId);
+  const talukId = await findParentLocationOfType(targetLocationId, 'TALUK');
+  if (talukId) {
+    targetLocationId = talukId;
+  }
+
   const notification = await (prisma as any).notification.create({
     data: {
       title,
       message,
       type,
-      locationId,
+      locationId: targetLocationId,
       createdById: createdById || null,
       purpose: purpose || null,
       entityType: entityType || type,
@@ -349,7 +355,7 @@ async function sendSystemNotification({
     }
   }
 
-  await sendNotificationToLocation(locationId, title, message, {
+  await sendNotificationToLocation(targetLocationId, title, message, {
     ...data,
     type,
     notificationId: notification.id
@@ -4352,8 +4358,13 @@ export const resolvers = {
           data: { eventId: event.id }
         });
 
-        // 6. Retrieve phone numbers of all active members in this location & all its children
-        const allLocationIds = [Number(locationId), ...(await getChildLocationIds(Number(locationId)))];
+        // 6. Retrieve phone numbers of all active members in this location & all its children (expanded to TALUK level if applicable)
+        let targetLocId = Number(locationId);
+        const talukId = await findParentLocationOfType(targetLocId, 'TALUK');
+        if (talukId) {
+          targetLocId = talukId;
+        }
+        const allLocationIds = [targetLocId, ...(await getChildLocationIds(targetLocId))];
         
         const memberWhere: any = {
           locationId: { in: allLocationIds },
@@ -4411,8 +4422,13 @@ export const resolvers = {
         }
       });
 
-      // 5. Get all target location IDs (including all sub-locations recursively)
-      const allLocationIds = [Number(locationId), ...(await getChildLocationIds(Number(locationId)))];
+      // 5. Get all target location IDs (including all sub-locations recursively, expanded to TALUK level if applicable)
+      let targetLocId = Number(locationId);
+      const talukId = await findParentLocationOfType(targetLocId, 'TALUK');
+      if (talukId) {
+        targetLocId = talukId;
+      }
+      const allLocationIds = [targetLocId, ...(await getChildLocationIds(targetLocId))];
       
       const memberWhere: any = {
         locationId: { in: allLocationIds },
@@ -4491,10 +4507,15 @@ export const resolvers = {
         include: { location: true, createdBy: true },
       });
 
-      // Send WhatsApp broadcast to all unique active recipients in the target subtree
-      const targetIds = await getChildLocationIds(broadcast.locationId);
-      const allIds = [broadcast.locationId, ...targetIds];
-      const recipientCount = await getUniqueRecipientCount(broadcast.locationId);
+      // Send WhatsApp broadcast to all unique active recipients in the target subtree (expanded to TALUK level if applicable)
+      let targetLocId = Number(broadcast.locationId);
+      const talukId = await findParentLocationOfType(targetLocId, 'TALUK');
+      if (talukId) {
+        targetLocId = talukId;
+      }
+      const targetIds = await getChildLocationIds(targetLocId);
+      const allIds = [targetLocId, ...targetIds];
+      const recipientCount = await getUniqueRecipientCount(targetLocId);
       
       const [members, users] = await Promise.all([
         (prisma as any).member.findMany({
