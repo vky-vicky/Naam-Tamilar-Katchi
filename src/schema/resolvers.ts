@@ -1141,6 +1141,38 @@ function toIST(dateInput: any) {
   return istTime.toISOString().replace('Z', '+05:30');
 }
 
+async function getMemberIdFromContext(context: any): Promise<number | null> {
+  if (!context?.user) return null;
+  if (context.user.type === 'member') {
+    return Number(context.user.id);
+  }
+  if (context.user.type === 'admin') {
+    const member = await getOrCreateMemberForUser(context.user);
+    return member ? member.id : null;
+  }
+  return null;
+}
+
+async function determineUserAndId(id: any): Promise<{ isUserTable: boolean, targetId: number }> {
+  const numericId = Number(id);
+  let isUserTable = numericId < 0 || numericId >= 1000000;
+  let targetId = isUserTable
+    ? (numericId < 0 ? Math.abs(numericId) : (numericId - 1000000))
+    : numericId;
+
+  if (!isUserTable) {
+    const memberExists = await (prisma as any).member.findUnique({ where: { id: targetId } });
+    if (!memberExists) {
+      const userExists = await (prisma as any).user.findUnique({ where: { id: targetId } });
+      if (userExists) {
+        isUserTable = true;
+      }
+    }
+  }
+
+  return { isUserTable, targetId };
+}
+
 function isCommunityAdmin(role: string | undefined) {
   return !!role && ADMIN_ROLES.includes(role);
 }
@@ -1844,10 +1876,10 @@ export const resolvers = {
     },
 
     getMemberDetails: async (_: any, { id }: any) => {
-      if (Number(id) < 0 || Number(id) >= 1000000) {
-        const userId = Number(id) < 0 ? Math.abs(Number(id)) : (Number(id) - 1000000);
+      const { isUserTable, targetId } = await determineUserAndId(id);
+      if (isUserTable) {
         const user = await (prisma as any).user.findUnique({
-          where: { id: userId },
+          where: { id: targetId },
           include: { location: true }
         });
         return user ? userToMemberShape(user) : null;
@@ -2944,6 +2976,11 @@ export const resolvers = {
 
         const userRole = context?.user?.role;
         const now = new Date();
+        const istOffset = 5.5 * 60 * 60 * 1000;
+        const istTime = new Date(now.getTime() + istOffset);
+        const startOfTodayIST = new Date(istTime);
+        startOfTodayIST.setUTCHours(0, 0, 0, 0);
+        const startOfToday = new Date(startOfTodayIST.getTime() - istOffset);
 
         if (userRole === 'MEMBER') {
           if (status === 'COMPLETED' || status === 'EXPIRED') {
@@ -2952,7 +2989,7 @@ export const resolvers = {
           const targetStatus = status || 'ACTIVE';
           if (targetStatus === 'ACTIVE') {
             where.status = 'ACTIVE';
-            where.date = { gte: now };
+            where.date = { gte: startOfToday };
           } else if (targetStatus === 'UPCOMING') {
             where.status = 'ACTIVE';
             const oneDayFromNow = new Date(Date.now() + 24 * 60 * 60 * 1000);
@@ -2967,12 +3004,12 @@ export const resolvers = {
               where.OR = [
                 { status: 'COMPLETED' },
                 { status: 'EXPIRED' },
-                { date: { lt: now } }
+                { date: { lt: startOfToday } }
               ];
               where.status = { notIn: ['CANCELLED', 'INACTIVE'] };
             } else if (status === 'ACTIVE') {
               where.status = 'ACTIVE';
-              where.date = { gte: now };
+              where.date = { gte: startOfToday };
             } else if (status === 'UPCOMING') {
               where.status = 'ACTIVE';
               where.date = { gt: oneDayFromNow };
@@ -3045,8 +3082,10 @@ export const resolvers = {
       const where: any = {};
 
       if (joinedOnly) {
+        const memberId = await getMemberIdFromContext(context);
+        if (!memberId) return [];
         const memberships = await (prisma as any).communityMember.findMany({
-          where: { memberId: Number(user.id) },
+          where: { memberId },
           select: { communityId: true }
         });
         const joinedIds = memberships.map((m: any) => m.communityId);
@@ -3156,13 +3195,14 @@ export const resolvers = {
     getCommunityUnreadCount: async (_: any, { communityId }: any, context: any) => {
       await assertCommunityReadAccess(Number(communityId), context);
 
-      if (context.user.type !== 'member' && context.user.role !== 'MEMBER') return 0;
+      const memberId = await getMemberIdFromContext(context);
+      if (!memberId) return 0;
 
       const membership = await (prisma as any).communityMember.findUnique({
         where: {
           communityId_memberId: {
             communityId: Number(communityId),
-            memberId: Number(context.user.id)
+            memberId
           }
         },
         select: { unreadCount: true }
@@ -3764,10 +3804,10 @@ export const resolvers = {
         console.error('Error writing approval/rejection audit log:', err);
       }
 
-      if (Number(id) < 0 || Number(id) >= 1000000) {
-        const userId = Number(id) < 0 ? Math.abs(Number(id)) : (Number(id) - 1000000);
+      const { isUserTable, targetId } = await determineUserAndId(id);
+      if (isUserTable) {
         const updatedUser = await (prisma as any).user.update({
-          where: { id: userId },
+          where: { id: targetId },
           data: { approvalStatus: status },
           include: { location: true }
         });
@@ -3861,10 +3901,7 @@ export const resolvers = {
         throw new Error("invalid_phone_format");
       }
 
-      const isUserTable = Number(id) < 0 || Number(id) >= 1000000;
-      const targetId = isUserTable 
-        ? (Number(id) < 0 ? Math.abs(Number(id)) : (Number(id) - 1000000))
-        : Number(id);
+      const { isUserTable, targetId } = await determineUserAndId(id);
 
       // Normal Member can only edit their own profile.
       const isMember = context.user.role === 'MEMBER';
@@ -6918,10 +6955,7 @@ export const resolvers = {
       let resolvedMemberId = memberId ? Number(memberId) : null;
 
       if (!resolvedMemberId && context?.user) {
-        if (context.user.type === 'admin') {
-          throw new Error('Admin users cannot join communities as members');
-        }
-        resolvedMemberId = Number(context.user.id);
+        resolvedMemberId = await getMemberIdFromContext(context);
       }
 
       if (!resolvedMemberId || isNaN(resolvedMemberId)) {
@@ -6957,10 +6991,7 @@ export const resolvers = {
       let resolvedMemberId = memberId ? Number(memberId) : null;
 
       if (!resolvedMemberId && context?.user) {
-        if (context.user.type === 'admin') {
-          throw new Error('Admin users cannot leave communities as members');
-        }
-        resolvedMemberId = Number(context.user.id);
+        resolvedMemberId = await getMemberIdFromContext(context);
       }
       if (!resolvedMemberId || isNaN(resolvedMemberId)) {
         throw new Error('Member ID is required to leave community');
@@ -8668,12 +8699,13 @@ export const resolvers = {
       return message ? formatCommunityMessage(message) : null;
     },
     unreadCount: async (parent: any, _: any, context: any) => {
-      if (context?.user?.role !== 'MEMBER') return 0;
+      const memberId = await getMemberIdFromContext(context);
+      if (!memberId) return 0;
       const membership = await (prisma as any).communityMember.findUnique({
         where: {
           communityId_memberId: {
             communityId: Number(parent.id),
-            memberId: Number(context.user.id)
+            memberId
           }
         },
         select: { unreadCount: true }
@@ -8685,12 +8717,12 @@ export const resolvers = {
       return (prisma as any).location.findUnique({ where: { id: parent.locationId } });
     },
     isJoined: async (parent: any, _: any, context: any) => {
-      const user = context?.user;
-      if (!user) return false;
+      const memberId = await getMemberIdFromContext(context);
+      if (!memberId) return false;
       const count = await (prisma as any).communityMember.count({
         where: {
           communityId: Number(parent.id),
-          memberId: Number(user.id)
+          memberId
         }
       });
       return count > 0;
