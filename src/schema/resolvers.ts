@@ -4182,7 +4182,27 @@ export const resolvers = {
             });
           }
 
-          await (prisma as any).user.delete({ where: { id: targetId } });
+          // Update matching User table record to role MEMBER instead of deleting it,
+          // because deleting it would violate restrict foreign keys (Audit logs, Events, etc. created by the user).
+          const userUpdateFields: any = {};
+          const SYNC_FIELDS = [
+            'name', 'surname', 'phone', 'password', 'image',
+            'dateOfBirth', 'gender', 'bloodGroup', 'locationId',
+            'district', 'constituency', 'area', 'street'
+          ];
+          for (const key of SYNC_FIELDS) {
+            if ((memberFields as any)[key] !== undefined) {
+              userUpdateFields[key] = (memberFields as any)[key];
+            }
+          }
+          userUpdateFields.role = 'MEMBER';
+          userUpdateFields.profession = professionName || targetUser.profession || null;
+
+          await (prisma as any).user.update({
+            where: { id: targetId },
+            data: userUpdateFields
+          });
+
           await writeUpdateAuditLogs(context, isUserTable, targetId, currentPhone, rest, args, currentRole, targetRole, isRoleExplicitlyChanged, targetUser, targetMember);
           return dbMember;
         }
@@ -7831,8 +7851,12 @@ export const resolvers = {
               }
             });
           }
-          // Remove from User table so they can't log in as admin anymore
-          await (prisma as any).user.delete({ where: { id: dbUser.id } });
+          // Update matching User table record to role MEMBER instead of deleting it,
+          // because deleting it would violate restrict foreign keys (Audit logs, Events, etc. created by the user).
+          await (prisma as any).user.update({
+            where: { id: dbUser.id },
+            data: { role: 'MEMBER' }
+          });
         } else if (dbMember) {
           await (prisma as any).member.update({
             where: { id: dbMember.id },
