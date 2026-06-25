@@ -3271,36 +3271,116 @@ export const resolvers = {
         if (!memberId) return [];
         where.id = { in: joinedIds };
       } else {
+        // Role-based visibility rules
         if (user.role === 'MEMBER') {
+          // Member: Joined + Public communities in their location hierarchy
           if (user.locationId) {
             const ancestorIds = await getAncestorLocationIds(user.locationId);
             where.OR = [
-              { locationId: null },
-              { locationId: { in: ancestorIds } }
+              { id: { in: joinedIds } }, // Joined communities
+              { privacyType: 'PUBLIC', locationId: { in: ancestorIds } } // Public in ancestor locations
             ];
           } else {
-            where.locationId = null;
+            // Member without location: only joined communities
+            where.id = { in: joinedIds };
           }
-        } else if (user.role === 'ADMIN' || user.role === 'SUB_ADMIN' || user.role === 'DISTRICT_INCHARGE') {
+        } else if (user.role === 'SUB_ADMIN') {
+          // Sub Admin (Town Level): Own town + joined + public
           if (user.locationId) {
             const childIds = await getChildLocationIds(user.locationId);
             where.OR = [
-              { locationId: null },
-              { locationId: { in: [user.locationId, ...childIds] } }
+              { id: { in: joinedIds } }, // Joined communities
+              { locationId: { in: [user.locationId, ...childIds] } }, // Own town communities
+              { privacyType: 'PUBLIC', locationId: null } // Public state-level communities
             ];
           } else {
-            where.locationId = null;
+            // Sub Admin without location: all public + joined
+            where.OR = [
+              { id: { in: joinedIds } },
+              { privacyType: 'PUBLIC' }
+            ];
           }
+        } else if (user.role === 'ADMIN') {
+          // Admin (Constituency Level): Multiple constituencies they handle
+          // Get all locations this admin has access to (from userLocation table)
+          const userLocations = await (prisma as any).userLocation.findMany({
+            where: { userId: user.id },
+            select: { locationId: true }
+          });
+          const locationIds = userLocations.map((ul: any) => ul.locationId);
+
+          if (locationIds.length > 0) {
+            const allChildIds: number[] = [];
+            for (const locId of locationIds) {
+              const childIds = await getChildLocationIds(locId);
+              allChildIds.push(locId, ...childIds);
+            }
+            where.OR = [
+              { id: { in: joinedIds } }, // Joined communities
+              { locationId: { in: allChildIds } }, // Constituency communities
+              { privacyType: 'PUBLIC', locationId: null } // Public state-level communities
+            ];
+          } else {
+            // Admin without assigned locations: all public + joined
+            where.OR = [
+              { id: { in: joinedIds } },
+              { privacyType: 'PUBLIC' }
+            ];
+          }
+        } else if (user.role === 'DISTRICT_INCHARGE') {
+          // District Incharge: All constituencies in their district
+          if (user.locationId) {
+            // Get the district (parent) location
+            const userLocation = await (prisma as any).location.findUnique({
+              where: { id: user.locationId }
+            });
+            if (userLocation) {
+              // If user is at district level, get all children (constituencies)
+              // If user is at constituency level, get district first then all constituencies
+              let districtId = userLocation.type === 'DISTRICT' ? userLocation.id : userLocation.parentId;
+              if (districtId) {
+                const constituencyIds = await getChildLocationIds(districtId);
+                const allChildIds: number[] = [districtId];
+                for (const constId of constituencyIds) {
+                  const townIds = await getChildLocationIds(constId);
+                  allChildIds.push(constId, ...townIds);
+                }
+                where.OR = [
+                  { id: { in: joinedIds } }, // Joined communities
+                  { locationId: { in: allChildIds } }, // All district communities
+                  { privacyType: 'PUBLIC', locationId: null } // Public state-level communities
+                ];
+              } else {
+                // No district found: all public + joined
+                where.OR = [
+                  { id: { in: joinedIds } },
+                  { privacyType: 'PUBLIC' }
+                ];
+              }
+            }
+          } else {
+            // District Incharge without location: all public + joined
+            where.OR = [
+              { id: { in: joinedIds } },
+              { privacyType: 'PUBLIC' }
+            ];
+          }
+        } else if (user.role === 'SUPER_ADMIN') {
+          // Super Admin: All communities
+          // No location filter needed
         }
-        
-        where.AND = [
-          {
-            OR: [
-              { privacyType: { not: 'SECRET' } },
-              { id: { in: joinedIds } }
-            ]
-          }
-        ];
+
+        // Additional privacy filter: SECRET communities only if joined
+        if (user.role !== 'SUPER_ADMIN') {
+          where.AND = [
+            {
+              OR: [
+                { privacyType: { not: 'SECRET' } },
+                { id: { in: joinedIds } }
+              ]
+            }
+          ];
+        }
       }
 
       const communities = await (prisma as any).community.findMany({
@@ -3412,7 +3492,7 @@ export const resolvers = {
       let whereClause: any = { communityId: Number(communityId) };
       const memberships = await (prisma as any).communityMember.findMany({
         where: whereClause,
-        include: { member: { include: { location: true } } }
+        include: { member: { include: { location: true, user: true } } }
       });
 
       let memberDetails = memberships.map((m: any) => ({
@@ -3422,7 +3502,10 @@ export const resolvers = {
         image: m.member.image,
         role: m.role || 'MEMBER',
         isGroupAdmin: m.role === 'OWNER' || m.role === 'ADMIN',
-        isMuted: m.isMuted
+        isMuted: m.isMuted,
+        userId: m.member.userId,
+        joinedAt: toIsoString(m.createdAt),
+        user: m.member.user
       }));
 
       // 2. Fetch all admins who are in the same location or parents of the location
@@ -3450,7 +3533,10 @@ export const resolvers = {
         image: u.image,
         role: u.role,
         isGroupAdmin: true,
-        isMuted: false
+        isMuted: false,
+        userId: u.id,
+        joinedAt: null,
+        user: u
       }));
 
       let allMembers = [...adminDetails, ...memberDetails];
