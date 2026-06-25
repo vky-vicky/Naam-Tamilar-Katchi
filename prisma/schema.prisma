@@ -27,6 +27,8 @@ model Location {
   polls         Poll[]
   posts         Post[]
   users         User[]
+  userLocations UserLocation[]
+  requestLocations RequestLocation[]
 
   @@index([parentId])
   @@index([type])
@@ -85,6 +87,7 @@ model Member {
   warnings             UserWarning[]          @relation("MemberWarnings")
   commentLikes         CommentLike[]
   pollCommentLikes     PollCommentLike[]
+  communityMemberActivities CommunityMemberActivity[]
 
   @@index([locationId])
   @@index([professionId])
@@ -137,6 +140,18 @@ model User {
   parent               User?                 @relation("Hierarchy", fields: [parentId], references: [id])
   children             User[]                @relation("Hierarchy")
   warningsCreated      UserWarning[]         @relation("AdminWarnings")
+  userLocations        UserLocation[]
+  locationAccessRequests LocationAccessRequest[] @relation("AccessRequestUser")
+  approvedAccessRequests LocationAccessRequest[] @relation("AccessRequestApprover")
+  communityJoinRequests          CommunityJoinRequest[]
+  communityAdminLogs             CommunityAdminLog[]
+  reportedCommunityComplaints    CommunityComplaint[]   @relation("ReporterRelation")
+  assignedCommunityComplaints    CommunityComplaint[]   @relation("AssigneeRelation")
+  communityBans                  CommunityBan[]         @relation("BannedUserRelation")
+  communityBansGiven             CommunityBan[]         @relation("BannedByRelation")
+  communityAnnouncements         CommunityAnnouncement[]
+  communityMemberReportsReceived CommunityMemberReport[] @relation("ReportedUserRelation")
+  communityMemberReportsFiled    CommunityMemberReport[] @relation("ReporterRelation")
 
   @@index([role])
   @@index([approvalStatus])
@@ -210,6 +225,8 @@ model Event {
   createdBy   User            @relation(fields: [createdById], references: [id])
   location    Location        @relation(fields: [locationId], references: [id])
   responses   EventResponse[]
+  communityId Int?
+  community   Community?      @relation(fields: [communityId], references: [id], onDelete: Cascade)
 }
 
 model EventResponse {
@@ -403,25 +420,40 @@ model Broadcast {
 }
 
 model Community {
-  id                  Int                @id @default(autoincrement())
+  id                  Int                     @id @default(autoincrement())
   role                UserRole?
   locationId          Int?
-  name                String             @unique
+  name                String                  @unique
   nameEn              String?
   description         String?
   descriptionEn       String?
   image               String?
-  allowMemberMessages Boolean            @default(true)
-  isMuted             Boolean            @default(false)
+  allowMemberMessages Boolean                 @default(true)
+  isMuted             Boolean                 @default(false)
   mutedUntil          DateTime?
   pinnedMessageId     Int?
-  createdAt           DateTime           @default(now())
-  updatedAt           DateTime           @updatedAt
-  location            Location?          @relation(fields: [locationId], references: [id])
+  createdAt           DateTime                @default(now())
+  updatedAt           DateTime                @updatedAt
+  location            Location?               @relation(fields: [locationId], references: [id])
   members             CommunityMember[]
   messages            CommunityMessage[]
   posts               CommunityPost[]
   polls               Poll[]
+  privacyType         CommunityPrivacyType    @default(PUBLIC)
+  requiresApproval    Boolean                 @default(false)
+  verificationType    String                  @default("NONE")
+  inviteCode          String?                 @unique
+  inviteCodeExpiry    DateTime?
+  isArchived          Boolean                 @default(false)
+  archivedAt          DateTime?
+  joinRequests        CommunityJoinRequest[]
+  adminLogs           CommunityAdminLog[]
+  complaints          CommunityComplaint[]
+  bans                CommunityBan[]
+  announcements       CommunityAnnouncement[]
+  memberActivities    CommunityMemberActivity[]
+  memberReports       CommunityMemberReport[]
+  events              Event[]
 }
 
 model CommunityPost {
@@ -446,16 +478,18 @@ model CommunityPost {
 }
 
 model CommunityMember {
-  id          Int       @id @default(autoincrement())
-  communityId Int
-  memberId    Int
-  isMuted     Boolean   @default(false)
-  mutedUntil  DateTime?
-  unreadCount Int       @default(0)
-  lastReadAt  DateTime?
-  createdAt   DateTime  @default(now())
-  community   Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
-  member      Member    @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  id               Int                @id @default(autoincrement())
+  communityId      Int
+  memberId         Int
+  isMuted          Boolean            @default(false)
+  mutedUntil       DateTime?
+  unreadCount      Int                @default(0)
+  lastReadAt       DateTime?
+  createdAt        DateTime           @default(now())
+  community        Community          @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  member           Member             @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  groupRole        CommunityGroupRole @default(MEMBER)
+  notificationPref String             @default("ALL")
 
   @@unique([communityId, memberId])
 }
@@ -780,9 +814,22 @@ enum RSVPStatus {
 
 enum UserRole {
   SUPER_ADMIN
+  DISTRICT_INCHARGE
   ADMIN
   SUB_ADMIN
   MEMBER
+}
+
+enum AccessRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum AccessRequestType {
+  ROLE_CHANGE
+  LOCATION_CHANGE
+  BOTH
 }
 
 enum ApprovalStatus {
@@ -835,4 +882,172 @@ enum ReportStatus {
   IGNORED
   WARNED
   DELETED
+}
+
+// ─── Multi-Location Role System ─────────────────────────────────────────────
+
+model UserLocation {
+  id         Int      @id @default(autoincrement())
+  userId     Int
+  locationId Int
+  isPrimary  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  location   Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, locationId])
+  @@index([userId])
+  @@index([locationId])
+}
+
+model LocationAccessRequest {
+  id              Int                 @id @default(autoincrement())
+  userId          Int
+  currentRole     UserRole
+  requestedRole   UserRole
+  requestType     AccessRequestType
+  status          AccessRequestStatus @default(PENDING)
+  reason          String?
+  rejectionReason String?
+  approvedById    Int?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  user               User               @relation("AccessRequestUser", fields: [userId], references: [id], onDelete: Cascade)
+  approvedBy         User?              @relation("AccessRequestApprover", fields: [approvedById], references: [id])
+  requestedLocations RequestLocation[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([requestType])
+}
+
+model RequestLocation {
+  id         Int                  @id @default(autoincrement())
+  requestId  Int
+  locationId Int
+
+  request    LocationAccessRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  location   Location             @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@unique([requestId, locationId])
+  @@index([requestId])
+  @@index([locationId])
+}
+
+enum CommunityGroupRole {
+  OWNER
+  ADMIN
+  MODERATOR
+  MEMBER
+}
+
+enum CommunityPrivacyType {
+  PUBLIC
+  PRIVATE
+  SECRET
+}
+
+enum GroupJoinStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model CommunityJoinRequest {
+  id              Int             @id @default(autoincrement())
+  communityId     Int
+  userId          Int
+  status          GroupJoinStatus @default(PENDING)
+  reason          String?
+  rejectionReason String?
+  reviewedById    Int?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  community       Community       @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model CommunityAdminLog {
+  id          Int       @id @default(autoincrement())
+  communityId Int
+  adminId     Int
+  action      String
+  details     String
+  createdAt   DateTime  @default(now())
+
+  community   Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  admin       User      @relation(fields: [adminId], references: [id], onDelete: Cascade)
+}
+
+model CommunityComplaint {
+  id          Int       @id @default(autoincrement())
+  communityId Int
+  reporterId  Int
+  title       String
+  description String
+  status      String    @default("OPEN")
+  assigneeId  Int?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  community   Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  reporter    User      @relation("ReporterRelation", fields: [reporterId], references: [id], onDelete: Cascade)
+  assignee    User?     @relation("AssigneeRelation", fields: [assigneeId], references: [id])
+}
+
+model CommunityBan {
+  id          Int       @id @default(autoincrement())
+  communityId Int
+  userId      Int
+  reason      String?
+  bannedById  Int
+  bannedUntil DateTime?
+  createdAt   DateTime  @default(now())
+
+  community   Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  user        User      @relation("BannedUserRelation", fields: [userId], references: [id], onDelete: Cascade)
+  bannedBy    User      @relation("BannedByRelation", fields: [bannedById], references: [id], onDelete: Cascade)
+}
+
+model CommunityAnnouncement {
+  id           Int       @id @default(autoincrement())
+  communityId  Int
+  title        String
+  message      String
+  createdById  Int
+  createdAt    DateTime  @default(now())
+  scheduledFor DateTime?
+  isPinned     Boolean   @default(false)
+
+  community    Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  createdBy    User      @relation(fields: [createdById], references: [id], onDelete: Cascade)
+}
+
+model CommunityMemberActivity {
+  id          Int       @id @default(autoincrement())
+  communityId Int
+  memberId    Int
+  action      String
+  details     String?
+  createdAt   DateTime  @default(now())
+
+  community   Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  member      Member    @relation(fields: [memberId], references: [id], onDelete: Cascade)
+}
+
+model CommunityMemberReport {
+  id             Int       @id @default(autoincrement())
+  communityId    Int
+  reportedUserId Int
+  reporterId     Int
+  reason         String
+  status         String    @default("PENDING")
+  createdAt      DateTime  @default(now())
+
+  community      Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  reportedUser   User      @relation("ReportedUserRelation", fields: [reportedUserId], references: [id], onDelete: Cascade)
+  reporter       User      @relation("ReporterRelation", fields: [reporterId], references: [id], onDelete: Cascade)
 }

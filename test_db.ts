@@ -1,11 +1,12 @@
-import { PrismaClient } from '@prisma/client';
-const prisma = new PrismaClient();
+import prisma from './src/db';
 async function main() {
   try {
     await prisma.$connect();
     console.log('Connection successful');
-    const count = await prisma.location.count();
-    console.log('Location count:', count);
+    const userLocationCount = await prisma.userLocation.count();
+    console.log('UserLocation count:', userLocationCount);
+    const requestCount = await prisma.locationAccessRequest.count();
+    console.log('LocationAccessRequest count:', requestCount);
   } catch (e) {
     console.error('Error:', e);
   } finally {

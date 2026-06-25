@@ -12,6 +12,7 @@ export const typeDefs = gql`
 
   enum Role {
     SUPER_ADMIN
+    DISTRICT_INCHARGE
     ADMIN
     SUB_ADMIN
     MEMBER
@@ -112,6 +113,8 @@ export const typeDefs = gql`
     area: String
     street: String
     fcmToken: String
+    userLocations: [UserLocationAssignment!]!
+    assignedLocationIds: [Int!]!
   }
 
   type Profession {
@@ -589,7 +592,7 @@ export const typeDefs = gql`
     getBroadcasts(locationId: Int, scope: BroadcastScope, broadcastId: Int, isActive: Boolean): [Broadcast!]!
     pendingMembers(locationId: Int): [Member!]!
     bloodGroups: [String!]!
-    dashboardStats(locationId: Int): DashboardStats!
+    dashboardStats(locationId: Int, filterLocationId: Int): DashboardStats!
     getContributionPlans(isActive: Boolean): [ContributionPlan!]!
     getContributionPlanDetails(id: Int!): ContributionPlan
     myContributionPlan: MemberPlanEnrollment
@@ -606,6 +609,19 @@ export const typeDefs = gql`
     getUserWarnings(memberId: Int!): [UserWarning!]!
     getModerationDashboardStats(locationId: Int): ModerationDashboardStats!
     getReportedPostsList(locationId: Int, status: String): [Post!]!
+    # Multi-Location Role System
+    getPendingLocationAccessRequests: [LocationAccessRequest!]!
+    getMyLocationAccessRequests: [LocationAccessRequest!]!
+    getUserAssignedLocations(userId: Int!): [UserLocationAssignment!]!
+    # Community Module Enhancements Queries
+    getPendingCommunityJoinRequests(communityId: Int!): [CommunityJoinRequest!]!
+    getCommunityAdminLogs(communityId: Int!): [CommunityAdminLog!]!
+    getCommunityComplaints(communityId: Int!, status: String): [CommunityComplaint!]!
+    generateCommunityInviteLink(communityId: Int!, expiryDays: Int): String!
+    getCommunityAnnouncements(communityId: Int!): [CommunityAnnouncement!]!
+    getCommunityMediaGallery(communityId: Int!, mediaType: String): [CommunityMediaItem!]!
+    getCommunityAnalytics(communityId: Int!): CommunityAnalytics!
+    getCommunityBans(communityId: Int!): [CommunityBanInfo!]!
   }
 
   type Mutation {
@@ -619,6 +635,7 @@ export const typeDefs = gql`
       role: Role!
       image: String
       locationId: Int
+      locationIds: [Int!]
       districtId: Int
       talukId: Int
       areaId: Int
@@ -914,6 +931,39 @@ export const typeDefs = gql`
       memberId: Int!
       type: ReminderNotificationType!
     ): Boolean!
+    # ─── Multi-Location Role System Mutations ───────────────────────────────
+    requestLocationAccess(
+      requestedRole: Role!
+      requestType: String!
+      locationIds: [Int!]!
+      reason: String
+    ): LocationAccessRequest!
+    reviewLocationAccessRequest(
+      requestId: Int!
+      action: String!
+      rejectionReason: String
+    ): LocationAccessRequest!
+    assignUserLocations(
+      userId: Int!
+      locationIds: [Int!]!
+      isPrimary: Int
+    ): User!
+    removeUserLocation(
+      userId: Int!
+      locationId: Int!
+    ): Boolean!
+    # Community Module Enhancements Mutations
+    joinCommunityOrRequest(communityId: Int!, reason: String, inviteCode: String): String!
+    reviewCommunityJoinRequest(requestId: Int!, action: String!, rejectionReason: String): Boolean!
+    updateCommunityMemberRole(communityId: Int!, targetUserId: Int!, newRole: CommunityGroupRole!): Boolean!
+    createCommunityComplaint(communityId: Int!, title: String!, description: String!): CommunityComplaint!
+    updateComplaintStatus(complaintId: Int!, status: String!, assigneeId: Int): CommunityComplaint!
+    updateCommunityNotificationPref(communityId: Int!, preference: String!): Boolean!
+    banCommunityUser(communityId: Int!, userId: Int!, reason: String, durationDays: Int): Boolean!
+    unbanCommunityUser(communityId: Int!, userId: Int!): Boolean!
+    createCommunityAnnouncement(communityId: Int!, title: String!, message: String!, isPinned: Boolean, scheduledFor: String): CommunityAnnouncement!
+    archiveCommunity(communityId: Int!, isArchived: Boolean!): Boolean!
+    reportCommunityMember(communityId: Int!, reportedUserId: Int!, reason: String!): Boolean!
   }
 
   type AuthPayload {
@@ -1185,5 +1235,116 @@ export const typeDefs = gql`
     postId: Int
     communityPostId: Int
     createdAt: String!
+  }
+
+  # ─── Multi-Location Role System ────────────────────────────────────────────
+
+  type UserLocationAssignment {
+    id: Int!
+    userId: Int!
+    locationId: Int!
+    isPrimary: Boolean!
+    location: Location!
+    createdAt: String!
+  }
+
+  type LocationAccessRequest {
+    id: Int!
+    userId: Int!
+    currentRole: Role!
+    requestedRole: Role!
+    requestType: String!
+    status: String!
+    reason: String
+    rejectionReason: String
+    createdAt: String!
+    updatedAt: String!
+    user: User!
+    approvedBy: User
+    requestedLocations: [RequestLocationItem!]!
+  }
+
+  type RequestLocationItem {
+    id: Int!
+    requestId: Int!
+    locationId: Int!
+    location: Location!
+  }
+
+  enum CommunityGroupRole {
+    OWNER
+    ADMIN
+    MODERATOR
+    MEMBER
+  }
+
+  enum CommunityPrivacyType {
+    PUBLIC
+    PRIVATE
+    SECRET
+  }
+
+  type CommunityJoinRequest {
+    id: Int!
+    communityId: Int!
+    userId: Int!
+    status: String!
+    reason: String
+    user: User!
+    createdAt: String!
+  }
+
+  type CommunityAdminLog {
+    id: Int!
+    action: String!
+    details: String!
+    admin: User!
+    createdAt: String!
+  }
+
+  type CommunityComplaint {
+    id: Int!
+    title: String!
+    description: String!
+    status: String!
+    reporter: User!
+    assignee: User
+    createdAt: String!
+  }
+
+  type CommunityBanInfo {
+    id: Int!
+    userId: Int!
+    reason: String
+    user: User!
+    bannedBy: User!
+    createdAt: String!
+  }
+
+  type CommunityAnnouncement {
+    id: Int!
+    title: String!
+    message: String!
+    createdAt: String!
+    scheduledFor: String
+    isPinned: Boolean!
+  }
+
+  type CommunityMediaItem {
+    messageId: Int!
+    mediaUrl: String!
+    mediaType: String!
+    fileName: String
+    createdAt: String!
+  }
+
+  type CommunityAnalytics {
+    totalMembers: Int!
+    activeMembersCount: Int!
+    pendingJoinRequestsCount: Int!
+    newMembersThisWeek: Int!
+    eventsCreatedCount: Int!
+    pollParticipationRate: Float!
+    complaintResolutionRate: Float!
   }
 `;
