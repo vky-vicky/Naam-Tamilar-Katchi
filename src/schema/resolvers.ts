@@ -225,6 +225,19 @@ async function getUserGroupRole(userId: number, communityId: number): Promise<st
   return member?.groupRole || null;
 }
 
+async function getCommunityRoleFromContext(context: any, communityId: number): Promise<string | null> {
+  const user = context?.user;
+  if (!user) return null;
+
+  // Treat SUPER_ADMIN as full community admin for moderation flows.
+  if (user.role === 'SUPER_ADMIN') return 'OWNER';
+
+  const memberId = await getMemberIdFromContext(context);
+  if (!memberId) return null;
+
+  return getUserGroupRole(memberId, communityId);
+}
+
 async function getUniqueRecipientCount(locationId: number): Promise<number> {
   const targetIds = await getChildLocationIds(locationId);
   const allIds = [Number(locationId), ...targetIds];
@@ -1192,10 +1205,15 @@ function toIST(dateInput: any) {
 
 async function getMemberIdFromContext(context: any): Promise<number | null> {
   if (!context?.user) return null;
-  if (context.user.type === 'member') {
+  // Some auth flows may not set `type`; infer from role.
+  const inferredType =
+    context.user.type ||
+    (context.user.role === 'MEMBER' ? 'member' : 'admin');
+
+  if (inferredType === 'member') {
     return Number(context.user.id);
   }
-  if (context.user.type === 'admin') {
+  if (inferredType === 'admin') {
     const member = await getOrCreateMemberForUser(context.user);
     return member ? member.id : null;
   }
@@ -3584,7 +3602,7 @@ export const resolvers = {
       const user = context?.user;
       if (!user) throw new Error('Not authenticated');
       
-      const role = await getUserGroupRole(Number(user.id), Number(communityId));
+      const role = await getCommunityRoleFromContext(context, Number(communityId));
       if (!role || !hasGroupPermission(role, 'MANAGE_MEMBERS')) {
         throw new Error('Only Community Admins can view pending join requests');
       }
@@ -3600,7 +3618,7 @@ export const resolvers = {
       const user = context?.user;
       if (!user) throw new Error('Not authenticated');
 
-      const role = await getUserGroupRole(Number(user.id), Number(communityId));
+      const role = await getCommunityRoleFromContext(context, Number(communityId));
       if (!role || !['OWNER', 'ADMIN', 'MODERATOR'].includes(role)) {
         throw new Error('Unauthorized');
       }
@@ -3616,7 +3634,7 @@ export const resolvers = {
       const user = context?.user;
       if (!user) throw new Error('Not authenticated');
 
-      const role = await getUserGroupRole(Number(user.id), Number(communityId));
+      const role = await getCommunityRoleFromContext(context, Number(communityId));
       if (!role || !['OWNER', 'ADMIN', 'MODERATOR'].includes(role)) {
         throw new Error('Unauthorized');
       }
@@ -3635,7 +3653,7 @@ export const resolvers = {
       const user = context?.user;
       if (!user) throw new Error('Not authenticated');
 
-      const role = await getUserGroupRole(Number(user.id), Number(communityId));
+      const role = await getCommunityRoleFromContext(context, Number(communityId));
       if (!role || !hasGroupPermission(role, 'MANAGE_COMMUNITY')) {
         throw new Error('Unauthorized');
       }
@@ -3712,7 +3730,7 @@ export const resolvers = {
       const user = context?.user;
       if (!user) throw new Error('Not authenticated');
 
-      const role = await getUserGroupRole(Number(user.id), Number(communityId));
+      const role = await getCommunityRoleFromContext(context, Number(communityId));
       if (!role || !hasGroupPermission(role, 'VIEW_ANALYTICS')) {
         throw new Error('Unauthorized');
       }
@@ -3747,7 +3765,7 @@ export const resolvers = {
       const user = context?.user;
       if (!user) throw new Error('Not authenticated');
 
-      const role = await getUserGroupRole(Number(user.id), Number(communityId));
+      const role = await getCommunityRoleFromContext(context, Number(communityId));
       if (!role || !['OWNER', 'ADMIN', 'MODERATOR'].includes(role)) {
         throw new Error('Unauthorized');
       }
@@ -7344,7 +7362,7 @@ export const resolvers = {
       return true;
     },
 
-    createCommunity: async (_: any, { name, description, image, allowMemberMessages, locationId }: any, context: any) => {
+    createCommunity: async (_: any, { name, description, image, allowMemberMessages, locationId, privacyType }: any, context: any) => {
       if (!context.user) throw new Error(I18nService.translate("unauthorized_login", context?.language));
       if (context.user.role !== 'SUPER_ADMIN' && context.user.role !== 'ADMIN' && context.user.role !== 'SUB_ADMIN') {
         throw new Error(I18nService.translate("member_not_allowed", context?.language));
@@ -7358,16 +7376,36 @@ export const resolvers = {
           description,
           image,
           locationId: resolvedLocationId,
-          ...(allowMemberMessages !== undefined ? { allowMemberMessages } : {})
+          ...(allowMemberMessages !== undefined ? { allowMemberMessages } : {}),
+          ...(privacyType !== undefined ? { privacyType } : {})
         },
         create: {
           name,
           description,
           image,
           locationId: resolvedLocationId,
-          allowMemberMessages: allowMemberMessages ?? true
+          allowMemberMessages: allowMemberMessages ?? true,
+          privacyType: privacyType || 'PUBLIC'
         }
       });
+
+      const member = await getOrCreateMemberForUser(context.user);
+      if (member) {
+        await (prisma as any).communityMember.upsert({
+          where: {
+            communityId_memberId: {
+              communityId: community.id,
+              memberId: member.id
+            }
+          },
+          create: {
+            communityId: community.id,
+            memberId: member.id,
+            groupRole: 'OWNER'
+          },
+          update: {}
+        });
+      }
 
       return {
         ...community,
@@ -9806,29 +9844,39 @@ export const resolvers = {
     });
     if (!req) throw new Error('Request not found');
 
-    const role = await getUserGroupRole(Number(user.id), req.communityId);
+    const role = await getCommunityRoleFromContext(context, req.communityId);
     if (!role || !hasGroupPermission(role, 'MANAGE_MEMBERS')) {
       throw new Error('Unauthorized');
     }
 
     if (action === 'APPROVE') {
+      // CommunityJoinRequest.userId references the User table, but CommunityMember.memberId
+      // references the Member table. Convert requested user -> member.
+      const requestedUser = await (prisma as any).user.findUnique({
+        where: { id: Number(req.userId) }
+      });
+      if (!requestedUser) throw new Error('Request user not found');
+
+      const requestedMember = await getOrCreateMemberForUser({ ...requestedUser, type: 'admin' });
+      if (!requestedMember) throw new Error('Unable to create member for request user');
+
       await (prisma as any).communityMember.upsert({
         where: {
           communityId_memberId: {
             communityId: req.communityId,
-            memberId: req.userId
+            memberId: requestedMember.id
           }
         },
         create: {
           communityId: req.communityId,
-          memberId: req.userId,
+          memberId: requestedMember.id,
           groupRole: 'MEMBER'
         },
         update: {}
       });
 
       await (prisma as any).communityMemberActivity.create({
-        data: { communityId: req.communityId, memberId: req.userId, action: 'JOIN' }
+        data: { communityId: req.communityId, memberId: requestedMember.id, action: 'JOIN' }
       });
 
       await (prisma as any).communityAdminLog.create({
@@ -9860,7 +9908,7 @@ export const resolvers = {
     const comId = Number(communityId);
     const tgtId = Number(targetUserId);
 
-    const myRole = await getUserGroupRole(Number(user.id), comId);
+    const myRole = await getCommunityRoleFromContext(context, comId);
     if (!myRole || !hasGroupPermission(myRole, 'MANAGE_MEMBERS')) {
       throw new Error('Unauthorized');
     }
@@ -9911,7 +9959,7 @@ export const resolvers = {
     });
     if (!complaint) throw new Error('Complaint not found');
 
-    const role = await getUserGroupRole(Number(user.id), complaint.communityId);
+    const role = await getCommunityRoleFromContext(context, complaint.communityId);
     if (!role || !['OWNER', 'ADMIN', 'MODERATOR'].includes(role)) {
       throw new Error('Unauthorized');
     }
@@ -9945,7 +9993,7 @@ export const resolvers = {
     const comId = Number(communityId);
     const tgtId = Number(userId);
 
-    const role = await getUserGroupRole(Number(user.id), comId);
+    const role = await getCommunityRoleFromContext(context, comId);
     if (!role || !hasGroupPermission(role, 'BAN_USER')) {
       throw new Error('Unauthorized');
     }
@@ -9985,7 +10033,7 @@ export const resolvers = {
     const comId = Number(communityId);
     const tgtId = Number(userId);
 
-    const role = await getUserGroupRole(Number(user.id), comId);
+    const role = await getCommunityRoleFromContext(context, comId);
     if (!role || !hasGroupPermission(role, 'BAN_USER')) {
       throw new Error('Unauthorized');
     }
@@ -10002,7 +10050,7 @@ export const resolvers = {
     if (!user) throw new Error('Not authenticated');
 
     const comId = Number(communityId);
-    const role = await getUserGroupRole(Number(user.id), comId);
+    const role = await getCommunityRoleFromContext(context, comId);
     if (!role || !hasGroupPermission(role, 'POST_ANNOUNCEMENT')) {
       throw new Error('Unauthorized');
     }
@@ -10035,7 +10083,7 @@ export const resolvers = {
     if (!user) throw new Error('Not authenticated');
 
     const comId = Number(communityId);
-    const role = await getUserGroupRole(Number(user.id), comId);
+    const role = await getCommunityRoleFromContext(context, comId);
     if (!role || !hasGroupPermission(role, 'MANAGE_COMMUNITY')) {
       throw new Error('Unauthorized');
     }

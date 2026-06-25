@@ -828,6 +828,7 @@ export const typeDefs = gql`
       image: String
       allowMemberMessages: Boolean
       locationId: Int
+      privacyType: CommunityPrivacyType
     ): Community!
     joinCommunity(
       communityId: Int!
