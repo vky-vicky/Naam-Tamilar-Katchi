@@ -1220,6 +1220,21 @@ async function getMemberIdFromContext(context: any): Promise<number | null> {
   return null;
 }
 
+async function getUserIdFromContext(context: any): Promise<number | null> {
+  if (!context?.user) return null;
+  const inferredType =
+    context.user.type ||
+    (context.user.role === 'MEMBER' ? 'member' : 'admin');
+
+  if (inferredType === 'admin') {
+    return Number(context.user.id);
+  }
+  if (inferredType === 'member') {
+    return getOrCreateUserForMember(Number(context.user.id));
+  }
+  return null;
+}
+
 async function determineUserAndId(id: any): Promise<{ isUserTable: boolean, targetId: number }> {
   const numericId = Number(id);
   let isUserTable = numericId < 0 || numericId >= 1000000;
@@ -7377,7 +7392,7 @@ export const resolvers = {
           image,
           locationId: resolvedLocationId,
           ...(allowMemberMessages !== undefined ? { allowMemberMessages } : {}),
-          ...(privacyType !== undefined ? { privacyType } : {})
+          ...(privacyType !== undefined ? { privacyType: privacyType.toUpperCase() } : {})
         },
         create: {
           name,
@@ -7385,7 +7400,7 @@ export const resolvers = {
           image,
           locationId: resolvedLocationId,
           allowMemberMessages: allowMemberMessages ?? true,
-          privacyType: privacyType || 'PUBLIC'
+          privacyType: privacyType ? privacyType.toUpperCase() : 'PUBLIC'
         }
       });
 
@@ -9772,14 +9787,19 @@ export const resolvers = {
     const user = context?.user;
     if (!user) throw new Error('Not authenticated');
 
-    const userId = Number(user.id);
+    const memberId = await getMemberIdFromContext(context);
+    if (!memberId) throw new Error('Member profile not found for this user');
+
+    const dbUserId = await getUserIdFromContext(context);
+    if (!dbUserId) throw new Error('User profile not found for this user');
+
     const comId = Number(communityId);
 
     // Check if banned
     const isBanned = await (prisma as any).communityBan.findFirst({
       where: {
         communityId: comId,
-        userId,
+        userId: dbUserId,
         OR: [
           { bannedUntil: null },
           { bannedUntil: { gte: new Date() } }
@@ -9790,7 +9810,7 @@ export const resolvers = {
 
     // Check if already a member
     const existing = await (prisma as any).communityMember.findUnique({
-      where: { communityId_memberId: { communityId: comId, memberId: userId } }
+      where: { communityId_memberId: { communityId: comId, memberId } }
     });
     if (existing) return 'JOINED';
 
@@ -9810,25 +9830,25 @@ export const resolvers = {
       await (prisma as any).communityMember.create({
         data: {
           communityId: comId,
-          memberId: userId,
+          memberId,
           groupRole: 'MEMBER'
         }
       });
       
       await (prisma as any).communityMemberActivity.create({
-        data: { communityId: comId, memberId: userId, action: 'JOIN' }
+        data: { communityId: comId, memberId, action: 'JOIN' }
       });
 
       return 'JOINED';
     }
 
     const existingRequest = await (prisma as any).communityJoinRequest.findFirst({
-      where: { communityId: comId, userId, status: 'PENDING' }
+      where: { communityId: comId, userId: dbUserId, status: 'PENDING' }
     });
 
     if (!existingRequest) {
       await (prisma as any).communityJoinRequest.create({
-        data: { communityId: comId, userId, reason, status: 'PENDING' }
+        data: { communityId: comId, userId: dbUserId, reason, status: 'PENDING' }
       });
     }
 
@@ -9879,22 +9899,28 @@ export const resolvers = {
         data: { communityId: req.communityId, memberId: requestedMember.id, action: 'JOIN' }
       });
 
+      const dbUserId = await getUserIdFromContext(context);
+      if (!dbUserId) throw new Error('User profile not found for this user');
+
       await (prisma as any).communityAdminLog.create({
         data: {
           communityId: req.communityId,
-          adminId: Number(user.id),
+          adminId: dbUserId,
           action: 'MEMBER_APPROVED',
           details: `Approved join request for user id ${req.userId}`
         }
       });
     }
 
+    const dbUserId = await getUserIdFromContext(context);
+    if (!dbUserId) throw new Error('User profile not found for this user');
+
     await (prisma as any).communityJoinRequest.update({
       where: { id: Number(requestId) },
       data: {
         status: action === 'APPROVE' ? 'APPROVED' : 'REJECTED',
         rejectionReason: action === 'REJECT' ? rejectionReason : null,
-        reviewedById: Number(user.id)
+        reviewedById: dbUserId
       }
     });
 
@@ -9922,10 +9948,13 @@ export const resolvers = {
       data: { groupRole: newRole }
     });
 
+    const dbUserId = await getUserIdFromContext(context);
+    if (!dbUserId) throw new Error('User profile not found for this user');
+
     await (prisma as any).communityAdminLog.create({
       data: {
         communityId: comId,
-        adminId: Number(user.id),
+        adminId: dbUserId,
         action: 'ROLE_CHANGE',
         details: `Changed role of user id ${tgtId} to ${newRole}`
       }
@@ -9938,10 +9967,13 @@ export const resolvers = {
     const user = context?.user;
     if (!user) throw new Error('Not authenticated');
 
+    const dbUserId = await getUserIdFromContext(context);
+    if (!dbUserId) throw new Error('User profile not found for this user');
+
     return (prisma as any).communityComplaint.create({
       data: {
         communityId: Number(communityId),
-        reporterId: Number(user.id),
+        reporterId: dbUserId,
         title,
         description,
         status: 'OPEN'
@@ -9978,8 +10010,11 @@ export const resolvers = {
     const user = context?.user;
     if (!user) throw new Error('Not authenticated');
 
+    const memberId = await getMemberIdFromContext(context);
+    if (!memberId) throw new Error('Member profile not found for this user');
+
     await (prisma as any).communityMember.update({
-      where: { communityId_memberId: { communityId: Number(communityId), memberId: Number(user.id) } },
+      where: { communityId_memberId: { communityId: Number(communityId), memberId } },
       data: { notificationPref: preference }
     });
 
@@ -9998,14 +10033,18 @@ export const resolvers = {
       throw new Error('Unauthorized');
     }
 
+    const dbUserId = await getUserIdFromContext(context);
+    if (!dbUserId) throw new Error('User profile not found for this user');
+
     const bannedUntil = durationDays ? new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000) : null;
+    const targetUserId = await getOrCreateUserForMember(tgtId);
 
     await (prisma as any).communityBan.create({
       data: {
         communityId: comId,
-        userId: tgtId,
+        userId: targetUserId,
         reason,
-        bannedById: Number(user.id),
+        bannedById: dbUserId,
         bannedUntil
       }
     });
@@ -10017,7 +10056,7 @@ export const resolvers = {
     await (prisma as any).communityAdminLog.create({
       data: {
         communityId: comId,
-        adminId: Number(user.id),
+        adminId: dbUserId,
         action: 'MEMBER_REMOVED',
         details: `Banned user id ${tgtId}. Reason: ${reason || 'N/A'}`
       }
@@ -10038,8 +10077,10 @@ export const resolvers = {
       throw new Error('Unauthorized');
     }
 
+    const targetUserId = await getOrCreateUserForMember(tgtId);
+
     await (prisma as any).communityBan.deleteMany({
-      where: { communityId: comId, userId: tgtId }
+      where: { communityId: comId, userId: targetUserId }
     });
 
     return true;
@@ -10055,12 +10096,15 @@ export const resolvers = {
       throw new Error('Unauthorized');
     }
 
+    const dbUserId = await getUserIdFromContext(context);
+    if (!dbUserId) throw new Error('User profile not found for this user');
+
     const announcement = await (prisma as any).communityAnnouncement.create({
       data: {
         communityId: comId,
         title,
         message,
-        createdById: Number(user.id),
+        createdById: dbUserId,
         isPinned: isPinned || false,
         scheduledFor: scheduledFor ? new Date(scheduledFor) : null
       }
@@ -10069,7 +10113,7 @@ export const resolvers = {
     await (prisma as any).communityAdminLog.create({
       data: {
         communityId: comId,
-        adminId: Number(user.id),
+        adminId: dbUserId,
         action: 'ANNOUNCEMENT',
         details: `Created announcement: ${title}`
       }
@@ -10103,11 +10147,15 @@ export const resolvers = {
     const user = context?.user;
     if (!user) throw new Error('Not authenticated');
 
+    const reportedUserDbId = await getOrCreateUserForMember(Number(reportedUserId));
+    const reporterUserDbId = await getUserIdFromContext(context);
+    if (!reporterUserDbId) throw new Error('User profile not found for this user');
+
     await (prisma as any).communityMemberReport.create({
       data: {
         communityId: Number(communityId),
-        reportedUserId: Number(reportedUserId),
-        reporterId: Number(user.id),
+        reportedUserId: reportedUserDbId,
+        reporterId: reporterUserDbId,
         reason,
         status: 'PENDING'
       }
