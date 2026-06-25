@@ -2014,14 +2014,33 @@ export const resolvers = {
       }));
     },
 
-    getMemberDetails: async (_: any, { id }: any) => {
+    getMemberDetails: async (_: any, { id, communityId }: any) => {
       const { isUserTable, targetId } = await determineUserAndId(id);
       if (isUserTable) {
         const user = await (prisma as any).user.findUnique({
           where: { id: targetId },
           include: { location: true }
         });
-        return user ? userToMemberShape(user) : null;
+        const memberShape = user ? userToMemberShape(user) : null;
+
+        // If communityId is provided, add community-specific context
+        if (communityId && memberShape) {
+          const membership = await (prisma as any).communityMember.findUnique({
+            where: {
+              communityId_memberId: {
+                communityId: Number(communityId),
+                memberId: targetId
+              }
+            }
+          });
+          if (membership) {
+            (memberShape as any).communityRole = membership.role;
+            (memberShape as any).joinedAt = membership.createdAt;
+            (memberShape as any).communityIsMuted = membership.isMuted;
+          }
+        }
+
+        return memberShape;
       }
 
       const memberRecord = await (prisma as any).member.findUnique({
@@ -2031,6 +2050,24 @@ export const resolvers = {
       if (memberRecord && memberRecord.role) {
         memberRecord.role = memberRecord.role.toUpperCase();
       }
+
+      // If communityId is provided, add community-specific context
+      if (communityId && memberRecord) {
+        const membership = await (prisma as any).communityMember.findUnique({
+          where: {
+            communityId_memberId: {
+              communityId: Number(communityId),
+              memberId: targetId
+            }
+          }
+        });
+        if (membership) {
+          (memberRecord as any).communityRole = membership.role;
+          (memberRecord as any).joinedAt = membership.createdAt;
+          (memberRecord as any).communityIsMuted = membership.isMuted;
+        }
+      }
+
       return memberRecord;
     },
 
@@ -3215,7 +3252,7 @@ export const resolvers = {
       });
     },
 
-    getCommunities: async (_: any, { joinedOnly }: { joinedOnly?: boolean }, context: any) => {
+    getCommunities: async (_: any, { joinedOnly, privacyType }: { joinedOnly?: boolean, privacyType?: string }, context: any) => {
       const user = context?.user;
       if (!user) return [];
       const where: any = {};
@@ -3225,6 +3262,10 @@ export const resolvers = {
         select: { communityId: true }
       }) : [];
       const joinedIds = memberships.map((m: any) => m.communityId);
+
+      if (privacyType) {
+        where.privacyType = privacyType;
+      }
 
       if (joinedOnly) {
         if (!memberId) return [];
@@ -3359,7 +3400,7 @@ export const resolvers = {
       return membership?.unreadCount || 0;
     },
 
-    getCommunityMembers: async (_: any, { communityId }: any, context: any) => {
+    getCommunityMembers: async (_: any, { communityId, role, search }: any, context: any) => {
       await assertCommunityReadAccess(Number(communityId), context);
 
       const community = await (prisma as any).community.findUnique({
@@ -3368,25 +3409,25 @@ export const resolvers = {
       if (!community) throw new Error("Community not found");
 
       // 1. Fetch all members in CommunityMember table
+      let whereClause: any = { communityId: Number(communityId) };
       const memberships = await (prisma as any).communityMember.findMany({
-        where: { communityId: Number(communityId) },
+        where: whereClause,
         include: { member: { include: { location: true } } }
       });
 
-      const memberDetails = memberships.map((m: any) => ({
+      let memberDetails = memberships.map((m: any) => ({
         id: m.member.id,
         name: `${m.member.name} ${m.member.surname || ''}`.trim(),
         phone: m.member.phone,
         image: m.member.image,
-        role: 'MEMBER',
-        isGroupAdmin: false,
+        role: m.role || 'MEMBER',
+        isGroupAdmin: m.role === 'OWNER' || m.role === 'ADMIN',
         isMuted: m.isMuted
       }));
 
       // 2. Fetch all admins who are in the same location or parents of the location
       let adminUsers: any[] = [];
       if (community.locationId) {
-        // Fetch users (admins) who have locationId in the ancestor tree of community.locationId
         const ancestorIds = await getAncestorLocationIds(community.locationId);
         adminUsers = await (prisma as any).user.findMany({
           where: {
@@ -3396,7 +3437,6 @@ export const resolvers = {
           include: { location: true }
         });
       } else {
-        // State-level community, get all super admins
         adminUsers = await (prisma as any).user.findMany({
           where: { role: 'SUPER_ADMIN' },
           include: { location: true }
@@ -3404,7 +3444,7 @@ export const resolvers = {
       }
 
       const adminDetails = adminUsers.map((u: any) => ({
-        id: -Number(u.id), // negative ID for User/Admin to avoid key collision
+        id: -Number(u.id),
         name: `${u.name} ${u.surname || ''}`.trim(),
         phone: u.phone,
         image: u.image,
@@ -3413,7 +3453,23 @@ export const resolvers = {
         isMuted: false
       }));
 
-      return [...adminDetails, ...memberDetails];
+      let allMembers = [...adminDetails, ...memberDetails];
+
+      // Filter by role if specified
+      if (role) {
+        allMembers = allMembers.filter((m: any) => m.role === role);
+      }
+
+      // Filter by search if specified
+      if (search) {
+        const searchLower = search.toLowerCase();
+        allMembers = allMembers.filter((m: any) =>
+          m.name.toLowerCase().includes(searchLower) ||
+          m.phone?.includes(searchLower)
+        );
+      }
+
+      return allMembers;
     },
 
     getTargetableLocations: async (_: any, { parentId }: any, context: any) => {
@@ -3613,17 +3669,24 @@ export const resolvers = {
       });
     },
 
-    getPendingCommunityJoinRequests: async (_: any, { communityId }: any, context: any) => {
+    getPendingCommunityJoinRequests: async (_: any, { communityId, status }: any, context: any) => {
       const user = context?.user;
       if (!user) throw new Error('Not authenticated');
-      
+
       const role = await getCommunityRoleFromContext(context, Number(communityId));
       if (!role || !hasGroupPermission(role, 'MANAGE_MEMBERS')) {
         throw new Error('Only Community Admins can view pending join requests');
       }
 
+      const where: any = { communityId: Number(communityId) };
+      if (status) {
+        where.status = status;
+      } else {
+        where.status = 'PENDING';
+      }
+
       return (prisma as any).communityJoinRequest.findMany({
-        where: { communityId: Number(communityId), status: 'PENDING' },
+        where,
         include: { user: { include: { location: true } } },
         orderBy: { createdAt: 'desc' }
       });
@@ -3790,6 +3853,312 @@ export const resolvers = {
         include: { user: true, bannedBy: true },
         orderBy: { createdAt: 'desc' }
       });
+    },
+
+    // Additional Community APIs from images
+    getCommunityDetails: async (_: any, { communityId }: any, context: any) => {
+      const user = context?.user;
+      const community = await (prisma as any).community.findUnique({
+        where: { id: Number(communityId) },
+        include: { location: true }
+      });
+      if (!community) throw new Error('Community not found');
+
+      const memberId = await getMemberIdFromContext(context);
+      const membership = memberId ? await (prisma as any).communityMember.findUnique({
+        where: {
+          communityId_memberId: {
+            communityId: Number(communityId),
+            memberId
+          }
+        }
+      }) : null;
+
+      const memberCount = await (prisma as any).communityMember.count({
+        where: { communityId: Number(communityId) }
+      });
+
+      const announcementCount = await (prisma as any).communityAnnouncement.count({
+        where: { communityId: Number(communityId) }
+      });
+
+      const eventCount = await (prisma as any).event.count({
+        where: { communityId: Number(communityId) }
+      });
+
+      return {
+        ...community,
+        memberCount,
+        announcementCount,
+        eventCount,
+        isJoined: !!membership,
+        userRole: membership?.role || null,
+        locationName: community.location?.name || null,
+        tags: community.tags || [],
+        createdAt: toIsoString(community.createdAt)
+      };
+    },
+
+    getFeaturedCommunities: async (_: any, __: any, context: any) => {
+      const user = context?.user;
+      const communities = await (prisma as any).community.findMany({
+        where: { isFeatured: true, privacyType: { not: 'SECRET' } },
+        include: { location: true },
+        orderBy: { name: 'asc' }
+      });
+
+      const results = [];
+      for (const community of communities) {
+        const memberCount = await (prisma as any).communityMember.count({
+          where: { communityId: community.id }
+        });
+        results.push({
+          ...community,
+          memberCount,
+          createdAt: toIsoString(community.createdAt)
+        });
+      }
+      return results;
+    },
+
+    getNearbyCommunities: async (_: any, { locationId, radiusKm = 10 }: any, context: any) => {
+      const user = context?.user;
+      const targetLocationId = locationId || user?.locationId;
+      if (!targetLocationId) return [];
+
+      const location = await (prisma as any).location.findUnique({
+        where: { id: Number(targetLocationId) }
+      });
+      if (!location) return [];
+
+      const ancestorIds = await getAncestorLocationIds(Number(targetLocationId));
+      const childIds = await getChildLocationIds(Number(targetLocationId));
+      const allLocationIds = [Number(targetLocationId), ...ancestorIds, ...childIds];
+
+      const communities = await (prisma as any).community.findMany({
+        where: {
+          locationId: { in: allLocationIds },
+          privacyType: { not: 'SECRET' }
+        },
+        include: { location: true },
+        orderBy: { name: 'asc' }
+      });
+
+      const results = [];
+      for (const community of communities) {
+        const memberCount = await (prisma as any).communityMember.count({
+          where: { communityId: community.id }
+        });
+        results.push({
+          ...community,
+          memberCount,
+          createdAt: toIsoString(community.createdAt)
+        });
+      }
+      return results;
+    },
+
+    searchCommunities: async (_: any, { query, locationId }: any, context: any) => {
+      const user = context?.user;
+      const where: any = {
+        OR: [
+          { name: { contains: query, mode: 'insensitive' } },
+          { description: { contains: query, mode: 'insensitive' } }
+        ],
+        privacyType: { not: 'SECRET' }
+      };
+
+      if (locationId) {
+        const ancestorIds = await getAncestorLocationIds(Number(locationId));
+        const childIds = await getChildLocationIds(Number(locationId));
+        const allLocationIds = [Number(locationId), ...ancestorIds, ...childIds];
+        where.locationId = { in: allLocationIds };
+      }
+
+      const communities = await (prisma as any).community.findMany({
+        where,
+        include: { location: true },
+        orderBy: { name: 'asc' }
+      });
+
+      const results = [];
+      for (const community of communities) {
+        const memberCount = await (prisma as any).communityMember.count({
+          where: { communityId: community.id }
+        });
+        results.push({
+          ...community,
+          memberCount,
+          createdAt: toIsoString(community.createdAt)
+        });
+      }
+      return results;
+    },
+
+    getCommunityRules: async (_: any, { communityId }: any, context: any) => {
+      const community = await (prisma as any).community.findUnique({
+        where: { id: Number(communityId) },
+        select: { rules: true }
+      });
+      if (!community) throw new Error('Community not found');
+      return community.rules || [];
+    },
+
+    getCommunityEvents: async (_: any, { communityId }: any, context: any) => {
+      await assertCommunityReadAccess(Number(communityId), context);
+
+      return (prisma as any).event.findMany({
+        where: { communityId: Number(communityId) },
+        include: { location: true, createdBy: true },
+        orderBy: { date: 'asc' }
+      });
+    },
+
+    getCommunityInviteCode: async (_: any, { communityId }: any, context: any) => {
+      const user = context?.user;
+      if (!user) throw new Error('Not authenticated');
+
+      const role = await getCommunityRoleFromContext(context, Number(communityId));
+      if (!role || !hasGroupPermission(role, 'MANAGE_COMMUNITY')) {
+        throw new Error('Unauthorized');
+      }
+
+      const community = await (prisma as any).community.findUnique({
+        where: { id: Number(communityId) },
+        select: { inviteCode: true, inviteCodeExpiry: true }
+      });
+
+      if (!community) throw new Error('Community not found');
+      if (community.inviteCodeExpiry && new Date() > community.inviteCodeExpiry) {
+        return null;
+      }
+      return community.inviteCode;
+    },
+
+    getCommunitySettings: async (_: any, { communityId }: any, context: any) => {
+      const user = context?.user;
+      if (!user) throw new Error('Not authenticated');
+
+      await assertCommunityReadAccess(Number(communityId), context);
+
+      const community = await (prisma as any).community.findUnique({
+        where: { id: Number(communityId) },
+        include: { location: true }
+      });
+
+      if (!community) throw new Error('Community not found');
+
+      const memberId = await getMemberIdFromContext(context);
+      const membership = memberId ? await (prisma as any).communityMember.findUnique({
+        where: {
+          communityId_memberId: {
+            communityId: Number(communityId),
+            memberId
+          }
+        }
+      }) : null;
+
+      return {
+        communityId: community.id,
+        notificationsEnabled: membership?.notificationsEnabled ?? true,
+        mediaAutoDownload: membership?.mediaAutoDownload ?? false,
+        linksAndDocsEnabled: community.linksAndDocsEnabled ?? true,
+        muted: membership?.isMuted ?? false,
+        starredMessagesEnabled: membership?.starredMessagesEnabled ?? true,
+        about: community.description,
+        location: community.location?.name || null,
+        createdAt: toIsoString(community.createdAt)
+      };
+    },
+
+    getCommunityRolesAndPermissions: async (_: any, { communityId }: any, context: any) => {
+      const user = context?.user;
+      if (!user) throw new Error('Not authenticated');
+
+      const role = await getCommunityRoleFromContext(context, Number(communityId));
+      if (!role || !['OWNER', 'ADMIN'].includes(role)) {
+        throw new Error('Unauthorized');
+      }
+
+      const defaultPermissions = {
+        OWNER: ['ALL_PERMISSIONS'],
+        ADMIN: ['MANAGE_MEMBERS', 'MANAGE_COMMUNITY', 'MANAGE_POSTS', 'MANAGE_ANNOUNCEMENTS', 'VIEW_ANALYTICS'],
+        MODERATOR: ['MANAGE_POSTS', 'MANAGE_ANNOUNCEMENTS'],
+        MEMBER: ['POST_MESSAGES', 'VIEW_CONTENT']
+      };
+
+      return Object.entries(defaultPermissions).map(([roleName, permissions]) => ({
+        roleName,
+        permissions,
+        description: `${roleName} role permissions`
+      }));
+    },
+
+    getCommunityStarredMessages: async (_: any, { communityId }: any, context: any) => {
+      const user = context?.user;
+      if (!user) throw new Error('Not authenticated');
+
+      await assertCommunityReadAccess(Number(communityId), context);
+
+      const memberId = await getMemberIdFromContext(context);
+      if (!memberId) return [];
+
+      const starredMessageIds = await (prisma as any).communityMessageStar.findMany({
+        where: {
+          communityId: Number(communityId),
+          memberId
+        },
+        select: { messageId: true }
+      });
+
+      if (starredMessageIds.length === 0) return [];
+
+      const messageIds = starredMessageIds.map((s: any) => s.messageId);
+      return (prisma as any).communityMessage.findMany({
+        where: { id: { in: messageIds } },
+        orderBy: { createdAt: 'desc' }
+      });
+    },
+
+    getCommunityLinksAndDocs: async (_: any, { communityId }: any, context: any) => {
+      const user = context?.user;
+      if (!user) throw new Error('Not authenticated');
+
+      await assertCommunityReadAccess(Number(communityId), context);
+
+      return (prisma as any).communityLinkOrDoc.findMany({
+        where: { communityId: Number(communityId) },
+        orderBy: { createdAt: 'desc' }
+      });
+    },
+
+    getCommunityOnlineMembers: async (_: any, { communityId }: any, context: any) => {
+      const user = context?.user;
+      if (!user) throw new Error('Not authenticated');
+
+      await assertCommunityReadAccess(Number(communityId), context);
+
+      const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+
+      const memberships = await (prisma as any).communityMember.findMany({
+        where: {
+          communityId: Number(communityId),
+          member: {
+            lastActiveAt: { gte: fiveMinutesAgo }
+          }
+        },
+        include: { member: true }
+      });
+
+      return memberships.map((m: any) => ({
+        id: m.member.id,
+        name: `${m.member.name} ${m.member.surname || ''}`.trim(),
+        phone: m.member.phone,
+        image: m.member.image,
+        role: m.role || 'MEMBER',
+        isGroupAdmin: m.role === 'OWNER' || m.role === 'ADMIN',
+        isMuted: m.isMuted
+      }));
     },
   },
 
@@ -10159,6 +10528,302 @@ export const resolvers = {
         reason,
         status: 'PENDING'
       }
+    });
+
+    return true;
+  }),
+
+  // Additional Community Mutations from images
+  updateCommunitySettings: safeResolver(async (_: any, { communityId, settings }: any, context: any) => {
+    const user = context?.user;
+    if (!user) throw new Error('Not authenticated');
+
+    const role = await getCommunityRoleFromContext(context, Number(communityId));
+    if (!role) throw new Error('Not a member of this community');
+
+    const memberId = await getMemberIdFromContext(context);
+    if (!memberId) throw new Error('Member profile not found');
+
+    // Update community-level settings (admin only)
+    if (hasGroupPermission(role, 'MANAGE_COMMUNITY')) {
+      const updateData: any = {};
+      if (settings.name !== undefined) updateData.name = settings.name;
+      if (settings.description !== undefined) updateData.description = settings.description;
+      if (settings.privacyType !== undefined) updateData.privacyType = settings.privacyType;
+      if (settings.allowMemberMessages !== undefined) updateData.allowMemberMessages = settings.allowMemberMessages;
+
+      if (Object.keys(updateData).length > 0) {
+        await (prisma as any).community.update({
+          where: { id: Number(communityId) },
+          data: updateData
+        });
+      }
+    }
+
+    // Update member-level settings
+    const memberUpdateData: any = {};
+    if (settings.notificationsEnabled !== undefined) memberUpdateData.notificationsEnabled = settings.notificationsEnabled;
+    if (settings.mediaAutoDownload !== undefined) memberUpdateData.mediaAutoDownload = settings.mediaAutoDownload;
+    if (settings.starredMessagesEnabled !== undefined) memberUpdateData.starredMessagesEnabled = settings.starredMessagesEnabled;
+    if (settings.muted !== undefined) memberUpdateData.isMuted = settings.muted;
+
+    if (Object.keys(memberUpdateData).length > 0) {
+      await (prisma as any).communityMember.update({
+        where: {
+          communityId_memberId: {
+            communityId: Number(communityId),
+            memberId
+          }
+        },
+        data: memberUpdateData
+      });
+    }
+
+    return await (prisma as any).community.findUnique({
+      where: { id: Number(communityId) },
+      include: { location: true }
+    });
+  }),
+
+  generateCommunityInviteCode: safeResolver(async (_: any, { communityId, expiryDays = 7 }: any, context: any) => {
+    const user = context?.user;
+    if (!user) throw new Error('Not authenticated');
+
+    const role = await getCommunityRoleFromContext(context, Number(communityId));
+    if (!role || !hasGroupPermission(role, 'MANAGE_COMMUNITY')) {
+      throw new Error('Unauthorized');
+    }
+
+    const code = `INV-${Number(communityId)}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+    const expiry = new Date(Date.now() + expiryDays * 24 * 60 * 60 * 1000);
+
+    await (prisma as any).community.update({
+      where: { id: Number(communityId) },
+      data: { inviteCode: code, inviteCodeExpiry: expiry }
+    });
+
+    return code;
+  }),
+
+  pinCommunityAnnouncement: safeResolver(async (_: any, { announcementId }: any, context: any) => {
+    const user = context?.user;
+    if (!user) throw new Error('Not authenticated');
+
+    const announcement = await (prisma as any).communityAnnouncement.findUnique({
+      where: { id: Number(announcementId) },
+      include: { community: true }
+    });
+    if (!announcement) throw new Error('Announcement not found');
+
+    const role = await getCommunityRoleFromContext(context, announcement.communityId);
+    if (!role || !hasGroupPermission(role, 'MANAGE_ANNOUNCEMENTS')) {
+      throw new Error('Unauthorized');
+    }
+
+    return (prisma as any).communityAnnouncement.update({
+      where: { id: Number(announcementId) },
+      data: { isPinned: true }
+    });
+  }),
+
+  unpinCommunityAnnouncement: safeResolver(async (_: any, { announcementId }: any, context: any) => {
+    const user = context?.user;
+    if (!user) throw new Error('Not authenticated');
+
+    const announcement = await (prisma as any).communityAnnouncement.findUnique({
+      where: { id: Number(announcementId) },
+      include: { community: true }
+    });
+    if (!announcement) throw new Error('Announcement not found');
+
+    const role = await getCommunityRoleFromContext(context, announcement.communityId);
+    if (!role || !hasGroupPermission(role, 'MANAGE_ANNOUNCEMENTS')) {
+      throw new Error('Unauthorized');
+    }
+
+    return (prisma as any).communityAnnouncement.update({
+      where: { id: Number(announcementId) },
+      data: { isPinned: false }
+    });
+  }),
+
+  updateCommunityAnnouncement: safeResolver(async (_: any, { announcementId, title, message, isPinned, scheduledFor }: any, context: any) => {
+    const user = context?.user;
+    if (!user) throw new Error('Not authenticated');
+
+    const announcement = await (prisma as any).communityAnnouncement.findUnique({
+      where: { id: Number(announcementId) },
+      include: { community: true }
+    });
+    if (!announcement) throw new Error('Announcement not found');
+
+    const role = await getCommunityRoleFromContext(context, announcement.communityId);
+    if (!role || !hasGroupPermission(role, 'MANAGE_ANNOUNCEMENTS')) {
+      throw new Error('Unauthorized');
+    }
+
+    const updateData: any = {};
+    if (title !== undefined) updateData.title = title;
+    if (message !== undefined) updateData.message = message;
+    if (isPinned !== undefined) updateData.isPinned = isPinned;
+    if (scheduledFor !== undefined) updateData.scheduledFor = scheduledFor ? new Date(scheduledFor) : null;
+
+    return (prisma as any).communityAnnouncement.update({
+      where: { id: Number(announcementId) },
+      data: updateData
+    });
+  }),
+
+  deleteCommunityAnnouncement: safeResolver(async (_: any, { announcementId }: any, context: any) => {
+    const user = context?.user;
+    if (!user) throw new Error('Not authenticated');
+
+    const announcement = await (prisma as any).communityAnnouncement.findUnique({
+      where: { id: Number(announcementId) },
+      include: { community: true }
+    });
+    if (!announcement) throw new Error('Announcement not found');
+
+    const role = await getCommunityRoleFromContext(context, announcement.communityId);
+    if (!role || !hasGroupPermission(role, 'MANAGE_ANNOUNCEMENTS')) {
+      throw new Error('Unauthorized');
+    }
+
+    await (prisma as any).communityAnnouncement.delete({
+      where: { id: Number(announcementId) }
+    });
+
+    return true;
+  }),
+
+  bulkApproveJoinRequests: safeResolver(async (_: any, { communityId, requestIds }: any, context: any) => {
+    const user = context?.user;
+    if (!user) throw new Error('Not authenticated');
+
+    const role = await getCommunityRoleFromContext(context, Number(communityId));
+    if (!role || !hasGroupPermission(role, 'MANAGE_MEMBERS')) {
+      throw new Error('Unauthorized');
+    }
+
+    await (prisma as any).communityJoinRequest.updateMany({
+      where: {
+        id: { in: requestIds.map((id: number) => Number(id)) },
+        communityId: Number(communityId),
+        status: 'PENDING'
+      },
+      data: { status: 'APPROVED' }
+    });
+
+    // Add members to community
+    for (const requestId of requestIds) {
+      const request = await (prisma as any).communityJoinRequest.findUnique({
+        where: { id: Number(requestId) }
+      });
+      if (request && request.status === 'APPROVED') {
+        // Get member from user
+        const member = await (prisma as any).member.findFirst({
+          where: { userId: request.userId }
+        });
+        if (member) {
+          await (prisma as any).communityMember.create({
+            data: {
+              communityId: Number(communityId),
+              memberId: member.id,
+              role: 'MEMBER'
+            },
+            skipDuplicates: true
+          });
+        }
+      }
+    }
+
+    return true;
+  }),
+
+  starCommunityMessage: safeResolver(async (_: any, { messageId }: any, context: any) => {
+    const user = context?.user;
+    if (!user) throw new Error('Not authenticated');
+
+    const memberId = await getMemberIdFromContext(context);
+    if (!memberId) throw new Error('Member profile not found');
+
+    const message = await (prisma as any).communityMessage.findUnique({
+      where: { id: Number(messageId) }
+    });
+    if (!message) throw new Error('Message not found');
+
+    await (prisma as any).communityMessageStar.create({
+      data: {
+        communityId: message.communityId,
+        messageId: Number(messageId),
+        memberId
+      },
+      skipDuplicates: true
+    });
+
+    return message;
+  }),
+
+  unstarCommunityMessage: safeResolver(async (_: any, { messageId }: any, context: any) => {
+    const user = context?.user;
+    if (!user) throw new Error('Not authenticated');
+
+    const memberId = await getMemberIdFromContext(context);
+    if (!memberId) throw new Error('Member profile not found');
+
+    await (prisma as any).communityMessageStar.deleteMany({
+      where: {
+        messageId: Number(messageId),
+        memberId
+      }
+    });
+
+    const message = await (prisma as any).communityMessage.findUnique({
+      where: { id: Number(messageId) }
+    });
+    return message;
+  }),
+
+  uploadCommunityLinkOrDoc: safeResolver(async (_: any, { communityId, title, url, type }: any, context: any) => {
+    const user = context?.user;
+    if (!user) throw new Error('Not authenticated');
+
+    const role = await getCommunityRoleFromContext(context, Number(communityId));
+    if (!role) throw new Error('Not a member of this community');
+
+    const memberId = await getMemberIdFromContext(context);
+    if (!memberId) throw new Error('Member profile not found');
+
+    return (prisma as any).communityLinkOrDoc.create({
+      data: {
+        communityId: Number(communityId),
+        title,
+        url,
+        type,
+        uploadedBy: memberId
+      }
+    });
+  }),
+
+  deleteCommunityLinkOrDoc: safeResolver(async (_: any, { linkOrDocId }: any, context: any) => {
+    const user = context?.user;
+    if (!user) throw new Error('Not authenticated');
+
+    const linkOrDoc = await (prisma as any).communityLinkOrDoc.findUnique({
+      where: { id: Number(linkOrDocId) }
+    });
+    if (!linkOrDoc) throw new Error('Link or document not found');
+
+    const role = await getCommunityRoleFromContext(context, linkOrDoc.communityId);
+    const memberId = await getMemberIdFromContext(context);
+
+    // Allow deletion by uploader or admin
+    if (linkOrDoc.uploadedBy !== memberId && !hasGroupPermission(role || '', 'MANAGE_COMMUNITY')) {
+      throw new Error('Unauthorized');
+    }
+
+    await (prisma as any).communityLinkOrDoc.delete({
+      where: { id: Number(linkOrDocId) }
     });
 
     return true;

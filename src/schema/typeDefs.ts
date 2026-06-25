@@ -263,11 +263,16 @@ export const typeDefs = gql`
     memberCount: Int!
     locationId: Int
     location: Location
+    locationName: String
     createdAt: String!
     isJoined: Boolean!
     rules: [String!]!
     privacyType: CommunityPrivacyType!
     isArchived: Boolean!
+    userRole: CommunityGroupRole
+    announcementCount: Int!
+    eventCount: Int!
+    tags: [String!]!
   }
 
   type CommunityMessageReaction {
@@ -562,7 +567,7 @@ export const typeDefs = gql`
     getTownsAndStreets(constituencyId: Int!): [TownWithStreets!]!
     me: User
     getMemberList(locationId: Int, professionName: String, bloodGroup: String, role: String, search: String, limit: Int, offset: Int, approvalStatus: ApprovalStatus): [Member!]!
-    getMemberDetails(id: Int!): Member
+    getMemberDetails(id: Int!, communityId: Int): Member
     recentActivity(
       locationId: Int
       limit: Int = 10
@@ -584,11 +589,11 @@ export const typeDefs = gql`
     getNotificationDetails(id: Int!): NotificationDetails
     getEventList(locationId: Int, status: EventStatus, eventId: Int): [Event!]!
     getEmergencyRequestList(locationId: Int, status: RequestStatus): [EmergencyRequest!]!
-    getCommunities(joinedOnly: Boolean): [Community!]!
+    getCommunities(joinedOnly: Boolean, privacyType: CommunityPrivacyType): [Community!]!
     getCommunityPosts(communityId: Int!, category: String): [CommunityPost!]!
     getCommunityMessages(communityId: Int!, limit: Int = 50, beforeMessageId: Int): [CommunityMessage!]!
     getCommunityUnreadCount(communityId: Int!): Int!
-    getCommunityMembers(communityId: Int!): [CommunityMemberDetail!]!
+    getCommunityMembers(communityId: Int!, role: CommunityGroupRole, search: String): [CommunityMemberDetail!]!
     getTargetableLocations(parentId: Int): [Location!]!
     getBroadcastList(locationId: Int, scope: BroadcastScope, broadcastId: Int, isActive: Boolean): [Broadcast!]!
     getBroadcasts(locationId: Int, scope: BroadcastScope, broadcastId: Int, isActive: Boolean): [Broadcast!]!
@@ -616,7 +621,7 @@ export const typeDefs = gql`
     getMyLocationAccessRequests: [LocationAccessRequest!]!
     getUserAssignedLocations(userId: Int!): [UserLocationAssignment!]!
     # Community Module Enhancements Queries
-    getPendingCommunityJoinRequests(communityId: Int!): [CommunityJoinRequest!]!
+    getPendingCommunityJoinRequests(communityId: Int!, status: String): [CommunityJoinRequest!]!
     getCommunityAdminLogs(communityId: Int!): [CommunityAdminLog!]!
     getCommunityComplaints(communityId: Int!, status: String): [CommunityComplaint!]!
     generateCommunityInviteLink(communityId: Int!, expiryDays: Int): String!
@@ -624,6 +629,19 @@ export const typeDefs = gql`
     getCommunityMediaGallery(communityId: Int!, mediaType: String): [CommunityMediaItem!]!
     getCommunityAnalytics(communityId: Int!): CommunityAnalytics!
     getCommunityBans(communityId: Int!): [CommunityBanInfo!]!
+    # Additional Community APIs from images
+    getCommunityDetails(communityId: Int!): Community!
+    getFeaturedCommunities: [Community!]!
+    getNearbyCommunities(locationId: Int, radiusKm: Int): [Community!]!
+    searchCommunities(query: String!, locationId: Int): [Community!]!
+    getCommunityRules(communityId: Int!): [String!]!
+    getCommunityEvents(communityId: Int!): [Event!]!
+    getCommunityInviteCode(communityId: Int!): String!
+    getCommunitySettings(communityId: Int!): CommunitySettings!
+    getCommunityRolesAndPermissions(communityId: Int!): [CommunityRolePermission!]!
+    getCommunityStarredMessages(communityId: Int!): [CommunityMessage!]!
+    getCommunityLinksAndDocs(communityId: Int!): [CommunityLinkOrDoc!]!
+    getCommunityOnlineMembers(communityId: Int!): [CommunityMemberDetail!]!
   }
 
   type Mutation {
@@ -967,6 +985,18 @@ export const typeDefs = gql`
     createCommunityAnnouncement(communityId: Int!, title: String!, message: String!, isPinned: Boolean, scheduledFor: String): CommunityAnnouncement!
     archiveCommunity(communityId: Int!, isArchived: Boolean!): Boolean!
     reportCommunityMember(communityId: Int!, reportedUserId: Int!, reason: String!): Boolean!
+    # Additional Community Mutations from images
+    updateCommunitySettings(communityId: Int!, settings: CommunitySettingsInput!): Community!
+    generateCommunityInviteCode(communityId: Int!, expiryDays: Int): String!
+    pinCommunityAnnouncement(announcementId: Int!): CommunityAnnouncement!
+    unpinCommunityAnnouncement(announcementId: Int!): CommunityAnnouncement!
+    updateCommunityAnnouncement(announcementId: Int!, title: String, message: String, isPinned: Boolean, scheduledFor: String): CommunityAnnouncement!
+    deleteCommunityAnnouncement(announcementId: Int!): Boolean!
+    bulkApproveJoinRequests(communityId: Int!, requestIds: [Int!]!): Boolean!
+    starCommunityMessage(messageId: Int!): CommunityMessage!
+    unstarCommunityMessage(messageId: Int!): CommunityMessage!
+    uploadCommunityLinkOrDoc(communityId: Int!, title: String!, url: String!, type: String!): CommunityLinkOrDoc!
+    deleteCommunityLinkOrDoc(linkOrDocId: Int!): Boolean!
   }
 
   type AuthPayload {
@@ -1349,5 +1379,45 @@ export const typeDefs = gql`
     eventsCreatedCount: Int!
     pollParticipationRate: Float!
     complaintResolutionRate: Float!
+  }
+
+  type CommunitySettings {
+    communityId: Int!
+    notificationsEnabled: Boolean!
+    mediaAutoDownload: Boolean!
+    linksAndDocsEnabled: Boolean!
+    muted: Boolean!
+    starredMessagesEnabled: Boolean!
+    about: String!
+    location: String!
+    createdAt: String!
+  }
+
+  type CommunityRolePermission {
+    roleName: CommunityGroupRole!
+    permissions: [String!]!
+    description: String!
+  }
+
+  type CommunityLinkOrDoc {
+    id: Int!
+    title: String!
+    url: String!
+    type: String!
+    uploadedBy: String!
+    uploadedAt: String!
+  }
+
+  input CommunitySettingsInput {
+    name: String
+    description: String
+    location: String
+    privacyType: CommunityPrivacyType
+    allowMemberMessages: Boolean
+    notificationsEnabled: Boolean
+    mediaAutoDownload: Boolean
+    linksAndDocsEnabled: Boolean
+    muted: Boolean
+    starredMessagesEnabled: Boolean
   }
 `;

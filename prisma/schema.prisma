@@ -53,6 +53,7 @@ model Member {
   approvalStatus       ApprovalStatus         @default(PENDING)
   consent              Boolean                @default(true)
   isActive             Boolean                @default(true)
+  lastActiveAt         DateTime?
   createdAt            DateTime               @default(now())
   updatedAt            DateTime               @updatedAt
   createdById          Int?
@@ -446,6 +447,9 @@ model Community {
   inviteCodeExpiry    DateTime?
   isArchived          Boolean                 @default(false)
   archivedAt          DateTime?
+  isFeatured          Boolean                 @default(false)
+  tags                String[]
+  linksAndDocsEnabled Boolean                 @default(true)
   joinRequests        CommunityJoinRequest[]
   adminLogs           CommunityAdminLog[]
   complaints          CommunityComplaint[]
@@ -454,6 +458,7 @@ model Community {
   memberActivities    CommunityMemberActivity[]
   memberReports       CommunityMemberReport[]
   events              Event[]
+  linksAndDocs        CommunityLinkOrDoc[]
 }
 
 model CommunityPost {
@@ -478,18 +483,22 @@ model CommunityPost {
 }
 
 model CommunityMember {
-  id               Int                @id @default(autoincrement())
-  communityId      Int
-  memberId         Int
-  isMuted          Boolean            @default(false)
-  mutedUntil       DateTime?
-  unreadCount      Int                @default(0)
-  lastReadAt       DateTime?
-  createdAt        DateTime           @default(now())
-  community        Community          @relation(fields: [communityId], references: [id], onDelete: Cascade)
-  member           Member             @relation(fields: [memberId], references: [id], onDelete: Cascade)
-  groupRole        CommunityGroupRole @default(MEMBER)
-  notificationPref String             @default("ALL")
+  id                    Int                @id @default(autoincrement())
+  communityId           Int
+  memberId              Int
+  isMuted               Boolean            @default(false)
+  mutedUntil            DateTime?
+  unreadCount           Int                @default(0)
+  lastReadAt            DateTime?
+  createdAt             DateTime           @default(now())
+  community             Community          @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  member                Member             @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  groupRole             CommunityGroupRole @default(MEMBER)
+  notificationPref      String             @default("ALL")
+  notificationsEnabled  Boolean            @default(true)
+  mediaAutoDownload     Boolean            @default(false)
+  starredMessagesEnabled Boolean           @default(true)
+  role                  String             @default("MEMBER")
 
   @@unique([communityId, memberId])
 }
@@ -1050,4 +1059,30 @@ model CommunityMemberReport {
   community      Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
   reportedUser   User      @relation("ReportedUserRelation", fields: [reportedUserId], references: [id], onDelete: Cascade)
   reporter       User      @relation("ReporterRelation", fields: [reporterId], references: [id], onDelete: Cascade)
+}
+
+model CommunityLinkOrDoc {
+  id         Int      @id @default(autoincrement())
+  communityId Int
+  title      String
+  url        String
+  type       String
+  uploadedBy Int
+  uploadedAt DateTime @default(now())
+  community  Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+
+  @@index([communityId])
+  @@index([uploadedBy])
+}
+
+model CommunityMessageStar {
+  id          Int      @id @default(autoincrement())
+  communityId  Int
+  messageId   Int
+  memberId    Int
+  starredAt   DateTime @default(now())
+
+  @@unique([messageId, memberId])
+  @@index([communityId])
+  @@index([memberId])
 }
