@@ -266,6 +266,8 @@ export const typeDefs = gql`
     createdAt: String!
     isJoined: Boolean!
     rules: [String!]!
+    privacyType: CommunityPrivacyType!
+    isArchived: Boolean!
   }
 
   type CommunityMessageReaction {
