@@ -361,10 +361,12 @@ async function sendSystemNotification({
   metadata?: any;
   data?: any;
 }) {
+  console.log(`[sendSystemNotification] START - Type: ${type}, LocationId: ${locationId}, Title: ${title}`);
   let targetLocationId = Number(locationId);
   const talukId = await findParentLocationOfType(targetLocationId, 'TALUK');
   if (talukId) {
     targetLocationId = talukId;
+    console.log(`[sendSystemNotification] Expanded to TALUK level: ${targetLocationId}`);
   }
 
   const notification = await (prisma as any).notification.create({
@@ -381,6 +383,7 @@ async function sendSystemNotification({
       time: 'Just now'
     }
   });
+  console.log(`[sendSystemNotification] Notification created in DB with ID: ${notification.id}`);
 
   const io = (global as any).io;
   if (io) {
@@ -2963,6 +2966,45 @@ export const resolvers = {
           const allLocationIds = [locationId, ...(await getChildLocationIds(locationId))];
           where.locationId = { in: allLocationIds };
         }
+      } else if (role === 'DISTRICT_INCHARGE') {
+        // District Incharge: Get all districts from userLocation table
+        const userLocations = await (prisma as any).userLocation.findMany({
+          where: { userId: context.user.id },
+          select: { locationId: true }
+        });
+
+        const districtIds: number[] = [];
+        for (const ul of userLocations) {
+          const location = await (prisma as any).location.findUnique({
+            where: { id: ul.locationId }
+          });
+          if (location && location.type === 'DISTRICT') {
+            districtIds.push(location.id);
+          } else if (location && location.parentId) {
+            const parent = await (prisma as any).location.findUnique({
+              where: { id: location.parentId }
+            });
+            if (parent && parent.type === 'DISTRICT') {
+              districtIds.push(parent.id);
+            }
+          }
+        }
+
+        if (districtIds.length > 0) {
+          const allChildIds: number[] = [];
+          for (const districtId of districtIds) {
+            const childIds = await getChildLocationIds(districtId);
+            allChildIds.push(districtId, ...childIds);
+          }
+          where.locationId = { in: allChildIds };
+        } else {
+          // No districts assigned: use primary location
+          if (userLocId) {
+            const childIds = await getChildLocationIds(userLocId);
+            const ancestorIds = await getAncestorLocationIds(userLocId);
+            where.locationId = { in: Array.from(new Set([userLocId, ...childIds, ...ancestorIds])) };
+          }
+        }
       } else if (role === 'ADMIN' || role === 'SUB_ADMIN') {
         if (!userLocId) return [];
         const childIds = await getChildLocationIds(userLocId);
@@ -5346,6 +5388,7 @@ export const resolvers = {
 
       try {
         // 5. Create database, Socket, and FCM Notification
+        console.log(`[Event Creation] Creating event "${title}" at locationId: ${locationId}`);
         await sendSystemNotification({
           title: `New Event: ${title}`,
           message: `${description || 'A new event has been scheduled.'} Date: ${new Date(date).toLocaleDateString()}`,
@@ -5357,6 +5400,7 @@ export const resolvers = {
           entityId: event.id,
           data: { eventId: event.id }
         });
+        console.log(`[Event Creation] Notification sent successfully for event ID: ${event.id}`);
 
         // 6. Retrieve phone numbers of all active members in this location & all its children (expanded to TALUK level if applicable)
         let targetLocId = Number(locationId);

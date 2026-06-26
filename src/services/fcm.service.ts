@@ -135,6 +135,7 @@ export async function sendNotificationToLocation(
 
     console.log(`[FCM] Target locations for notification: ${targetLocations.join(', ')}`);
 
+    // Get users/members with locationId in target locations
     const [users, members, superAdminUsers, superAdminMembers] = await Promise.all([
       (prisma as any).user.findMany({
         where: { locationId: { in: targetLocations }, fcmToken: { not: null } },
@@ -156,11 +157,64 @@ export async function sendNotificationToLocation(
 
     console.log(`[FCM] Found tokens — Users: ${users.length}, Members: ${members.length}, SuperAdminUsers: ${superAdminUsers.length}`);
 
+    // Get users with multi-location assignments (userLocation table)
+    // This handles DISTRICT_INCHARGE, ADMIN, SUB_ADMIN who have locations in userLocation table
+    console.log(`[FCM] Checking userLocation table for target locations: ${targetLocations.join(', ')}`);
+    const userLocations = await (prisma as any).userLocation.findMany({
+      where: { locationId: { in: targetLocations } },
+      select: { userId: true, locationId: true }
+    });
+
+    console.log(`[FCM] Found ${userLocations.length} userLocation entries`);
+    if (userLocations.length > 0) {
+      console.log(`[FCM] userLocation details:`, JSON.stringify(userLocations, null, 2));
+    }
+
+    const multiLocationUserIds = userLocations.map((ul: any) => ul.userId);
+    let multiLocationUsers: any[] = [];
+    let multiLocationMembers: any[] = [];
+
+    if (multiLocationUserIds.length > 0) {
+      console.log(`[FCM] Found ${multiLocationUserIds.length} users with multi-location assignments: ${multiLocationUserIds.join(', ')}`);
+      
+      [multiLocationUsers, multiLocationMembers] = await Promise.all([
+        (prisma as any).user.findMany({
+          where: { 
+            id: { in: multiLocationUserIds },
+            fcmToken: { not: null },
+            role: { in: ['DISTRICT_INCHARGE', 'ADMIN', 'SUB_ADMIN'] }
+          },
+          select: { fcmToken: true, id: true, role: true, phone: true }
+        }),
+        (prisma as any).member.findMany({
+          where: { 
+            userId: { in: multiLocationUserIds },
+            fcmToken: { not: null },
+            role: { in: ['DISTRICT_INCHARGE', 'ADMIN', 'SUB_ADMIN'] }
+          },
+          select: { fcmToken: true, id: true, role: true, phone: true, userId: true }
+        })
+      ]);
+
+      console.log(`[FCM] Multi-location users found: ${multiLocationUsers.length}`);
+      if (multiLocationUsers.length > 0) {
+        console.log(`[FCM] Multi-location user details:`, JSON.stringify(multiLocationUsers.map((u: any) => ({ id: u.id, role: u.role, phone: u.phone, hasToken: !!u.fcmToken })), null, 2));
+      }
+      console.log(`[FCM] Multi-location members found: ${multiLocationMembers.length}`);
+      if (multiLocationMembers.length > 0) {
+        console.log(`[FCM] Multi-location member details:`, JSON.stringify(multiLocationMembers.map((m: any) => ({ id: m.id, role: m.role, phone: m.phone, userId: m.userId, hasToken: !!m.fcmToken })), null, 2));
+      }
+    } else {
+      console.log(`[FCM] No users found in userLocation table for target locations`);
+    }
+
     const tokens = [
       ...users.map((u: any) => u.fcmToken as string),
       ...members.map((m: any) => m.fcmToken as string),
       ...superAdminUsers.map((u: any) => u.fcmToken as string),
-      ...superAdminMembers.map((m: any) => m.fcmToken as string)
+      ...superAdminMembers.map((m: any) => m.fcmToken as string),
+      ...multiLocationUsers.map((u: any) => u.fcmToken as string),
+      ...multiLocationMembers.map((m: any) => m.fcmToken as string)
     ].filter((t: any) => t && t.trim() !== '');
 
     const uniqueTokens = Array.from(new Set<string>(tokens as string[]));
