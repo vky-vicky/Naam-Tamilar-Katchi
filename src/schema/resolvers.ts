@@ -580,6 +580,45 @@ async function getBroadcastListForContext({ locationId, scope, broadcastId, isAc
   let visibleLocationIds: number[] = [];
   if (role === 'SUPER_ADMIN') {
     visibleLocationIds = [];
+  } else if (role === 'DISTRICT_INCHARGE') {
+    // District Incharge: Get all districts from userLocation table
+    const userLocations = await (prisma as any).userLocation.findMany({
+      where: { userId: user.id },
+      select: { locationId: true }
+    });
+
+    const districtIds: number[] = [];
+    for (const ul of userLocations) {
+      const location = await (prisma as any).location.findUnique({
+        where: { id: ul.locationId }
+      });
+      if (location && location.type === 'DISTRICT') {
+        districtIds.push(location.id);
+      } else if (location && location.parentId) {
+        const parent = await (prisma as any).location.findUnique({
+          where: { id: location.parentId }
+        });
+        if (parent && parent.type === 'DISTRICT') {
+          districtIds.push(parent.id);
+        }
+      }
+    }
+
+    if (districtIds.length > 0) {
+      const allChildIds: number[] = [];
+      for (const districtId of districtIds) {
+        const childIds = await getChildLocationIds(districtId);
+        allChildIds.push(districtId, ...childIds);
+      }
+      visibleLocationIds = allChildIds;
+    } else {
+      // No districts assigned: use primary location
+      if (userLocId) {
+        const childIds = await getChildLocationIds(userLocId);
+        const ancestorIds = await getAncestorLocationIds(userLocId);
+        visibleLocationIds = Array.from(new Set([...ancestorIds, ...childIds]));
+      }
+    }
   } else if (role === 'ADMIN' || role === 'SUB_ADMIN') {
     if (!userLocId) return [];
     const childIds = await getChildLocationIds(userLocId);
@@ -1218,6 +1257,25 @@ async function getMemberIdFromContext(context: any): Promise<number | null> {
     return member ? member.id : null;
   }
   return null;
+}
+
+async function resolveUserRecordId(parent: any): Promise<number | null> {
+  const numericId = Number(parent.id);
+  if (numericId >= 1000000) {
+    return numericId - 1000000;
+  }
+  if (parent.phone) {
+    const userByPhone = await (prisma as any).user.findUnique({
+      where: { phone: parent.phone },
+      select: { id: true }
+    });
+    if (userByPhone) return userByPhone.id;
+  }
+  const userById = await (prisma as any).user.findUnique({
+    where: { id: numericId },
+    select: { id: true }
+  });
+  return userById ? numericId : null;
 }
 
 async function getUserIdFromContext(context: any): Promise<number | null> {
@@ -3135,6 +3193,9 @@ export const resolvers = {
       if (eventId) {
         where.id = eventId;
       } else {
+        const userRole = context?.user?.role;
+        const userLocId = context?.user?.locationId;
+        
         if (locationId) {
           const talukId = await findParentLocationOfType(locationId, 'TALUK');
           let allLocationIds: number[] = [];
@@ -3148,9 +3209,54 @@ export const resolvers = {
             allLocationIds = [locationId, ...ancestorIds, ...childIds];
           }
           where.locationId = { in: allLocationIds };
+        } else if (userRole === 'DISTRICT_INCHARGE') {
+          // District Incharge: Get all districts from userLocation table
+          const userLocations = await (prisma as any).userLocation.findMany({
+            where: { userId: context.user.id },
+            select: { locationId: true }
+          });
+
+          const districtIds: number[] = [];
+          for (const ul of userLocations) {
+            const location = await (prisma as any).location.findUnique({
+              where: { id: ul.locationId }
+            });
+            if (location && location.type === 'DISTRICT') {
+              districtIds.push(location.id);
+            } else if (location && location.parentId) {
+              const parent = await (prisma as any).location.findUnique({
+                where: { id: location.parentId }
+              });
+              if (parent && parent.type === 'DISTRICT') {
+                districtIds.push(parent.id);
+              }
+            }
+          }
+
+          if (districtIds.length > 0) {
+            const allChildIds: number[] = [];
+            for (const districtId of districtIds) {
+              const childIds = await getChildLocationIds(districtId);
+              allChildIds.push(districtId, ...childIds);
+            }
+            where.locationId = { in: allChildIds };
+          }
+        } else if (userLocId) {
+          // For other roles, use their location
+          const talukId = await findParentLocationOfType(userLocId, 'TALUK');
+          let allLocationIds: number[] = [];
+          if (talukId) {
+            const ancestorIds = await getAncestorLocationIds(talukId);
+            const childIds = await getChildLocationIds(talukId);
+            allLocationIds = [talukId, ...ancestorIds, ...childIds];
+          } else {
+            const ancestorIds = await getAncestorLocationIds(userLocId);
+            const childIds = await getChildLocationIds(userLocId);
+            allLocationIds = [userLocId, ...ancestorIds, ...childIds];
+          }
+          where.locationId = { in: allLocationIds };
         }
 
-        const userRole = context?.user?.role;
         const now = new Date();
         const istOffset = 5.5 * 60 * 60 * 1000;
         const istTime = new Date(now.getTime() + istOffset);
@@ -3480,7 +3586,7 @@ export const resolvers = {
       return membership?.unreadCount || 0;
     },
 
-    getCommunityMembers: async (_: any, { communityId, role, search }: any, context: any) => {
+    getCommunityMembers: async (_: any, { communityId, role, search, limit, offset }: any, context: any) => {
       await assertCommunityReadAccess(Number(communityId), context);
 
       const community = await (prisma as any).community.findUnique({
@@ -3509,6 +3615,7 @@ export const resolvers = {
       let memberDetails = memberships.map((m: any) => {
         const linkedUser = m.member?.phone ? userByPhone.get(m.member.phone) : null;
         const communityRole = m.groupRole || m.role || 'MEMBER';
+        const joinedAt = toIsoString(m.createdAt);
         return {
           id: m.member.id,
           name: `${m.member.name} ${m.member.surname || ''}`.trim(),
@@ -3518,7 +3625,8 @@ export const resolvers = {
           isGroupAdmin: communityRole === 'OWNER' || communityRole === 'ADMIN',
           isMuted: m.isMuted,
           userId: linkedUser?.id ?? null,
-          joinedAt: toIsoString(m.createdAt),
+          joinedAt: joinedAt,
+          memberSince: joinedAt, // Alias for joinedAt for frontend compatibility
           user: linkedUser ?? null
         };
       });
@@ -3551,6 +3659,7 @@ export const resolvers = {
         isMuted: false,
         userId: u.id,
         joinedAt: null,
+        memberSince: null, // Admins don't have joinedAt
         user: u
       }));
 
@@ -3568,6 +3677,13 @@ export const resolvers = {
           m.name.toLowerCase().includes(searchLower) ||
           m.phone?.includes(searchLower)
         );
+      }
+
+      // Apply pagination if limit/offset provided
+      if (limit !== undefined && limit !== null) {
+        const startIndex = offset || 0;
+        const endIndex = startIndex + Number(limit);
+        allMembers = allMembers.slice(startIndex, endIndex);
       }
 
       return allMembers;
@@ -8155,9 +8271,20 @@ export const resolvers = {
           });
         }
 
+        // Calculate isLiked for the current user
+        const likeExists = await (prisma as any).communityPostLike.findUnique({
+          where: {
+            postId_memberId: {
+              postId: targetPostId,
+              memberId
+            }
+          }
+        });
+
         return {
           ...updatedPost,
-          createdAt: toIsoString(updatedPost.createdAt)
+          createdAt: toIsoString(updatedPost.createdAt),
+          isLiked: !!likeExists
         };
 
       } catch (err) {
@@ -8213,7 +8340,17 @@ export const resolvers = {
               data: { likes: 0 }
             });
           }
-          
+
+          // Calculate isLiked for the current user
+          const likeExists = await (prisma as any).postLike.findUnique({
+            where: {
+              postId_memberId: {
+                postId: targetPostId,
+                memberId
+              }
+            }
+          });
+
           return {
             id: updatedRegularPost.id,
             title: updatedRegularPost.category || "Discussion",
@@ -8225,7 +8362,8 @@ export const resolvers = {
             likes: updatedRegularPost.likes,
             comments: [],
             createdAt: toIsoString(updatedRegularPost.createdAt),
-            updatedAt: toIsoString(updatedRegularPost.createdAt)
+            updatedAt: toIsoString(updatedRegularPost.createdAt),
+            isLiked: !!likeExists
           };
         }
         throw err;
@@ -8941,6 +9079,35 @@ export const resolvers = {
       if (!parent.parentId) return "Self";
       const parentUser = await (prisma as any).user.findUnique({ where: { id: parent.parentId } });
       return parentUser ? parentUser.name : "Self";
+    },
+    userLocations: async (parent: any) => {
+      if (Array.isArray(parent.userLocations)) {
+        return parent.userLocations;
+      }
+      const userId = await resolveUserRecordId(parent);
+      if (userId == null) return [];
+      return (prisma as any).userLocation.findMany({
+        where: { userId },
+        include: { location: true },
+        orderBy: [{ isPrimary: 'desc' }, { locationId: 'asc' }]
+      });
+    },
+    assignedLocationIds: async (parent: any) => {
+      if (Array.isArray(parent.userLocations) && parent.userLocations.length > 0) {
+        return parent.userLocations.map((ul: any) => Number(ul.locationId));
+      }
+      const userId = await resolveUserRecordId(parent);
+      if (userId != null) {
+        const assignments = await (prisma as any).userLocation.findMany({
+          where: { userId },
+          select: { locationId: true },
+          orderBy: [{ isPrimary: 'desc' }, { locationId: 'asc' }]
+        });
+        if (assignments.length > 0) {
+          return assignments.map((a: any) => Number(a.locationId));
+        }
+      }
+      return parent.locationId != null ? [Number(parent.locationId)] : [];
     },
     createdAt: (parent: any) => toIsoString(parent.createdAt),
     district: async (parent: any, _: any, context: any) => {

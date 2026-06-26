@@ -593,7 +593,7 @@ export const typeDefs = gql`
     getCommunityPosts(communityId: Int!, category: String): [CommunityPost!]!
     getCommunityMessages(communityId: Int!, limit: Int = 50, beforeMessageId: Int): [CommunityMessage!]!
     getCommunityUnreadCount(communityId: Int!): Int!
-    getCommunityMembers(communityId: Int!, role: String, search: String): [CommunityMemberDetail!]!
+    getCommunityMembers(communityId: Int!, role: String, search: String, limit: Int, offset: Int): [CommunityMemberDetail!]!
     getTargetableLocations(parentId: Int): [Location!]!
     getBroadcastList(locationId: Int, scope: BroadcastScope, broadcastId: Int, isActive: Boolean): [Broadcast!]!
     getBroadcasts(locationId: Int, scope: BroadcastScope, broadcastId: Int, isActive: Boolean): [Broadcast!]!
@@ -1059,6 +1059,7 @@ export const typeDefs = gql`
     isMuted: Boolean!
     userId: Int
     joinedAt: String
+    memberSince: String
     user: User
   }
 
