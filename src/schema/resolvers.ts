@@ -3492,21 +3492,36 @@ export const resolvers = {
       let whereClause: any = { communityId: Number(communityId) };
       const memberships = await (prisma as any).communityMember.findMany({
         where: whereClause,
-        include: { member: { include: { location: true, user: true } } }
+        include: { member: { include: { location: true } } }
       });
 
-      let memberDetails = memberships.map((m: any) => ({
-        id: m.member.id,
-        name: `${m.member.name} ${m.member.surname || ''}`.trim(),
-        phone: m.member.phone,
-        image: m.member.image,
-        role: m.role || 'MEMBER',
-        isGroupAdmin: m.role === 'OWNER' || m.role === 'ADMIN',
-        isMuted: m.isMuted,
-        userId: m.member.userId,
-        joinedAt: toIsoString(m.createdAt),
-        user: m.member.user
-      }));
+      const memberPhones = memberships
+        .map((m: any) => m.member?.phone)
+        .filter(Boolean);
+      const linkedUsers = memberPhones.length > 0
+        ? await (prisma as any).user.findMany({
+            where: { phone: { in: memberPhones } },
+            include: { location: true }
+          })
+        : [];
+      const userByPhone = new Map<string, any>(linkedUsers.map((u: any) => [u.phone, u]));
+
+      let memberDetails = memberships.map((m: any) => {
+        const linkedUser = m.member?.phone ? userByPhone.get(m.member.phone) : null;
+        const communityRole = m.groupRole || m.role || 'MEMBER';
+        return {
+          id: m.member.id,
+          name: `${m.member.name} ${m.member.surname || ''}`.trim(),
+          phone: m.member.phone,
+          image: m.member.image,
+          role: communityRole,
+          isGroupAdmin: communityRole === 'OWNER' || communityRole === 'ADMIN',
+          isMuted: m.isMuted,
+          userId: linkedUser?.id ?? null,
+          joinedAt: toIsoString(m.createdAt),
+          user: linkedUser ?? null
+        };
+      });
 
       // 2. Fetch all admins who are in the same location or parents of the location
       let adminUsers: any[] = [];
@@ -4236,15 +4251,18 @@ export const resolvers = {
         include: { member: true }
       });
 
-      return memberships.map((m: any) => ({
-        id: m.member.id,
-        name: `${m.member.name} ${m.member.surname || ''}`.trim(),
-        phone: m.member.phone,
-        image: m.member.image,
-        role: m.role || 'MEMBER',
-        isGroupAdmin: m.role === 'OWNER' || m.role === 'ADMIN',
-        isMuted: m.isMuted
-      }));
+      return memberships.map((m: any) => {
+        const communityRole = m.groupRole || m.role || 'MEMBER';
+        return {
+          id: m.member.id,
+          name: `${m.member.name} ${m.member.surname || ''}`.trim(),
+          phone: m.member.phone,
+          image: m.member.image,
+          role: communityRole,
+          isGroupAdmin: communityRole === 'OWNER' || communityRole === 'ADMIN',
+          isMuted: m.isMuted
+        };
+      });
     },
   },
 
