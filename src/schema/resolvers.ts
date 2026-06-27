@@ -10375,11 +10375,58 @@ export const resolvers = {
 
   assignUserLocations: async (_: any, { userId, locationIds, isPrimary }: any, context: any) => {
     const user = context?.user;
-    if (!user || user.role !== 'SUPER_ADMIN') {
-      throw new Error('Only SUPER_ADMIN can assign locations');
+    if (!user) {
+      throw new Error(I18nService.translate("unauthorized_login", context?.language));
+    }
+
+    const role = user.role;
+    if (role !== 'SUPER_ADMIN' && role !== 'ADMIN' && role !== 'DISTRICT_INCHARGE') {
+      throw new Error('Only SUPER_ADMIN, ADMIN, or DISTRICT_INCHARGE can assign locations');
     }
 
     const targetUserId = Number(userId);
+
+    // For ADMIN and DISTRICT_INCHARGE, validate they can assign these locations
+    if (role === 'ADMIN' || role === 'DISTRICT_INCHARGE') {
+      const userLocId = user.locationId;
+      if (!userLocId) {
+        throw new Error('Your account does not have a location assigned');
+      }
+
+      // Get all locations the current user can manage
+      let manageableLocationIds: number[] = [];
+      
+      if (role === 'DISTRICT_INCHARGE') {
+        // District Incharge: Get all assigned districts from userLocation
+        const userLocations = await (prisma as any).userLocation.findMany({
+          where: { userId: user.id },
+          select: { locationId: true }
+        });
+
+        for (const ul of userLocations) {
+          const location = await (prisma as any).location.findUnique({
+            where: { id: ul.locationId }
+          });
+          if (location && location.type === 'DISTRICT') {
+            manageableLocationIds.push(location.id);
+            const childIds = await getChildLocationIds(location.id);
+            manageableLocationIds.push(...childIds);
+          }
+        }
+      } else {
+        // ADMIN: Get all child and ancestor locations
+        const childIds = await getChildLocationIds(userLocId);
+        const ancestorIds = await getAncestorLocationIds(userLocId);
+        manageableLocationIds = Array.from(new Set([userLocId, ...childIds, ...ancestorIds]));
+      }
+
+      // Validate that all locationIds to assign are within manageable locations
+      for (const locId of locationIds) {
+        if (!manageableLocationIds.includes(Number(locId))) {
+          throw new Error(`You do not have permission to assign location ${locId}`);
+        }
+      }
+    }
 
     for (const locId of locationIds) {
       const isP = isPrimary === Number(locId);
@@ -10424,12 +10471,57 @@ export const resolvers = {
 
   removeUserLocation: async (_: any, { userId, locationId }: any, context: any) => {
     const user = context?.user;
-    if (!user || user.role !== 'SUPER_ADMIN') {
-      throw new Error('Only SUPER_ADMIN can remove locations');
+    if (!user) {
+      throw new Error(I18nService.translate("unauthorized_login", context?.language));
+    }
+
+    const role = user.role;
+    if (role !== 'SUPER_ADMIN' && role !== 'ADMIN' && role !== 'DISTRICT_INCHARGE') {
+      throw new Error('Only SUPER_ADMIN, ADMIN, or DISTRICT_INCHARGE can remove locations');
     }
 
     const targetUserId = Number(userId);
     const targetLocationId = Number(locationId);
+
+    // For ADMIN and DISTRICT_INCHARGE, validate they can remove this location
+    if (role === 'ADMIN' || role === 'DISTRICT_INCHARGE') {
+      const userLocId = user.locationId;
+      if (!userLocId) {
+        throw new Error('Your account does not have a location assigned');
+      }
+
+      // Get all locations the current user can manage
+      let manageableLocationIds: number[] = [];
+      
+      if (role === 'DISTRICT_INCHARGE') {
+        // District Incharge: Get all assigned districts from userLocation
+        const userLocations = await (prisma as any).userLocation.findMany({
+          where: { userId: user.id },
+          select: { locationId: true }
+        });
+
+        for (const ul of userLocations) {
+          const location = await (prisma as any).location.findUnique({
+            where: { id: ul.locationId }
+          });
+          if (location && location.type === 'DISTRICT') {
+            manageableLocationIds.push(location.id);
+            const childIds = await getChildLocationIds(location.id);
+            manageableLocationIds.push(...childIds);
+          }
+        }
+      } else {
+        // ADMIN: Get all child and ancestor locations
+        const childIds = await getChildLocationIds(userLocId);
+        const ancestorIds = await getAncestorLocationIds(userLocId);
+        manageableLocationIds = Array.from(new Set([userLocId, ...childIds, ...ancestorIds]));
+      }
+
+      // Validate that the location to remove is within manageable locations
+      if (!manageableLocationIds.includes(targetLocationId)) {
+        throw new Error(`You do not have permission to remove location ${locationId}`);
+      }
+    }
 
     const userLoc = await (prisma as any).userLocation.findUnique({
       where: { userId_locationId: { userId: targetUserId, locationId: targetLocationId } }
