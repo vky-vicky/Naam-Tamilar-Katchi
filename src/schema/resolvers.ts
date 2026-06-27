@@ -1645,26 +1645,35 @@ export const resolvers = {
         const userId = Number(contextUser.id);
         const targetId = filterLocationId ?? locationId;
 
+        console.log(`[dashboardStats] userId: ${userId}, role: ${role}, locationId: ${locationId}, filterLocationId: ${filterLocationId}, targetId: ${targetId}`);
+
         if (role === 'SUPER_ADMIN') {
           if (targetId) {
             const childIds = await getChildLocationIds(Number(targetId));
             dashLocationIds = [Number(targetId), ...childIds];
             const loc = await (prisma as any).location.findUnique({ where: { id: Number(targetId) }, select: { name: true } });
             if (loc) locationName = loc.name;
+            console.log(`[dashboardStats] SUPER_ADMIN with targetId: ${targetId}, dashLocationIds: ${dashLocationIds.join(', ')}`);
           } else {
             dashLocationIds = null;
+            console.log(`[dashboardStats] SUPER_ADMIN without targetId, showing all locations`);
           }
         } else {
           const accessibleIds = await getAccessibleLocationIds(userId, role);
+          console.log(`[dashboardStats] accessibleIds: ${accessibleIds.join(', ')}`);
+          
           if (accessibleIds.length === 0) {
             dashLocationIds = [-1];
+            console.log(`[dashboardStats] No accessible locations`);
           } else if (targetId && accessibleIds.includes(Number(targetId))) {
             const childIds = await getChildLocationIds(Number(targetId));
             dashLocationIds = [Number(targetId), ...childIds];
             const loc = await (prisma as any).location.findUnique({ where: { id: Number(targetId) }, select: { name: true } });
             if (loc) locationName = loc.name;
+            console.log(`[dashboardStats] Using filterLocationId: ${targetId}, dashLocationIds: ${dashLocationIds.join(', ')}`);
           } else {
             dashLocationIds = accessibleIds;
+            console.log(`[dashboardStats] targetId ${targetId} not in accessibleIds, using all accessible: ${dashLocationIds.join(', ')}`);
             const primaryLoc = await (prisma as any).userLocation.findFirst({
               where: { userId, isPrimary: true },
               include: { location: true }
@@ -1686,6 +1695,10 @@ export const resolvers = {
       const memberLocFilter = dashLocationIds ? { locationId: { in: dashLocationIds } } : {};
       // Helper: location id filter (for location table queries)
       const locationIdFilter = dashLocationIds ? { id: { in: dashLocationIds } } : {};
+
+      console.log(`[dashboardStats] Final dashLocationIds: ${dashLocationIds ? dashLocationIds.join(', ') : 'null (all locations)'}`);
+      console.log(`[dashboardStats] memberLocFilter: ${JSON.stringify(memberLocFilter)}`);
+      console.log(`[dashboardStats] locationIdFilter: ${JSON.stringify(locationIdFilter)}`);
 
       // Today's date range
       const todayStart = new Date();
