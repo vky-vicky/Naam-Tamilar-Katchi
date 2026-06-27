@@ -1510,10 +1510,16 @@ export const resolvers = {
       return null;
     },
     
-    getLocationList: async (_: any, { parentId, type }: any) => {
+    getLocationList: async (_: any, { parentId, type, selectedLocationId }: any, context: any) => {
       const where: any = {};
-      if (parentId !== undefined) where.parentId = parentId;
+      
+      // If selectedLocationId is provided, use it as parentId
+      const effectiveParentId = selectedLocationId ?? parentId;
+      
+      if (effectiveParentId !== undefined) where.parentId = effectiveParentId;
       if (type) where.type = type;
+      
+      console.log(`[getLocationList] parentId: ${parentId}, selectedLocationId: ${selectedLocationId}, effectiveParentId: ${effectiveParentId}, type: ${type}`);
       
       return (prisma as any).location.findMany({
         where,
@@ -2077,9 +2083,14 @@ export const resolvers = {
     },
 
     // New resolver for towns and streets
-    getTownsAndStreets: async (_: any, { constituencyId }: any) => {
+    getTownsAndStreets: async (_: any, { constituencyId, selectedLocationId }: any) => {
+      // If selectedLocationId is provided, use it as constituencyId
+      const effectiveConstituencyId = selectedLocationId ?? constituencyId;
+      
+      console.log(`[getTownsAndStreets] constituencyId: ${constituencyId}, selectedLocationId: ${selectedLocationId}, effectiveConstituencyId: ${effectiveConstituencyId}`);
+      
       const towns = await (prisma as any).location.findMany({
-        where: { parentId: constituencyId, type: 'AREA' },
+        where: { parentId: effectiveConstituencyId, type: 'AREA' },
         include: { children: true },
       });
       return towns.map((t: any) => ({
@@ -11334,6 +11345,104 @@ export const resolvers = {
       where: { id: Number(linkOrDocId) }
     });
 
+    return true;
+  }),
+
+  forwardNotification: safeResolver(async (_: any, { entityId, targetLocationIds, type }: any, context: any) => {
+    if (!context?.user) {
+      throw new Error(I18nService.translate("unauthorized_login", context?.language));
+    }
+
+    const role = context.user.role;
+    if (role !== 'DISTRICT_INCHARGE' && role !== 'ADMIN' && role !== 'SUPER_ADMIN') {
+      throw new Error('Only DISTRICT_INCHARGE, ADMIN, or SUPER_ADMIN can forward notifications');
+    }
+
+    let originalEntity: any = null;
+    let originalLocationId: number = 0;
+    let title: string = '';
+    let message: string = '';
+
+    // Fetch original entity based on type
+    if (type === 'EVENT') {
+      originalEntity = await (prisma as any).event.findUnique({
+        where: { id: Number(entityId) },
+        include: { location: true }
+      });
+      if (!originalEntity) throw new Error('Event not found');
+      originalLocationId = originalEntity.locationId;
+      title = `Forwarded Event: ${originalEntity.title}`;
+      message = originalEntity.description || 'Event forwarded';
+    } else if (type === 'BROADCAST') {
+      originalEntity = await (prisma as any).broadcast.findUnique({
+        where: { id: Number(entityId) },
+        include: { location: true }
+      });
+      if (!originalEntity) throw new Error('Broadcast not found');
+      originalLocationId = originalEntity.locationId;
+      title = `Forwarded Broadcast: ${originalEntity.title}`;
+      message = originalEntity.message || 'Broadcast forwarded';
+    } else if (type === 'EMERGENCY') {
+      originalEntity = await (prisma as any).emergencyRequest.findUnique({
+        where: { id: Number(entityId) },
+        include: { location: true }
+      });
+      if (!originalEntity) throw new Error('Emergency request not found');
+      originalLocationId = originalEntity.locationId;
+      title = `Forwarded Emergency: ${originalEntity.title}`;
+      message = originalEntity.description || 'Emergency forwarded';
+    } else {
+      throw new Error('Invalid type. Must be EVENT, BROADCAST, or EMERGENCY');
+    }
+
+    console.log(`[forwardNotification] entityId: ${entityId}, type: ${type}, originalLocationId: ${originalLocationId}`);
+
+    // Validate user can forward this entity
+    if (role === 'DISTRICT_INCHARGE') {
+      const userLocations = await (prisma as any).userLocation.findMany({
+        where: { userId: context.user.id },
+        select: { locationId: true }
+      });
+
+      const districtIds: number[] = [];
+      for (const ul of userLocations) {
+        const location = await (prisma as any).location.findUnique({
+          where: { id: ul.locationId }
+        });
+        if (location && location.type === 'DISTRICT') {
+          districtIds.push(location.id);
+        }
+      }
+
+      // Check if original entity location is within user's districts
+      const ancestorIds = await getAncestorLocationIds(originalLocationId);
+      const isInDistrict = ancestorIds.some(id => districtIds.includes(id));
+
+      if (!isInDistrict) {
+        throw new Error('You can only forward notifications within your assigned districts');
+      }
+    }
+
+    // Create new notifications for each target location
+    for (const targetLocId of targetLocationIds) {
+      await sendSystemNotification({
+        title,
+        message,
+        type,
+        locationId: Number(targetLocId),
+        createdById: context.user.id,
+        purpose: `Forwarded from location ${originalLocationId}`,
+        entityType: type,
+        entityId: entityId,
+        metadata: {
+          forwardedFrom: originalLocationId,
+          forwardedBy: context.user.id,
+          originalEntityId: entityId
+        }
+      });
+    }
+
+    console.log(`[forwardNotification] Successfully forwarded to ${targetLocationIds.length} locations`);
     return true;
   }),
 };

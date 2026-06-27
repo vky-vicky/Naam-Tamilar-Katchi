@@ -561,10 +561,10 @@ export const typeDefs = gql`
   }
 
   type Query {
-    getLocationList(parentId: Int, type: LocationType): [Location!]!
+    getLocationList(parentId: Int, type: LocationType, selectedLocationId: Int): [Location!]!
     getLocationDetails(id: Int!): Location
     getFullLocationTree(constituencyId: Int!): LocationNode!
-    getTownsAndStreets(constituencyId: Int!): [TownWithStreets!]!
+    getTownsAndStreets(constituencyId: Int!, selectedLocationId: Int): [TownWithStreets!]!
     me: User
     getMemberList(locationId: Int, professionName: String, bloodGroup: String, role: String, search: String, limit: Int, offset: Int, approvalStatus: ApprovalStatus): [Member!]!
     getMemberDetails(id: Int!, communityId: Int): Member
@@ -998,6 +998,7 @@ export const typeDefs = gql`
     unstarCommunityMessage(messageId: Int!): CommunityMessage!
     uploadCommunityLinkOrDoc(communityId: Int!, title: String!, url: String!, type: String!): CommunityLinkOrDoc!
     deleteCommunityLinkOrDoc(linkOrDocId: Int!): Boolean!
+    forwardNotification(entityId: Int!, targetLocationIds: [Int!]!, type: String!): Boolean!
   }
 
   type AuthPayload {
