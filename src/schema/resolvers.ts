@@ -3744,6 +3744,94 @@ export const resolvers = {
       return allMembers;
     },
 
+    getForwardLocations: async (_: any, { entityId, type }: any, context: any) => {
+      if (!context?.user) {
+        throw new Error(I18nService.translate("unauthorized_login", context?.language));
+      }
+
+      const role = context.user.role;
+      if (role !== 'DISTRICT_INCHARGE' && role !== 'ADMIN' && role !== 'SUPER_ADMIN') {
+        return [];
+      }
+
+      let originalEntity: any = null;
+      let originalLocationId: number = 0;
+
+      // Fetch original entity based on type
+      if (type === 'EVENT') {
+        originalEntity = await (prisma as any).event.findUnique({
+          where: { id: Number(entityId) },
+          include: { location: true }
+        });
+        if (!originalEntity) return [];
+        originalLocationId = originalEntity.locationId;
+      } else if (type === 'BROADCAST') {
+        originalEntity = await (prisma as any).broadcast.findUnique({
+          where: { id: Number(entityId) },
+          include: { location: true }
+        });
+        if (!originalEntity) return [];
+        originalLocationId = originalEntity.locationId;
+      } else if (type === 'EMERGENCY') {
+        originalEntity = await (prisma as any).emergencyRequest.findUnique({
+          where: { id: Number(entityId) },
+          include: { location: true }
+        });
+        if (!originalEntity) return [];
+        originalLocationId = originalEntity.locationId;
+      } else {
+        return [];
+      }
+
+      console.log(`[getForwardLocations] entityId: ${entityId}, type: ${type}, originalLocationId: ${originalLocationId}`);
+
+      // Get the district this location belongs to
+      const ancestorIds = await getAncestorLocationIds(originalLocationId);
+      const districtLocations = await (prisma as any).location.findMany({
+        where: { id: { in: ancestorIds }, type: 'DISTRICT' }
+      });
+
+      if (districtLocations.length === 0) {
+        console.log(`[getForwardLocations] No district found for location ${originalLocationId}`);
+        return [];
+      }
+
+      const districtId = districtLocations[0].id;
+      console.log(`[getForwardLocations] District ID: ${districtId}`);
+
+      // Get all taluks within this district (TALUK type locations under this district)
+      const allTaluks = await (prisma as any).location.findMany({
+        where: { parentId: districtId, type: 'TALUK' }
+      });
+
+      console.log(`[getForwardLocations] Total taluks in district: ${allTaluks.length}`);
+
+      // Filter out the original taluk (where the event was created)
+      const forwardableTaluks = allTaluks.filter((loc: any) => loc.id !== originalLocationId);
+
+      console.log(`[getForwardLocations] Forwardable taluks (excluding original): ${forwardableTaluks.length}`);
+
+      // For District Incharge, validate they have access to these locations
+      if (role === 'DISTRICT_INCHARGE') {
+        const userLocations = await (prisma as any).userLocation.findMany({
+          where: { userId: context.user.id },
+          select: { locationId: true }
+        });
+
+        const assignedDistrictIds = userLocations
+          .map((ul: any) => ul.locationId);
+
+        if (!assignedDistrictIds.includes(districtId)) {
+          console.log(`[getForwardLocations] District Incharge does not have access to district ${districtId}`);
+          return [];
+        }
+
+        console.log(`[getForwardLocations] District Incharge has access to district ${districtId}`);
+      }
+
+      return forwardableTaluks;
+    },
+
     getTargetableLocations: async (_: any, { parentId }: any, context: any) => {
       const user = context.user;
       if (!user) return [];
