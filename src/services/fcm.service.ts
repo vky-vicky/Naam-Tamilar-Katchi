@@ -177,24 +177,27 @@ export async function sendNotificationToLocation(
     if (multiLocationUserIds.length > 0) {
       console.log(`[FCM] Found ${multiLocationUserIds.length} users with multi-location assignments: ${multiLocationUserIds.join(', ')}`);
       
-      [multiLocationUsers, multiLocationMembers] = await Promise.all([
-        (prisma as any).user.findMany({
+      const multiLocationUsersList = await (prisma as any).user.findMany({
+        where: { 
+          id: { in: multiLocationUserIds },
+          role: { in: ['DISTRICT_INCHARGE', 'ADMIN', 'SUB_ADMIN'] }
+        },
+        select: { fcmToken: true, id: true, role: true, phone: true }
+      });
+
+      const userPhones = multiLocationUsersList.map((u: any) => u.phone).filter(Boolean);
+      multiLocationUsers = multiLocationUsersList.filter((u: any) => u.fcmToken);
+
+      if (userPhones.length > 0) {
+        multiLocationMembers = await (prisma as any).member.findMany({
           where: { 
-            id: { in: multiLocationUserIds },
+            phone: { in: userPhones },
             fcmToken: { not: null },
             role: { in: ['DISTRICT_INCHARGE', 'ADMIN', 'SUB_ADMIN'] }
           },
           select: { fcmToken: true, id: true, role: true, phone: true }
-        }),
-        (prisma as any).member.findMany({
-          where: { 
-            userId: { in: multiLocationUserIds },
-            fcmToken: { not: null },
-            role: { in: ['DISTRICT_INCHARGE', 'ADMIN', 'SUB_ADMIN'] }
-          },
-          select: { fcmToken: true, id: true, role: true, phone: true, userId: true }
-        })
-      ]);
+        });
+      }
 
       console.log(`[FCM] Multi-location users found: ${multiLocationUsers.length}`);
       if (multiLocationUsers.length > 0) {
@@ -202,7 +205,7 @@ export async function sendNotificationToLocation(
       }
       console.log(`[FCM] Multi-location members found: ${multiLocationMembers.length}`);
       if (multiLocationMembers.length > 0) {
-        console.log(`[FCM] Multi-location member details:`, JSON.stringify(multiLocationMembers.map((m: any) => ({ id: m.id, role: m.role, phone: m.phone, userId: m.userId, hasToken: !!m.fcmToken })), null, 2));
+        console.log(`[FCM] Multi-location member details:`, JSON.stringify(multiLocationMembers.map((m: any) => ({ id: m.id, role: m.role, phone: m.phone, hasToken: !!m.fcmToken })), null, 2));
       }
     } else {
       console.log(`[FCM] No users found in userLocation table for target locations`);
