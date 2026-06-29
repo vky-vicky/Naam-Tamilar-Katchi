@@ -5951,8 +5951,8 @@ export const resolvers = {
       
       if (targetUserId) {
         userRec = await (prisma as any).user.findUnique({ where: { id: targetUserId } });
-      } else if (user && user.type === 'admin') {
-        userRec = await (prisma as any).user.findUnique({ where: { id: Number(user.id) } });
+      } else if (context?.user && context.user.type === 'admin') {
+        userRec = await (prisma as any).user.findUnique({ where: { id: Number(context.user.id) } });
       }
       
       if (userRec) {
@@ -8111,11 +8111,45 @@ export const resolvers = {
         io.emit('newNotification', notification);
       }
       if (args.locationId) {
+        const payloadData: any = {
+          type: args.type || 'ALERT',
+          notificationId: String(notification.id)
+        };
+        const finalEntityType = args.entityType || args.type;
+        const finalEntityId = args.entityId;
+
+        if (finalEntityType) {
+          payloadData.entityType = String(finalEntityType);
+        }
+        if (finalEntityId) {
+          payloadData.entityId = String(finalEntityId);
+          
+          if (finalEntityType === 'BROADCAST') {
+            payloadData.broadcastId = String(finalEntityId);
+          } else if (finalEntityType === 'EVENT') {
+            payloadData.eventId = String(finalEntityId);
+          } else if (finalEntityType === 'EMERGENCY') {
+            payloadData.emergencyRequestId = String(finalEntityId);
+          } else if (finalEntityType === 'POST') {
+            payloadData.postId = String(finalEntityId);
+          }
+        }
+        if (args.metadata) {
+          try {
+            const parsedMetadata = typeof args.metadata === 'string' ? JSON.parse(args.metadata) : args.metadata;
+            if (parsedMetadata && typeof parsedMetadata === 'object') {
+              Object.assign(payloadData, parsedMetadata);
+            }
+          } catch (e) {
+            console.error('[FCM] Error merging metadata into payload:', e);
+          }
+        }
+
         sendNotificationToLocation(
           Number(args.locationId),
           args.title,
           args.message,
-          { type: args.type || 'ALERT', notificationId: notification.id }
+          payloadData
         ).catch(e => console.error(e));
       }
       return notification;

@@ -236,9 +236,25 @@ export async function sendNotificationToLocation(
         data: stringData,
         android: {
           priority: 'high' as const,
-          notification: { sound: 'default', channelId: 'high_importance_channel', priority: 'max' as const }
+          notification: {
+            sound: 'default',
+            channelId: 'high_importance_channel',
+            priority: 'max' as const,
+            clickAction: 'FLUTTER_NOTIFICATION_CLICK'
+          }
         },
-        apns: { payload: { aps: { sound: 'default', badge: 1 } } },
+        apns: {
+          headers: {
+            'apns-priority': '10'
+          },
+          payload: {
+            aps: {
+              sound: 'default',
+              badge: 1,
+              contentAvailable: true
+            }
+          }
+        },
         tokens: batchTokens
       };
 
@@ -313,13 +329,18 @@ export async function sendNotificationToCommunity(
             sound: 'default',
             channelId: 'high_importance_channel',
             priority: 'max' as const,
+            clickAction: 'FLUTTER_NOTIFICATION_CLICK'
           }
         },
         apns: {
+          headers: {
+            'apns-priority': '10'
+          },
           payload: {
             aps: {
               sound: 'default',
               badge: 1,
+              contentAvailable: true
             }
           }
         },
@@ -384,13 +405,18 @@ export async function sendNotificationToToken(
           sound: 'default',
           channelId: 'high_importance_channel',
           priority: 'max' as const,
+          clickAction: 'FLUTTER_NOTIFICATION_CLICK'
         }
       },
       apns: {
+        headers: {
+          'apns-priority': '10'
+        },
         payload: {
           aps: {
             sound: 'default',
             badge: 1,
+            contentAvailable: true
           }
         }
       }
