@@ -1,122 +1,524 @@
 import prisma from '../src/db.js';
 
-async function main() {
-  console.log('🌱 Seeding CRM with Professional Hierarchy (Super Admin > Admin > Sub Admin)...');
-
-  // 1. Ensure State exists
-  let state = await prisma.location.findFirst({ where: { name: 'Tamil Nadu', type: 'STATE' } });
-  if (!state) {
-    state = await prisma.location.create({ data: { name: 'Tamil Nadu', type: 'STATE' } });
-  }
-
-  // 2. Ensure Professions exist
-  const professionNames = ['Doctor', 'Lawyer', 'Farmer', 'Engineer', 'Student'];
-  const professions = [];
-  for (const name of professionNames) {
-    let prof = await prisma.profession.findUnique({ where: { name } });
-    if (!prof) {
-      prof = await prisma.profession.create({ data: { name } });
-    }
-    professions.push(prof);
-  }
-
-  // 3. Create Hierarchy Locations
-  let naga = await prisma.location.findFirst({ where: { name: 'Nagapattinam', type: 'DISTRICT' } });
-  if (!naga) {
-    naga = await prisma.location.create({ data: { name: 'Nagapattinam', type: 'DISTRICT', parentId: state.id } });
-  }
-
-  let veda = await prisma.location.findFirst({ where: { name: 'Vedaranyam', type: 'TALUK', parentId: naga.id } });
-  if (!veda) {
-    veda = await prisma.location.create({ data: { name: 'Vedaranyam', type: 'TALUK', parentId: naga.id, password: 'admin123' } });
-  }
-
-  let pushpa = await prisma.location.findFirst({ where: { name: 'புஷ்பவனம்', type: 'AREA', parentId: veda.id } });
-  if (!pushpa) {
-    pushpa = await prisma.location.create({ data: { name: 'புஷ்பவனம்', type: 'AREA', parentId: veda.id, password: 'admin123' } });
-  }
-
-  // 4. Create Users (Roles)
-  // Super Admin (Created Manually via Seed)
-  const superAdmin = await prisma.user.upsert({
-    where: { phone: '9000000001' },
-    update: { locationId: state.id, approvalStatus: 'APPROVED' },
-    create: { 
-      name: 'Thalaivar Seeman', 
-      phone: '9000000001', 
-      password: 'admin123', 
-      role: 'SUPER_ADMIN',
-      locationId: state.id,
-      approvalStatus: 'APPROVED'
-    }
-  });
-
-  // District Admin
-  const admin = await prisma.user.upsert({
-    where: { phone: '9000000002' },
-    update: { locationId: veda.id, approvalStatus: 'APPROVED' },
-    create: { 
-      name: 'Vedaranyam Admin', 
-      phone: '9000000002', 
-      password: 'admin123', 
-      role: 'ADMIN',
-      locationId: veda.id,
-      approvalStatus: 'APPROVED',
-      parentId: superAdmin.id
-    }
-  });
-
-  // Area Sub Admin
-  const subAdmin = await prisma.user.upsert({
-    where: { phone: '9000000003' },
-    update: { locationId: pushpa.id, approvalStatus: 'APPROVED' },
-    create: { 
-      name: 'புஷ்பவனம் Sub-Admin', 
-      phone: '9000000003', 
-      password: 'admin123', 
-      role: 'SUB_ADMIN',
-      locationId: pushpa.id,
-      approvalStatus: 'APPROVED',
-      parentId: admin.id
-    }
-  });
-
-  // 5. Create Members with mixed Approval Status
-  const streets = ['கஞ்சமலைக்காடு', 'புஷ்பவனம்'];
-  const realisticNames = ["Arulmozhi", "Senthamizhan", "Vetrivel", "Anbazhagan", "Kayalvizhi", "Tamilarasan", "Ezhil", "Iniyan", "Thamizhisai", "Karkivel"];
-
-  for (const sName of streets) {
-    let street = await prisma.location.findFirst({ where: { name: sName, type: 'STREET', parentId: pushpa.id } });
-    if (!street) {
-      street = await prisma.location.create({ data: { name: sName, type: 'STREET', parentId: pushpa.id } });
-    }
-
-    const existingCount = await prisma.member.count({ where: { locationId: street.id } });
-    if (existingCount === 0) {
-      for (let i = 0; i < 10; i++) {
-        const bg = ['A+', 'O+', 'B+'][Math.floor(Math.random() * 3)] || 'O+';
-        const randomProf = professions[Math.floor(Math.random() * professions.length)];
-        const profId = randomProf ? randomProf.id : null;
-        const nameVal = realisticNames[i] ? `${realisticNames[i]} - ${sName}` : `Member - ${sName}`;
-
-        await prisma.member.create({
-          data: {
-            name: nameVal,
-            phone: `9${Math.floor(100000000 + Math.random() * 900000000)}`,
-            bloodGroup: bg,
-            professionId: profId,
-            locationId: street.id,
-            role: 'Member',
-            approvalStatus: i < 5 ? 'APPROVED' : 'PENDING', // 5 approved, 5 pending
-            isActive: true,
-            createdById: subAdmin.id
-          }
-        });
+const locationTree = [
+  {
+    name: 'நாகப்பட்டினம்',
+    nameEn: 'Nagapattinam',
+    type: 'DISTRICT',
+    children: [
+      {
+        name: 'நாகூர்',
+        nameEn: 'Nagore',
+        type: 'TALUK',
+        children: [
+          { name: 'மெயின் ரோடு', nameEn: 'Main Road', type: 'AREA' },
+          { name: 'பள்ளிவாசல் தெரு', nameEn: 'Pallivasal Street', type: 'AREA' },
+          { name: 'கடற்கரை சாலை', nameEn: 'Beach Road', type: 'AREA' }
+        ]
+      },
+      {
+        name: 'அக்கரைப்பேட்டை',
+        nameEn: 'Akkaraipettai',
+        type: 'TALUK',
+        children: [
+          { name: 'வடக்கு தெரு', nameEn: 'North Street', type: 'AREA' },
+          { name: 'தெற்கு தெரு', nameEn: 'South Street', type: 'AREA' },
+          { name: 'நடு தெரு', nameEn: 'Middle Street', type: 'AREA' }
+        ]
+      },
+      {
+        name: 'சிக்கல்',
+        nameEn: 'Sikkal',
+        type: 'TALUK',
+        children: [
+          { name: 'கோவில் தெரு', nameEn: 'Kovil Street', type: 'AREA' },
+          { name: 'கிழக்கு தெரு', nameEn: 'East Street', type: 'AREA' },
+          { name: 'மேற்கு தெரு', nameEn: 'West Street', type: 'AREA' }
+        ]
       }
+    ]
+  },
+  {
+    name: 'கீழ்வேளூர்',
+    nameEn: 'Kilvelur',
+    type: 'DISTRICT',
+    children: [
+      {
+        name: 'கீழ்வேளூர்',
+        nameEn: 'Kilvelur',
+        type: 'TALUK',
+        children: [
+          { name: 'மெயின் ரோடு', nameEn: 'Main Road', type: 'AREA' },
+          { name: 'வடக்கு தெரு', nameEn: 'North Street', type: 'AREA' },
+          { name: 'தெற்கு தெரு', nameEn: 'South Street', type: 'AREA' }
+        ]
+      },
+      {
+        name: 'கீழையூர்',
+        nameEn: 'Keezhaiyur',
+        type: 'TALUK',
+        children: [
+          { name: 'கிழக்கு தெரு', nameEn: 'East Street', type: 'AREA' },
+          { name: 'மேற்கு தெரு', nameEn: 'West Street', type: 'AREA' },
+          { name: 'காலனி தெரு', nameEn: 'Colony Street', type: 'AREA' }
+        ]
+      },
+      {
+        name: 'வலிவலம்',
+        nameEn: 'Valivalam',
+        type: 'TALUK',
+        children: [
+          { name: 'கோவில் தெரு', nameEn: 'Kovil Street', type: 'AREA' },
+          { name: 'சந்தை தெரு', nameEn: 'Market Street', type: 'AREA' },
+          { name: 'பள்ளி தெரு', nameEn: 'School Street', type: 'AREA' }
+        ]
+      }
+    ]
+  },
+  {
+    name: 'வேதாரண்யம்',
+    nameEn: 'Vedaranyam',
+    type: 'DISTRICT',
+    children: [
+      {
+        name: 'புஷ்பவனம்',
+        nameEn: 'Pushpavanam',
+        type: 'TALUK',
+        children: [
+          { name: 'முத்துக்கவுண்டர் காடு', nameEn: 'Muthukounder Kadu', type: 'AREA' },
+          { name: 'மீனவர் தெரு', nameEn: 'Fishermen Street', type: 'AREA' },
+          { name: 'அழகர்கவுண்டர் காடு', nameEn: 'Azhagarkounder Kadu', type: 'AREA' }
+        ]
+      },
+      {
+        name: 'பெரியகுத்தகை',
+        nameEn: 'Periyakuthagai',
+        type: 'TALUK',
+        children: [
+          { name: 'அலங்காரங்காடு', nameEn: 'Alangarangkadu', type: 'AREA' },
+          { name: 'வேட்டையன் காடு', nameEn: 'Vettaiyankadu', type: 'AREA' },
+          { name: 'நாட்டாண் காடு', nameEn: 'Nattaankadu', type: 'AREA' }
+        ]
+      },
+      {
+        name: 'கோவில்பத்து',
+        nameEn: 'Kovilpathu',
+        type: 'TALUK',
+        children: [
+          { name: 'துளுக்கத் தெரு', nameEn: 'Thulukka Street', type: 'AREA' },
+          { name: 'மேலக்காடு தெற்கு காடு', nameEn: 'Melakkadu South Kadu', type: 'AREA' },
+          { name: 'கவுண்டர்காடு', nameEn: 'Gounderkadu', type: 'AREA' }
+        ]
+      }
+    ]
+  },
+  {
+    name: 'தஞ்சாவூர்',
+    nameEn: 'Thanjavur',
+    type: 'DISTRICT',
+    children: [
+      {
+        name: 'தஞ்சாவூர்',
+        nameEn: 'Thanjavur',
+        type: 'TALUK',
+        children: [
+          {
+            name: 'தஞ்சாவூர்',
+            nameEn: 'Thanjavur',
+            type: 'AREA',
+            children: [
+              { name: 'கிழக்கு மெயின் தெரு', nameEn: 'East Main Street', type: 'STREET' },
+              { name: 'தெற்கு மெயின் தெரு', nameEn: 'South Main Street', type: 'STREET' },
+              { name: 'மேற்கு மெயின் தெரு', nameEn: 'West Main Street', type: 'STREET' }
+            ]
+          },
+          {
+            name: 'வல்லம்',
+            nameEn: 'Vallam',
+            type: 'AREA',
+            children: [
+              { name: 'மெயின் ரோடு', nameEn: 'Main Road', type: 'STREET' },
+              { name: 'கோவில் தெரு', nameEn: 'Kovil Street', type: 'STREET' },
+              { name: 'காலனி தெரு', nameEn: 'Colony Street', type: 'STREET' }
+            ]
+          },
+          {
+            name: 'பிள்ளையார்பட்டி',
+            nameEn: 'Pillayarpatti',
+            type: 'AREA',
+            children: [
+              { name: 'வடக்கு தெரு', nameEn: 'North Street', type: 'STREET' },
+              { name: 'தெற்கு தெரு', nameEn: 'South Street', type: 'STREET' },
+              { name: 'கிழக்கு தெரு', nameEn: 'East Street', type: 'STREET' }
+            ]
+          }
+        ]
+      },
+      {
+        name: 'ஒரத்தநாடு',
+        nameEn: 'Orathanadu',
+        type: 'TALUK',
+        children: [
+          {
+            name: 'ஒரத்தநாடு',
+            nameEn: 'Orathanadu',
+            type: 'AREA',
+            children: [
+              { name: 'மெயின் ரோடு', nameEn: 'Main Road', type: 'STREET' },
+              { name: 'பஜார் தெரு', nameEn: 'Bazaar Street', type: 'STREET' },
+              { name: 'தெற்கு தெரு', nameEn: 'South Street', type: 'STREET' }
+            ]
+          },
+          {
+            name: 'காக்கரை',
+            nameEn: 'Kakkarai',
+            type: 'AREA',
+            children: [
+              { name: 'கிழக்கு தெரு', nameEn: 'East Street', type: 'STREET' },
+              { name: 'மேற்கு தெரு', nameEn: 'West Street', type: 'STREET' },
+              { name: 'கோவில் தெரு', nameEn: 'Kovil Street', type: 'STREET' }
+            ]
+          },
+          {
+            name: 'வடக்கூர்',
+            nameEn: 'Vadakkur',
+            type: 'AREA',
+            children: [
+              { name: 'வடக்கு தெரு', nameEn: 'North Street', type: 'STREET' },
+              { name: 'காலனி தெரு', nameEn: 'Colony Street', type: 'STREET' },
+              { name: 'பள்ளி தெரு', nameEn: 'School Street', type: 'STREET' }
+            ]
+          }
+        ]
+      },
+      {
+        name: 'பட்டுக்கோட்டை',
+        nameEn: 'Pattukkottai',
+        type: 'TALUK',
+        children: [
+          {
+            name: 'பட்டுக்கோட்டை',
+            nameEn: 'Pattukkottai',
+            type: 'AREA',
+            children: [
+              { name: 'பெரிய தெரு', nameEn: 'Big Street', type: 'STREET' },
+              { name: 'மெயின் ரோடு', nameEn: 'Main Road', type: 'STREET' },
+              { name: 'ரயில்வே சாலை', nameEn: 'Railway Road', type: 'STREET' }
+            ]
+          },
+          {
+            name: 'அத்திவெட்டி',
+            nameEn: 'Athivetti',
+            type: 'AREA',
+            children: [
+              { name: 'கோவில் தெரு', nameEn: 'Kovil Street', type: 'STREET' },
+              { name: 'கிழக்கு தெரு', nameEn: 'East Street', type: 'STREET' },
+              { name: 'மேற்கு தெரு', nameEn: 'West Street', type: 'STREET' }
+            ]
+          },
+          {
+            name: 'மதுக்கூர்',
+            nameEn: 'Madukkur',
+            type: 'AREA',
+            children: [
+              { name: 'தெற்கு தெரு', nameEn: 'South Street', type: 'STREET' },
+              { name: 'வடக்கு தெரு', nameEn: 'North Street', type: 'STREET' },
+              { name: 'காலனி தெரு', nameEn: 'Colony Street', type: 'STREET' }
+            ]
+          }
+        ]
+      },
+      {
+        name: 'பேராவூரணி',
+        nameEn: 'Peravurani',
+        type: 'TALUK',
+        children: [
+          {
+            name: 'பேராவூரணி',
+            nameEn: 'Peravurani',
+            type: 'AREA',
+            children: [
+              { name: 'மெயின் ரோடு', nameEn: 'Main Road', type: 'STREET' },
+              { name: 'சந்தை தெரு', nameEn: 'Market Street', type: 'STREET' },
+              { name: 'தெற்கு தெரு', nameEn: 'South Street', type: 'STREET' }
+            ]
+          },
+          {
+            name: 'சேதுபாவாசத்திரம்',
+            nameEn: 'Sethubhavachatram',
+            type: 'AREA',
+            children: [
+              { name: 'கடற்கரை சாலை', nameEn: 'Beach Road', type: 'STREET' },
+              { name: 'பள்ளிவாசல் தெரு', nameEn: 'Pallivasal Street', type: 'STREET' },
+              { name: 'கிழக்கு தெரு', nameEn: 'East Street', type: 'STREET' }
+            ]
+          },
+          {
+            name: 'மல்லிப்பட்டினம்',
+            nameEn: 'Mallipattinam',
+            type: 'AREA',
+            children: [
+              { name: 'மீனவர் தெரு', nameEn: 'Fishermen Street', type: 'STREET' },
+              { name: 'மெயின் ரோடு', nameEn: 'Main Road', type: 'STREET' },
+              { name: 'மேற்கு தெரு', nameEn: 'West Street', type: 'STREET' }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    name: 'திருச்சிராப்பள்ளி',
+    nameEn: 'Tiruchirappalli',
+    type: 'DISTRICT',
+    children: [
+      {
+        name: 'திருச்சி கிழக்கு',
+        nameEn: 'Tiruchirappalli East',
+        type: 'TALUK',
+        children: [
+          {
+            name: 'உறையூர்',
+            nameEn: 'Uraiyur',
+            type: 'AREA',
+            children: [
+              { name: 'பெரிய பஜார் தெரு', nameEn: 'Big Bazaar Street', type: 'STREET' },
+              { name: 'கிழக்கு தெரு', nameEn: 'East Street', type: 'STREET' },
+              { name: 'மேற்கு தெரு', nameEn: 'West Street', type: 'STREET' }
+            ]
+          },
+          {
+            name: 'பாலக்கரை',
+            nameEn: 'Palakarai',
+            type: 'AREA',
+            children: [
+              { name: 'மெயின் ரோடு', nameEn: 'Main Road', type: 'STREET' },
+              { name: 'தெற்கு தெரு', nameEn: 'South Street', type: 'STREET' },
+              { name: 'காலனி தெரு', nameEn: 'Colony Street', type: 'STREET' }
+            ]
+          },
+          {
+            name: 'கேன்டோன்மெண்ட்',
+            nameEn: 'Cantonment',
+            type: 'AREA',
+            children: [
+              { name: 'ரயில்வே சாலை', nameEn: 'Railway Road', type: 'STREET' },
+              { name: 'சந்தை தெரு', nameEn: 'Market Street', type: 'STREET' },
+              { name: 'தேவாலய தெரு', nameEn: 'Church Street', type: 'STREET' }
+            ]
+          }
+        ]
+      },
+      {
+        name: 'திருச்சி மேற்கு',
+        nameEn: 'Tiruchirappalli West',
+        type: 'TALUK',
+        children: [
+          {
+            name: 'தில்லை நகர்',
+            nameEn: 'Thillai Nagar',
+            type: 'AREA',
+            children: [
+              { name: 'மெயின் ரோடு', nameEn: 'Main Road', type: 'STREET' },
+              { name: 'முதல் குறுக்கு தெரு', nameEn: '1st Cross Street', type: 'STREET' },
+              { name: 'இரண்டாம் குறுக்கு தெரு', nameEn: '2nd Cross Street', type: 'STREET' }
+            ]
+          },
+          {
+            name: 'கே.கே. நகர்',
+            nameEn: 'K.K. Nagar',
+            type: 'AREA',
+            children: [
+              { name: 'மத்திய அவென்யூ', nameEn: 'Central Avenue', type: 'STREET' },
+              { name: 'வடக்கு தெரு', nameEn: 'North Street', type: 'STREET' },
+              { name: 'தெற்கு தெரு', nameEn: 'South Street', type: 'STREET' }
+            ]
+          },
+          {
+            name: 'எடமலைப்பட்டி புதூர்',
+            nameEn: 'Edamalaipatti Pudur',
+            type: 'AREA',
+            children: [
+              { name: 'காலனி தெரு', nameEn: 'Colony Street', type: 'STREET' },
+              { name: 'பள்ளி தெரு', nameEn: 'School Street', type: 'STREET' },
+              { name: 'கோவில் தெரு', nameEn: 'Kovil Street', type: 'STREET' }
+            ]
+          }
+        ]
+      },
+      {
+        name: 'ஸ்ரீரங்கம்',
+        nameEn: 'Srirangam',
+        type: 'TALUK',
+        children: [
+          {
+            name: 'ஸ்ரீரங்கம்',
+            nameEn: 'Srirangam',
+            type: 'AREA',
+            children: [
+              { name: 'சித்திரை தெரு', nameEn: 'Chithirai Street', type: 'STREET' },
+              { name: 'கிழக்கு அடையவளஞ்சான் தெரு', nameEn: 'East Adaiyavalanjan Street', type: 'STREET' },
+              { name: 'மேற்கு அடையவளஞ்சான் தெரு', nameEn: 'West Adaiyavalanjan Street', type: 'STREET' }
+            ]
+          },
+          {
+            name: 'திருவானைக்காவல்',
+            nameEn: 'Thiruanaikoil',
+            type: 'AREA',
+            children: [
+              { name: 'கோவில் தெரு', nameEn: 'Kovil Street', type: 'STREET' },
+              { name: 'வடக்கு தெரு', nameEn: 'North Street', type: 'STREET' },
+              { name: 'தெற்கு தெரு', nameEn: 'South Street', type: 'STREET' }
+            ]
+          },
+          {
+            name: 'மாம்பழ சாலை',
+            nameEn: 'Mambazha Salai',
+            type: 'AREA',
+            children: [
+              { name: 'மெயின் ரோடு', nameEn: 'Main Road', type: 'STREET' },
+              { name: 'கிழக்கு தெரு', nameEn: 'East Street', type: 'STREET' },
+              { name: 'மேற்கு தெரு', nameEn: 'West Street', type: 'STREET' }
+            ]
+          }
+        ]
+      },
+      {
+        name: 'திருவெறும்பூர்',
+        nameEn: 'Thiruverumbur',
+        type: 'TALUK',
+        children: [
+          {
+            name: 'திருவெறும்பூர்',
+            nameEn: 'Thiruverumbur',
+            type: 'AREA',
+            children: [
+              { name: 'பாரதியார் தெரு', nameEn: 'Bharathiyar Street', type: 'STREET' },
+              { name: 'காந்தி தெரு', nameEn: 'Gandhi Street', type: 'STREET' },
+              { name: 'மெயின் ரோடு', nameEn: 'Main Road', type: 'STREET' }
+            ]
+          },
+          {
+            name: 'பிஹெச்இஎல் நகரம்',
+            nameEn: 'BHEL Township',
+            type: 'AREA',
+            children: [
+              { name: 'முதல் தெரு', nameEn: '1st Street', type: 'STREET' },
+              { name: 'இரண்டாம் தெரு', nameEn: '2nd Street', type: 'STREET' },
+              { name: 'மூன்றாம் தெரு', nameEn: '3rd Street', type: 'STREET' }
+            ]
+          },
+          {
+            name: 'கைலாசபுரம்',
+            nameEn: 'Kailasapuram',
+            type: 'AREA',
+            children: [
+              { name: 'வடக்கு தெரு', nameEn: 'North Street', type: 'STREET' },
+              { name: 'தெற்கு தெரு', nameEn: 'South Street', type: 'STREET' },
+              { name: 'சந்தை தெரு', nameEn: 'Market Street', type: 'STREET' }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+];
+
+async function seedLocations(parentId: number, nodes: any[]) {
+  for (const node of nodes) {
+    const created = await prisma.location.create({
+      data: {
+        name: node.name,
+        nameEn: node.nameEn || null,
+        type: node.type,
+        parentId
+      }
+    });
+    console.log(`Created Location: ${node.nameEn || node.name} (${node.type})`);
+    if (node.children && node.children.length > 0) {
+      await seedLocations(created.id, node.children);
     }
   }
+}
 
-  // 6. Ensure default Communities exist
+async function main() {
+  console.log('🧹 Cleaning existing database records...');
+  // Delete dynamic records first to avoid foreign key errors
+  await prisma.contributionPayment.deleteMany({});
+  await prisma.memberPlanEnrollment.deleteMany({});
+  await prisma.contributionProfile.deleteMany({});
+  await prisma.contributionPlan.deleteMany({});
+  await prisma.auditLog.deleteMany({});
+  await prisma.messageLog.deleteMany({});
+  await prisma.campaignTarget.deleteMany({});
+  await prisma.campaign.deleteMany({});
+  await prisma.eventResponse.deleteMany({});
+  await prisma.event.deleteMany({});
+  await prisma.emergencyResponse.deleteMany({});
+  await prisma.emergencyRequest.deleteMany({});
+  await prisma.commentLike.deleteMany({});
+  await prisma.comment.deleteMany({});
+  await prisma.postLike.deleteMany({});
+  await prisma.postReport.deleteMany({});
+  await prisma.post.deleteMany({});
+  await prisma.pollVote.deleteMany({});
+  await prisma.pollOption.deleteMany({});
+  await prisma.pollLike.deleteMany({});
+  await prisma.pollCommentLike.deleteMany({});
+  await prisma.pollComment.deleteMany({});
+  await prisma.pollReport.deleteMany({});
+  await prisma.poll.deleteMany({});
+  await prisma.deletedNotification.deleteMany({});
+  await prisma.notification.deleteMany({});
+  await prisma.broadcast.deleteMany({});
+  await prisma.userLocation.deleteMany({});
+  await prisma.locationAccessRequest.deleteMany({});
+  await prisma.requestLocation.deleteMany({});
+  await prisma.communityJoinRequest.deleteMany({});
+  await prisma.communityAdminLog.deleteMany({});
+  await prisma.communityComplaint.deleteMany({});
+  await prisma.communityBan.deleteMany({});
+  await prisma.communityAnnouncement.deleteMany({});
+  await prisma.communityMemberActivity.deleteMany({});
+  await prisma.communityMemberReport.deleteMany({});
+  await prisma.communityLinkOrDoc.deleteMany({});
+  await prisma.communityMessageStar.deleteMany({});
+  await prisma.communityMessageReaction.deleteMany({});
+  await prisma.communityMessageRead.deleteMany({});
+  await prisma.communityMessage.deleteMany({});
+  await prisma.communityPostLike.deleteMany({});
+  await prisma.communityPostReport.deleteMany({});
+  await prisma.communityComment.deleteMany({});
+  await prisma.communityPost.deleteMany({});
+  await prisma.communityMember.deleteMany({});
+  await prisma.community.deleteMany({});
+  await prisma.userWarning.deleteMany({});
+  
+  // Wipe users and members
+  await prisma.member.deleteMany({});
+  await prisma.user.deleteMany({});
+  await prisma.location.deleteMany({});
+  await prisma.profession.deleteMany({});
+
+  console.log('🌱 Seeding State (Tamil Nadu)...');
+  const state = await prisma.location.create({
+    data: {
+      name: 'தமிழ்நாடு',
+      nameEn: 'Tamil Nadu',
+      type: 'STATE'
+    }
+  });
+
+  console.log('🌱 Seeding specific locations tree...');
+  await seedLocations(state.id, locationTree);
+
+  console.log('🌱 Seeding default professions...');
+  const professionNames = ['Doctor', 'Lawyer', 'Farmer', 'Engineer', 'Student'];
+  for (const name of professionNames) {
+    await prisma.profession.create({ data: { name } });
+  }
+
+  console.log('🌱 Seeding default communities...');
   const defaultCommunities = [
     { name: 'Lawyers', description: 'Lawyers Community' },
     { name: 'Police', description: 'Police Assistance Community' },
@@ -124,50 +526,29 @@ async function main() {
     { name: 'Students', description: 'Students Community' },
     { name: 'Doctors', description: 'Doctors & Medical Community' }
   ];
-  const dbCommunities = [];
   for (const comm of defaultCommunities) {
-    let community = await (prisma as any).community.findUnique({ where: { name: comm.name } });
-    if (!community) {
-      community = await (prisma as any).community.create({
-        data: {
-          name: comm.name,
-          description: comm.description,
-          image: `https://avatar.iran.liara.run/username?username=${comm.name}`
-        }
-      });
-    }
-    dbCommunities.push(community);
-  }
-
-  // 7. Auto-join seeded members to matching communities based on profession
-  const allMembers = await (prisma as any).member.findMany({
-    include: { profession: true }
-  });
-  for (const m of allMembers) {
-    if (m.profession) {
-      const normalized = m.profession.name.toLowerCase().trim();
-      for (const dbComm of dbCommunities) {
-        const normalCommunity = dbComm.name.toLowerCase();
-        if (normalCommunity.includes(normalized) || normalized.includes(normalCommunity)) {
-          await (prisma as any).communityMember.upsert({
-            where: {
-              communityId_memberId: {
-                communityId: dbComm.id,
-                memberId: m.id
-              }
-            },
-            create: {
-              communityId: dbComm.id,
-              memberId: m.id
-            },
-            update: {}
-          });
-        }
+    await prisma.community.create({
+      data: {
+        name: comm.name,
+        description: comm.description,
+        image: `https://avatar.iran.liara.run/username?username=${comm.name}`
       }
-    }
+    });
   }
 
-  console.log('✅ Hierarchy Seeding completed! Use phones 9000000001, 9000000002, 9000000003 for testing.');
+  console.log('🌱 Seeding Single SUPER_ADMIN (Thalaivar Seeman)...');
+  await prisma.user.create({
+    data: {
+      name: 'Thalaivar Seeman',
+      phone: '9000000001',
+      password: 'admin123',
+      role: 'SUPER_ADMIN',
+      locationId: state.id,
+      approvalStatus: 'APPROVED'
+    }
+  });
+
+  console.log('✅ Seeding completed! Only 1 Super Admin and custom locations seeded.');
 }
 
 main()

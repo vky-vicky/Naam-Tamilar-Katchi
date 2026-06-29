@@ -59,10 +59,6 @@ model Member {
   createdById          Int?
   approvedById         Int?
   fcmToken             String?
-  district             String?
-  constituency         String?
-  area                 String?
-  street               String?
   communityMembers     CommunityMember[]
   communityPosts       CommunityPost[]
   communityPostLikes   CommunityPostLike[]
@@ -122,10 +118,6 @@ model User {
   gender               String?
   bloodGroup           String?
   profession           String?
-  district             String?
-  constituency         String?
-  area                 String?
-  street               String?
   auditLogs            AuditLog[]
   broadcasts           Broadcast[]
   campaigns            Campaign[]
@@ -191,17 +183,6 @@ model MessageLog {
   createdAt         DateTime      @default(now())
   campaign          Campaign      @relation(fields: [campaignId], references: [id])
   member            Member        @relation(fields: [memberId], references: [id])
-}
-
-model OTP {
-  id         Int      @id @default(autoincrement())
-  phone      String
-  otp        String
-  expiresAt  DateTime
-  isVerified Boolean  @default(false)
-  createdAt  DateTime @default(now())
-
-  @@index([phone])
 }
 
 model AuditLog {
@@ -878,12 +859,6 @@ enum ContributionBadge {
   SILVER
   GOLD
   PLATINUM
-}
-
-enum ReminderNotificationType {
-  PUSH
-  SMS
-  WHATSAPP
 }
 
 enum ReportStatus {

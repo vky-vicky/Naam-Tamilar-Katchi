@@ -95,6 +95,7 @@ export const typeDefs = gql`
     name: String!
     surname: String
     role: Role!
+    roleLabel: String
     phone: String
     image: String
     profilePicture: String
@@ -137,6 +138,7 @@ export const typeDefs = gql`
     conditions: String
     emergencyContact: String
     role: String
+    roleLabel: String
     locationId: Int!
     location: Location!
     profession: String

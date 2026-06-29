@@ -752,20 +752,46 @@ async function validateRoleLocationLevel(role: string, locationId: number, lang:
   }
 }
 
+export const ROLE_LABELS = {
+  SUPER_ADMIN: {
+    en: "Head State Coordinator",
+    ta: "தலைமை மாநில ஒருங்கிணைப்பாளர்",
+  },
+  DISTRICT_INCHARGE: {
+    en: "District Coordinator",
+    ta: "மாவட்ட ஒருங்கிணைப்பாளர்",
+  },
+  ADMIN: {
+    en: "Constituency Incharge",
+    ta: "தொகுதி பொறுப்பாளர்",
+  },
+  SUB_ADMIN: {
+    en: "Area Incharge",
+    ta: "பகுதி பொறுப்பாளர்",
+  },
+  MEMBER: {
+    en: "Panchayat Incharge",
+    ta: "ஊராட்சி பொறுப்பாளர்",
+  },
+};
+
 // Helpers for role and designation formatting
-function getRoleLabel(role: string | null | undefined): string {
-  if (!role) return 'Member';
+export function getRoleLabel(role: string | null | undefined, lang: string = 'en'): string {
+  if (!role) return lang.startsWith('ta') ? 'உறுப்பினர்' : 'Member';
   const r = role.toUpperCase().trim();
-  if (r === 'SUPER_ADMIN') return 'Super Admin';
-  if (r === 'ADMIN') return 'Admin';
-  if (r === 'SUB_ADMIN') return 'Sub Admin';
-  if (r === 'MEMBER') return 'Member';
+  const match = (ROLE_LABELS as any)[r];
+  if (match) {
+    return lang.startsWith('ta') ? match.ta : match.en;
+  }
+  if (r === 'SUPER ADMIN') return lang.startsWith('ta') ? ROLE_LABELS.SUPER_ADMIN.ta : ROLE_LABELS.SUPER_ADMIN.en;
+  if (r === 'DISTRICT INCHARGE') return lang.startsWith('ta') ? ROLE_LABELS.DISTRICT_INCHARGE.ta : ROLE_LABELS.DISTRICT_INCHARGE.en;
+  if (r === 'SUB ADMIN') return lang.startsWith('ta') ? ROLE_LABELS.SUB_ADMIN.ta : ROLE_LABELS.SUB_ADMIN.en;
   return role;
 }
 
-function formatUserDesignation(user: any, fallbackRole: string = 'Admin'): string {
+function formatUserDesignation(user: any, fallbackRole: string = 'Admin', lang: string = 'en'): string {
   if (!user) return fallbackRole;
-  const roleLabel = getRoleLabel(user.role);
+  const roleLabel = getRoleLabel(user.role, lang);
   return `${roleLabel} ${user.name}`;
 }
 
@@ -802,12 +828,13 @@ async function writeUpdateAuditLogs(
     }) || await (prisma as any).member.findUnique({
       where: { id: Number(context.user.id) }
     });
-    const updaterName = formatUserDesignation(updaterUser, 'Admin');
+    const lang = context?.language || 'en';
+    const updaterName = formatUserDesignation(updaterUser, lang.startsWith('ta') ? 'நிர்வாகி' : 'Admin', lang);
 
     // 3. Audit for Role Change
     if (isRoleExplicitlyChanged) {
-      const oldRoleLabel = getRoleLabel(currentRole);
-      const newRoleLabel = getRoleLabel(targetRole);
+      const oldRoleLabel = getRoleLabel(currentRole, lang);
+      const newRoleLabel = getRoleLabel(targetRole, lang);
       const roleDetails = `Member Role Changed from ${oldRoleLabel} to ${newRoleLabel} for ${targetFullName} by ${updaterName}`;
       
       const finalUserRecord = await (prisma as any).user.findFirst({
@@ -948,10 +975,10 @@ function userToMemberShape(user: any) {
     createdAt: user.createdAt,
     createdBy: null,
     createdById: user.parentId,
-    district: user.district || null,
-    constituency: user.constituency || null,
-    area: user.area || null,
-    street: user.street || null
+    district: null,
+    constituency: null,
+    area: null,
+    street: null
   };
 }
 
@@ -979,11 +1006,7 @@ async function getOrCreateMemberForUser(user: any) {
           role: userRec.role === 'SUPER_ADMIN' ? 'SUPER_ADMIN' : (userRec.role === 'ADMIN' ? 'ADMIN' : (userRec.role === 'SUB_ADMIN' ? 'SUB_ADMIN' : 'Member')),
           locationId: userRec.locationId || 1,
           approvalStatus: 'APPROVED',
-          isActive: true,
-          district: userRec.district,
-          constituency: userRec.constituency,
-          area: userRec.area,
-          street: userRec.street
+          isActive: true
         }
       });
     } catch (e: any) {
@@ -1034,10 +1057,6 @@ async function getOrCreateUserForMember(memberId: number): Promise<number> {
         locationId: member.locationId,
         approvalStatus: member.approvalStatus,
         isActive: member.isActive,
-        district: member.district,
-        constituency: member.constituency,
-        area: member.area,
-        street: member.street
       }
     });
   }
@@ -2400,7 +2419,8 @@ export const resolvers = {
             })
           ]).then(([members, users]) => {
             const memberActivities = members.map((m: any) => {
-              const approvedByName = m.approvedBy ? formatUserDesignation(m.approvedBy) : (m.createdBy ? formatUserDesignation(m.createdBy) : 'Admin');
+              const lang = context?.language || 'en';
+              const approvedByName = m.approvedBy ? formatUserDesignation(m.approvedBy, lang.startsWith('ta') ? 'நிர்வாகி' : 'Admin', lang) : (m.createdBy ? formatUserDesignation(m.createdBy, lang.startsWith('ta') ? 'நிர்வாகி' : 'Admin', lang) : (lang.startsWith('ta') ? 'நிர்வாகி' : 'Admin'));
               const actionText = m.approvedById ? 'approved' : 'added';
               const isRejected = m.approvalStatus === 'REJECTED';
               return {
@@ -2426,7 +2446,8 @@ export const resolvers = {
             });
 
             const userActivities = users.map((u: any) => {
-              const addedByName = formatUserDesignation(u.parent, 'Admin');
+              const lang = context?.language || 'en';
+              const addedByName = formatUserDesignation(u.parent, lang.startsWith('ta') ? 'நிர்வாகி' : 'Admin', lang);
               const isRejected = u.approvalStatus === 'REJECTED';
               return {
                 id: 1000000 + u.id,
@@ -2484,14 +2505,17 @@ export const resolvers = {
             orderBy: { createdAt: 'desc' },
             include: { location: true, parent: true }
           }).then((users: any[]) => users.map((u: any) => {
+            const lang = context?.language || 'en';
             const isSuper = u.role === 'SUPER_ADMIN';
-            const addedByName = formatUserDesignation(u.parent, isSuper ? 'System' : 'Admin');
-            const roleLabel = isSuper ? 'Super Admin' : 'Admin';
+            const addedByName = formatUserDesignation(u.parent, isSuper ? (lang.startsWith('ta') ? 'அமைப்பு' : 'System') : (lang.startsWith('ta') ? 'நிர்வாகி' : 'Admin'), lang);
+            const roleLabel = getRoleLabel(u.role, lang);
             return {
               id: u.id,
               activityType: 'ADMIN',
-              title: isSuper ? 'Super Admin Added' : 'Admin Added',
-              description: `${roleLabel} ${u.name} ${u.surname || ''} added by ${addedByName}`,
+              title: isSuper ? (lang.startsWith('ta') ? 'தலைமை மாநில ஒருங்கிணைப்பாளர் சேர்க்கப்பட்டார்' : 'Super Admin Added') : (lang.startsWith('ta') ? 'அட்மின் சேர்க்கப்பட்டார்' : 'Admin Added'),
+              description: lang.startsWith('ta') 
+                ? `${roleLabel} ${u.name} ${u.surname || ''} சேர்க்கப்பட்டார் (சேர்த்தவர்: ${addedByName})`
+                : `${roleLabel} ${u.name} ${u.surname || ''} added by ${addedByName}`,
               createdAt: toIST(u.createdAt),
               member: {
                 id: u.id,
@@ -2535,12 +2559,16 @@ export const resolvers = {
             orderBy: { createdAt: 'desc' },
             include: { location: true, parent: true }
           }).then((users: any[]) => users.map((u: any) => {
-            const addedByName = formatUserDesignation(u.parent, 'Admin');
+            const lang = context?.language || 'en';
+            const addedByName = formatUserDesignation(u.parent, lang.startsWith('ta') ? 'நிர்வாகி' : 'Admin', lang);
+            const roleLabel = getRoleLabel(u.role, lang);
             return {
               id: u.id,
               activityType: 'SUB_ADMIN',
-              title: 'Sub Admin Added',
-              description: `Sub Admin ${u.name} ${u.surname || ''} added by ${addedByName}`,
+              title: lang.startsWith('ta') ? 'துணை நிர்வாகி சேர்க்கப்பட்டார்' : 'Sub Admin Added',
+              description: lang.startsWith('ta')
+                ? `${roleLabel} ${u.name} ${u.surname || ''} சேர்க்கப்பட்டார் (சேர்த்தவர்: ${addedByName})`
+                : `Sub Admin ${u.name} ${u.surname || ''} added by ${addedByName}`,
               createdAt: toIST(u.createdAt),
               member: {
                 id: u.id,
@@ -4723,8 +4751,7 @@ export const resolvers = {
         bloodGroup: normalizedBloodGroup || null,
         dateOfBirth: rest.dateOfBirth || null,
         gender: rest.gender || null,
-        profession: professionName || null,
-        ...locFields
+        profession: professionName || null
       };
 
       if (rest.surname) {
@@ -4894,7 +4921,6 @@ export const resolvers = {
       const isAdminAdding = context?.user?.role === 'SUPER_ADMIN' || context?.user?.role === 'ADMIN' || context?.user?.role === 'SUB_ADMIN';
       const memberData: any = {
         ...rest,
-        ...locFields,
         bloodGroup: normalizedBloodGroupMember || rest.bloodGroup || null,
         approvalStatus: isAdminAdding ? 'APPROVED' : 'PENDING',
         approvedById: isAdminAdding && creatorId ? creatorId : null,
@@ -5216,8 +5242,6 @@ export const resolvers = {
 
       if (finalLocationId) {
         updateData.locationId = finalLocationId;
-        const locFields = await getLocationFields(finalLocationId);
-        Object.assign(updateData, locFields);
       }
 
       if (professionName !== undefined) {
@@ -5255,11 +5279,7 @@ export const resolvers = {
             dateOfBirth: updateData.dateOfBirth !== undefined ? updateData.dateOfBirth : targetMember.dateOfBirth,
             gender: updateData.gender !== undefined ? updateData.gender : targetMember.gender,
             bloodGroup: updateData.bloodGroup !== undefined ? updateData.bloodGroup : targetMember.bloodGroup,
-            profession: professionName || targetMember.profession?.name || null,
-            district: updateData.district !== undefined ? updateData.district : targetMember.district,
-            constituency: updateData.constituency !== undefined ? updateData.constituency : targetMember.constituency,
-            area: updateData.area !== undefined ? updateData.area : targetMember.area,
-            street: updateData.street !== undefined ? updateData.street : targetMember.street
+            profession: professionName || targetMember.profession?.name || null
           };
 
           if (existingUser) {
@@ -5322,10 +5342,6 @@ export const resolvers = {
             dateOfBirth: updateData.dateOfBirth !== undefined ? updateData.dateOfBirth : targetUser.dateOfBirth,
             gender: updateData.gender !== undefined ? updateData.gender : targetUser.gender,
             bloodGroup: updateData.bloodGroup !== undefined ? updateData.bloodGroup : targetUser.bloodGroup,
-            district: updateData.district !== undefined ? updateData.district : targetUser.district,
-            constituency: updateData.constituency !== undefined ? updateData.constituency : targetUser.constituency,
-            area: updateData.area !== undefined ? updateData.area : targetUser.area,
-            street: updateData.street !== undefined ? updateData.street : targetUser.street,
             professionId: professionId
           };
 
@@ -5347,8 +5363,7 @@ export const resolvers = {
           const userUpdateFields: any = {};
           const SYNC_FIELDS = [
             'name', 'surname', 'phone', 'password', 'image',
-            'dateOfBirth', 'gender', 'bloodGroup', 'locationId',
-            'district', 'constituency', 'area', 'street'
+            'dateOfBirth', 'gender', 'bloodGroup', 'locationId'
           ];
           for (const key of SYNC_FIELDS) {
             if ((memberFields as any)[key] !== undefined) {
@@ -5375,7 +5390,7 @@ export const resolvers = {
           'name', 'surname', 'phone', 'password', 'image',
           'dateOfBirth', 'gender', 'bloodGroup', 'role',
           'locationId', 'approvalStatus', 'isActive', 'fcmToken',
-          'district', 'constituency', 'area', 'street', 'profession'
+          'profession'
         ];
         const userUpdateData: any = {};
         for (const key of USER_ALLOWED_FIELDS) {
@@ -5402,8 +5417,7 @@ export const resolvers = {
           const memberUpdateFields: any = {};
           const SYNC_FIELDS = [
             'name', 'surname', 'phone', 'password', 'image',
-            'dateOfBirth', 'gender', 'bloodGroup', 'locationId',
-            'district', 'constituency', 'area', 'street'
+            'dateOfBirth', 'gender', 'bloodGroup', 'locationId'
           ];
           for (const key of SYNC_FIELDS) {
             if (userUpdateData[key] !== undefined) {
@@ -5445,8 +5459,7 @@ export const resolvers = {
         const userUpdateFields: any = {};
         const SYNC_FIELDS = [
           'name', 'surname', 'phone', 'password', 'image',
-          'dateOfBirth', 'gender', 'bloodGroup', 'locationId',
-          'district', 'constituency', 'area', 'street'
+          'dateOfBirth', 'gender', 'bloodGroup', 'locationId'
         ];
         for (const key of SYNC_FIELDS) {
           if (updateData[key] !== undefined) {
@@ -5934,11 +5947,7 @@ export const resolvers = {
               role: userRec.role === 'SUPER_ADMIN' ? 'SUPER_ADMIN' : (userRec.role === 'ADMIN' ? 'ADMIN' : (userRec.role === 'SUB_ADMIN' ? 'SUB_ADMIN' : 'Member')),
               locationId: userRec.locationId || 1,
               approvalStatus: 'APPROVED',
-              isActive: true,
-              district: userRec.district,
-              constituency: userRec.constituency,
-              area: userRec.area,
-              street: userRec.street
+              isActive: true
             }
           });
         }
@@ -6022,11 +6031,7 @@ export const resolvers = {
               role: userRec.role === 'SUPER_ADMIN' ? 'SUPER_ADMIN' : (userRec.role === 'ADMIN' ? 'ADMIN' : (userRec.role === 'SUB_ADMIN' ? 'SUB_ADMIN' : 'Member')),
               locationId: userRec.locationId || 1,
               approvalStatus: 'APPROVED',
-              isActive: true,
-              district: userRec.district,
-              constituency: userRec.constituency,
-              area: userRec.area,
-              street: userRec.street
+              isActive: true
             }
           });
         }
@@ -7515,11 +7520,7 @@ export const resolvers = {
               role: userRec.role === 'SUPER_ADMIN' ? 'ADMIN' : (userRec.role === 'SUB_ADMIN' ? 'SUB_ADMIN' : 'Member'),
               locationId: userRec.locationId || 1,
               approvalStatus: 'APPROVED',
-              isActive: true,
-              district: userRec.district,
-              constituency: userRec.constituency,
-              area: userRec.area,
-              street: userRec.street
+              isActive: true
             }
           });
         }
@@ -9047,10 +9048,6 @@ export const resolvers = {
                 gender: dbUser.gender,
                 bloodGroup: dbUser.bloodGroup,
                 locationId: dbUser.locationId || 1,
-                district: dbUser.district,
-                constituency: dbUser.constituency,
-                area: dbUser.area,
-                street: dbUser.street,
                 professionId: professionId,
                 role: 'Member',
                 approvalStatus: 'APPROVED',
@@ -9069,10 +9066,6 @@ export const resolvers = {
                 gender: dbUser.gender,
                 bloodGroup: dbUser.bloodGroup,
                 locationId: dbUser.locationId || 1,
-                district: dbUser.district,
-                constituency: dbUser.constituency,
-                area: dbUser.area,
-                street: dbUser.street,
                 professionId: professionId,
                 role: 'Member'
               }
@@ -9128,10 +9121,6 @@ export const resolvers = {
               dateOfBirth: dbMember.dateOfBirth,
               gender: dbMember.gender,
               bloodGroup: dbMember.bloodGroup,
-              district: dbMember.district,
-              constituency: dbMember.constituency,
-              area: dbMember.area,
-              street: dbMember.street,
               profession: professionName
             }
           });
@@ -9228,6 +9217,14 @@ export const resolvers = {
       return translateLocationName(name, context?.language || 'en') || "";
     },
     profilePicture: (parent: any) => parent.image,
+    role: (parent: any, _: any, context: any) => {
+      const lang = context?.language || 'en';
+      return getRoleLabel(parent.role, lang);
+    },
+    roleLabel: (parent: any, _: any, context: any) => {
+      const lang = context?.language || 'en';
+      return getRoleLabel(parent.role, lang);
+    },
   },
 
   User: {
@@ -9283,6 +9280,10 @@ export const resolvers = {
       return translateLocationName(name, context?.language || 'en') || "";
     },
     profilePicture: (parent: any) => parent.image,
+    roleLabel: (parent: any, _: any, context: any) => {
+      const lang = context?.language || 'en';
+      return getRoleLabel(parent.role, lang);
+    },
   },
 
   Location: {

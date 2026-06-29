@@ -374,16 +374,41 @@ export class ContributionService {
     const constituencies = new Map<string, number>();
     const areas = new Map<string, number>();
 
+    const locationCache = new Map<number, { district: string | null, constituency: string | null, area: string | null }>();
+    async function getLocFields(locationId: number) {
+      if (locationCache.has(locationId)) return locationCache.get(locationId)!;
+      const fields = { district: null as string | null, constituency: null as string | null, area: null as string | null };
+      let currentId = locationId;
+      while (currentId) {
+        const loc = await (prisma as any).location.findUnique({
+          where: { id: currentId },
+          select: { id: true, name: true, type: true, parentId: true }
+        });
+        if (!loc) break;
+        if (loc.type === 'DISTRICT') fields.district = loc.name;
+        else if (loc.type === 'TALUK') fields.constituency = loc.name;
+        else if (loc.type === 'AREA') fields.area = loc.name;
+        
+        if (!loc.parentId) break;
+        currentId = loc.parentId;
+      }
+      locationCache.set(locationId, fields);
+      return fields;
+    }
+
     for (const p of payments) {
       const member = p.member;
-      if (member.district) {
-        districts.set(member.district, (districts.get(member.district) || 0) + p.amount);
-      }
-      if (member.constituency) {
-        constituencies.set(member.constituency, (constituencies.get(member.constituency) || 0) + p.amount);
-      }
-      if (member.area) {
-        areas.set(member.area, (areas.get(member.area) || 0) + p.amount);
+      if (member && member.locationId) {
+        const locFields = await getLocFields(member.locationId);
+        if (locFields.district) {
+          districts.set(locFields.district, (districts.get(locFields.district) || 0) + p.amount);
+        }
+        if (locFields.constituency) {
+          constituencies.set(locFields.constituency, (constituencies.get(locFields.constituency) || 0) + p.amount);
+        }
+        if (locFields.area) {
+          areas.set(locFields.area, (areas.get(locFields.area) || 0) + p.amount);
+        }
       }
     }
 
