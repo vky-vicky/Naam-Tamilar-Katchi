@@ -8,6 +8,8 @@ export const typeDefs = gql`
     TALUK
     AREA
     STREET
+    TOWN
+    CONSTITUENCY
   }
 
   enum Role {

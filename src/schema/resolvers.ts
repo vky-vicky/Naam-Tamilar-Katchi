@@ -187,6 +187,17 @@ async function getAncestorLocationIds(locationId: number): Promise<number[]> {
 async function getAccessibleLocationIds(userId: number, role: string): Promise<number[]> {
   if (role === 'SUPER_ADMIN') return []; // Flag for all locations
 
+  const isMember = role === 'MEMBER' || role === 'Member';
+  if (isMember) {
+    const member = await (prisma as any).member.findUnique({
+      where: { id: userId },
+      select: { locationId: true }
+    });
+    if (!member || !member.locationId) return [];
+    const children = await getChildLocationIds(member.locationId);
+    return [member.locationId, ...children];
+  }
+
   const userLocations = await (prisma as any).userLocation.findMany({
     where: { userId },
     select: { locationId: true }
@@ -1536,7 +1547,12 @@ export const resolvers = {
       const effectiveParentId = selectedLocationId ?? parentId;
       
       if (effectiveParentId !== undefined) where.parentId = effectiveParentId;
-      if (type) where.type = type;
+      
+      let targetType = type;
+      if (type === 'TOWN') targetType = 'AREA';
+      else if (type === 'CONSTITUENCY') targetType = 'TALUK';
+      
+      if (targetType) where.type = targetType;
       
       console.log(`[getLocationList] parentId: ${parentId}, selectedLocationId: ${selectedLocationId}, effectiveParentId: ${effectiveParentId}, type: ${type}`);
       
@@ -9357,6 +9373,11 @@ export const resolvers = {
       }
       return parent.nameEn || parent.name; // English name stored in nameEn, fallback to name
     },
+    type: (parent: any) => {
+      if (parent.type === 'AREA') return 'TOWN';
+      if (parent.type === 'TALUK') return 'CONSTITUENCY';
+      return parent.type;
+    },
     parent: async (parent: any) => {
       if (!parent.parentId) return null;
       return (prisma as any).location.findUnique({ where: { id: parent.parentId } });
@@ -11545,6 +11566,14 @@ export const resolvers = {
   bannedBy: async (parent: any) => {
     if (parent.bannedBy) return parent.bannedBy;
     return (prisma as any).user.findUnique({ where: { id: parent.bannedById } });
+  }
+};
+
+(resolvers as any).LocationNode = {
+  type: (parent: any) => {
+    if (parent.type === 'AREA') return 'TOWN';
+    if (parent.type === 'TALUK') return 'CONSTITUENCY';
+    return parent.type;
   }
 };
 
