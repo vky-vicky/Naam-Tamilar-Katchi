@@ -3043,12 +3043,13 @@ export const resolvers = {
         }
 
         if (districtIds.length > 0) {
-          const allChildIds: number[] = [];
+          const targetIds: number[] = [];
           for (const districtId of districtIds) {
             const childIds = await getChildLocationIds(districtId);
-            allChildIds.push(districtId, ...childIds);
+            const ancestorIds = await getAncestorLocationIds(districtId);
+            targetIds.push(districtId, ...childIds, ...ancestorIds);
           }
-          where.locationId = { in: allChildIds };
+          where.locationId = { in: Array.from(new Set(targetIds)) };
         } else {
           // No districts assigned: use primary location
           if (userLocId) {
@@ -5089,12 +5090,6 @@ export const resolvers = {
 
       const { isUserTable, targetId } = await determineUserAndId(id);
 
-      // Normal Member can only edit their own profile.
-      const isMember = context.user.role === 'MEMBER';
-      if (isMember && Number(context.user.id) !== targetId) {
-        throw new Error(I18nService.translate("unauthorized_edit_member", context?.language));
-      }
-
       // Load updater details
       const updater = await (prisma as any).user.findUnique({
         where: { id: Number(context.user.id) }
@@ -5128,6 +5123,16 @@ export const resolvers = {
         currentLocId = targetMember.locationId;
       }
 
+      const isEditingSelf = (context.user.type === 'admin' && isUserTable && Number(context.user.id) === targetId) ||
+                            (context.user.type === 'member' && !isUserTable && Number(context.user.id) === targetId) ||
+                            (!!updater?.phone && (targetUser?.phone === updater.phone || targetMember?.phone === updater.phone));
+
+      // Normal Member can only edit their own profile.
+      const isMember = context.user.role === 'MEMBER';
+      if (isMember && !isEditingSelf) {
+        throw new Error(I18nService.translate("unauthorized_edit_member", context?.language));
+      }
+
       // Unique phone validation
       const currentPhone = isUserTable ? targetUser.phone : targetMember.phone;
       if (rest.phone && rest.phone !== currentPhone) {
@@ -5142,10 +5147,6 @@ export const resolvers = {
       const isRoleExplicitlyChanged = rest.role && rest.role.toUpperCase().trim() !== currentRole;
       const finalLocationId = streetId || areaId || talukId || districtId || locationId;
       const targetLocId = finalLocationId || currentLocId;
-
-      const isEditingSelf = (context.user.type === 'admin' && isUserTable && Number(context.user.id) === targetId) ||
-                            (context.user.type === 'member' && !isUserTable && Number(context.user.id) === targetId) ||
-                            (updater?.phone && (targetUser?.phone === updater.phone || targetMember?.phone === updater.phone));
 
       // Block users from changing their own role
       if (isRoleExplicitlyChanged && isEditingSelf) {
@@ -5242,6 +5243,39 @@ export const resolvers = {
 
       if (finalLocationId) {
         updateData.locationId = finalLocationId;
+      }
+
+      // Normalize optional fields: if empty string or 'select', set to null so it clears the field in DB
+      if (updateData.surname !== undefined) {
+        const val = String(updateData.surname).trim();
+        updateData.surname = (val === '' || val.toLowerCase() === 'select') ? null : val;
+      }
+      if (updateData.dateOfBirth !== undefined) {
+        const val = String(updateData.dateOfBirth).trim();
+        updateData.dateOfBirth = (val === '' || val.toLowerCase() === 'select') ? null : val;
+      }
+      if (updateData.gender !== undefined) {
+        const val = String(updateData.gender).trim();
+        updateData.gender = (val === '' || val.toLowerCase() === 'select') ? null : val;
+      }
+      if (updateData.bloodGroup !== undefined) {
+        updateData.bloodGroup = normalizeBloodGroup(updateData.bloodGroup);
+      }
+      if (updateData.allergies !== undefined) {
+        const val = String(updateData.allergies).trim();
+        updateData.allergies = (val === '' || val.toLowerCase() === 'select') ? null : val;
+      }
+      if (updateData.conditions !== undefined) {
+        const val = String(updateData.conditions).trim();
+        updateData.conditions = (val === '' || val.toLowerCase() === 'select') ? null : val;
+      }
+      if (updateData.emergencyContact !== undefined) {
+        const val = String(updateData.emergencyContact).trim();
+        updateData.emergencyContact = (val === '' || val.toLowerCase() === 'select') ? null : val;
+      }
+      if (updateData.image !== undefined) {
+        const val = String(updateData.image).trim();
+        updateData.image = (val === '' || val.toLowerCase() === 'select') ? null : val;
       }
 
       if (professionName !== undefined) {
@@ -5905,11 +5939,6 @@ export const resolvers = {
       });
       if (!event) {
         throw new Error("Event not found");
-      }
-
-      const user = context?.user;
-      if (user && user.type !== 'member' && event.createdById === Number(user.id)) {
-        throw new Error("Event creators/organizers are not allowed to RSVP to their own events.");
       }
 
       let finalMemberId = Number(memberId);
@@ -8125,7 +8154,7 @@ export const resolvers = {
 
     createCommunity: async (_: any, { name, description, image, allowMemberMessages, locationId, privacyType }: any, context: any) => {
       if (!context.user) throw new Error(I18nService.translate("unauthorized_login", context?.language));
-      if (context.user.role !== 'SUPER_ADMIN' && context.user.role !== 'ADMIN' && context.user.role !== 'SUB_ADMIN') {
+      if (context.user.role === 'MEMBER' || context.user.role === 'Member') {
         throw new Error(I18nService.translate("member_not_allowed", context?.language));
       }
 

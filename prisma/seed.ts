@@ -2,124 +2,13 @@ import prisma from '../src/db.js';
 
 const locationTree = [
   {
-    name: 'நாகப்பட்டினம்',
-    nameEn: 'Nagapattinam',
+    name: 'தஞ்சாவூர் மாவட்டம்',
+    nameEn: 'Thanjavur District',
     type: 'DISTRICT',
     children: [
       {
-        name: 'நாகூர்',
-        nameEn: 'Nagore',
-        type: 'TALUK',
-        children: [
-          { name: 'மெயின் ரோடு', nameEn: 'Main Road', type: 'AREA' },
-          { name: 'பள்ளிவாசல் தெரு', nameEn: 'Pallivasal Street', type: 'AREA' },
-          { name: 'கடற்கரை சாலை', nameEn: 'Beach Road', type: 'AREA' }
-        ]
-      },
-      {
-        name: 'அக்கரைப்பேட்டை',
-        nameEn: 'Akkaraipettai',
-        type: 'TALUK',
-        children: [
-          { name: 'வடக்கு தெரு', nameEn: 'North Street', type: 'AREA' },
-          { name: 'தெற்கு தெரு', nameEn: 'South Street', type: 'AREA' },
-          { name: 'நடு தெரு', nameEn: 'Middle Street', type: 'AREA' }
-        ]
-      },
-      {
-        name: 'சிக்கல்',
-        nameEn: 'Sikkal',
-        type: 'TALUK',
-        children: [
-          { name: 'கோவில் தெரு', nameEn: 'Kovil Street', type: 'AREA' },
-          { name: 'கிழக்கு தெரு', nameEn: 'East Street', type: 'AREA' },
-          { name: 'மேற்கு தெரு', nameEn: 'West Street', type: 'AREA' }
-        ]
-      }
-    ]
-  },
-  {
-    name: 'கீழ்வேளூர்',
-    nameEn: 'Kilvelur',
-    type: 'DISTRICT',
-    children: [
-      {
-        name: 'கீழ்வேளூர்',
-        nameEn: 'Kilvelur',
-        type: 'TALUK',
-        children: [
-          { name: 'மெயின் ரோடு', nameEn: 'Main Road', type: 'AREA' },
-          { name: 'வடக்கு தெரு', nameEn: 'North Street', type: 'AREA' },
-          { name: 'தெற்கு தெரு', nameEn: 'South Street', type: 'AREA' }
-        ]
-      },
-      {
-        name: 'கீழையூர்',
-        nameEn: 'Keezhaiyur',
-        type: 'TALUK',
-        children: [
-          { name: 'கிழக்கு தெரு', nameEn: 'East Street', type: 'AREA' },
-          { name: 'மேற்கு தெரு', nameEn: 'West Street', type: 'AREA' },
-          { name: 'காலனி தெரு', nameEn: 'Colony Street', type: 'AREA' }
-        ]
-      },
-      {
-        name: 'வலிவலம்',
-        nameEn: 'Valivalam',
-        type: 'TALUK',
-        children: [
-          { name: 'கோவில் தெரு', nameEn: 'Kovil Street', type: 'AREA' },
-          { name: 'சந்தை தெரு', nameEn: 'Market Street', type: 'AREA' },
-          { name: 'பள்ளி தெரு', nameEn: 'School Street', type: 'AREA' }
-        ]
-      }
-    ]
-  },
-  {
-    name: 'வேதாரண்யம்',
-    nameEn: 'Vedaranyam',
-    type: 'DISTRICT',
-    children: [
-      {
-        name: 'புஷ்பவனம்',
-        nameEn: 'Pushpavanam',
-        type: 'TALUK',
-        children: [
-          { name: 'முத்துக்கவுண்டர் காடு', nameEn: 'Muthukounder Kadu', type: 'AREA' },
-          { name: 'மீனவர் தெரு', nameEn: 'Fishermen Street', type: 'AREA' },
-          { name: 'அழகர்கவுண்டர் காடு', nameEn: 'Azhagarkounder Kadu', type: 'AREA' }
-        ]
-      },
-      {
-        name: 'பெரியகுத்தகை',
-        nameEn: 'Periyakuthagai',
-        type: 'TALUK',
-        children: [
-          { name: 'அலங்காரங்காடு', nameEn: 'Alangarangkadu', type: 'AREA' },
-          { name: 'வேட்டையன் காடு', nameEn: 'Vettaiyankadu', type: 'AREA' },
-          { name: 'நாட்டாண் காடு', nameEn: 'Nattaankadu', type: 'AREA' }
-        ]
-      },
-      {
-        name: 'கோவில்பத்து',
-        nameEn: 'Kovilpathu',
-        type: 'TALUK',
-        children: [
-          { name: 'துளுக்கத் தெரு', nameEn: 'Thulukka Street', type: 'AREA' },
-          { name: 'மேலக்காடு தெற்கு காடு', nameEn: 'Melakkadu South Kadu', type: 'AREA' },
-          { name: 'கவுண்டர்காடு', nameEn: 'Gounderkadu', type: 'AREA' }
-        ]
-      }
-    ]
-  },
-  {
-    name: 'தஞ்சாவூர்',
-    nameEn: 'Thanjavur',
-    type: 'DISTRICT',
-    children: [
-      {
-        name: 'தஞ்சாவூர்',
-        nameEn: 'Thanjavur',
+        name: 'தஞ்சாவூர் வட்டம்',
+        nameEn: 'Thanjavur Taluk',
         type: 'TALUK',
         children: [
           {
@@ -138,13 +27,13 @@ const locationTree = [
             type: 'AREA',
             children: [
               { name: 'மெயின் ரோடு', nameEn: 'Main Road', type: 'STREET' },
-              { name: 'கோவில் தெரு', nameEn: 'Kovil Street', type: 'STREET' },
+              { name: 'கோவில் தெரு', nameEn: 'Temple Street', type: 'STREET' },
               { name: 'காலனி தெரு', nameEn: 'Colony Street', type: 'STREET' }
             ]
           },
           {
             name: 'பிள்ளையார்பட்டி',
-            nameEn: 'Pillayarpatti',
+            nameEn: 'Pillaiyarpatti',
             type: 'AREA',
             children: [
               { name: 'வடக்கு தெரு', nameEn: 'North Street', type: 'STREET' },
@@ -155,8 +44,8 @@ const locationTree = [
         ]
       },
       {
-        name: 'ஒரத்தநாடு',
-        nameEn: 'Orathanadu',
+        name: 'ஒரத்தநாடு வட்டம்',
+        nameEn: 'Orathanadu Taluk',
         type: 'TALUK',
         children: [
           {
@@ -176,7 +65,7 @@ const locationTree = [
             children: [
               { name: 'கிழக்கு தெரு', nameEn: 'East Street', type: 'STREET' },
               { name: 'மேற்கு தெரு', nameEn: 'West Street', type: 'STREET' },
-              { name: 'கோவில் தெரு', nameEn: 'Kovil Street', type: 'STREET' }
+              { name: 'கோவில் தெரு', nameEn: 'Temple Street', type: 'STREET' }
             ]
           },
           {
@@ -192,8 +81,8 @@ const locationTree = [
         ]
       },
       {
-        name: 'பட்டுக்கோட்டை',
-        nameEn: 'Pattukkottai',
+        name: 'பட்டுக்கோட்டை வட்டம்',
+        nameEn: 'Pattukkottai Taluk',
         type: 'TALUK',
         children: [
           {
@@ -201,7 +90,7 @@ const locationTree = [
             nameEn: 'Pattukkottai',
             type: 'AREA',
             children: [
-              { name: 'பெரிய தெரு', nameEn: 'Big Street', type: 'STREET' },
+              { name: 'பெரிய தெரு', nameEn: 'Periya Street', type: 'STREET' },
               { name: 'மெயின் ரோடு', nameEn: 'Main Road', type: 'STREET' },
               { name: 'ரயில்வே சாலை', nameEn: 'Railway Road', type: 'STREET' }
             ]
@@ -211,7 +100,7 @@ const locationTree = [
             nameEn: 'Athivetti',
             type: 'AREA',
             children: [
-              { name: 'கோவில் தெரு', nameEn: 'Kovil Street', type: 'STREET' },
+              { name: 'கோவில் தெரு', nameEn: 'Temple Street', type: 'STREET' },
               { name: 'கிழக்கு தெரு', nameEn: 'East Street', type: 'STREET' },
               { name: 'மேற்கு தெரு', nameEn: 'West Street', type: 'STREET' }
             ]
@@ -229,8 +118,8 @@ const locationTree = [
         ]
       },
       {
-        name: 'பேராவூரணி',
-        nameEn: 'Peravurani',
+        name: 'பேராவூரணி வட்டம்',
+        nameEn: 'Peravurani Taluk',
         type: 'TALUK',
         children: [
           {
@@ -245,7 +134,7 @@ const locationTree = [
           },
           {
             name: 'சேதுபாவாசத்திரம்',
-            nameEn: 'Sethubhavachatram',
+            nameEn: 'Sethubavachatram',
             type: 'AREA',
             children: [
               { name: 'கடற்கரை சாலை', nameEn: 'Beach Road', type: 'STREET' },
@@ -258,8 +147,82 @@ const locationTree = [
             nameEn: 'Mallipattinam',
             type: 'AREA',
             children: [
-              { name: 'மீனவர் தெரு', nameEn: 'Fishermen Street', type: 'STREET' },
+              { name: 'மீனவர் தெரு', nameEn: 'Meenavar Street', type: 'STREET' },
               { name: 'மெயின் ரோடு', nameEn: 'Main Road', type: 'STREET' },
+              { name: 'மேற்கு தெரு', nameEn: 'West Street', type: 'STREET' }
+            ]
+          }
+        ]
+      },
+      {
+        name: 'கும்பகோணம் வட்டம்',
+        nameEn: 'Kumbakonam Taluk',
+        type: 'TALUK',
+        children: [
+          {
+            name: 'கும்பகோணம்',
+            nameEn: 'Kumbakonam',
+            type: 'AREA',
+            children: [
+              { name: 'பெரிய பஜார் தெரு', nameEn: 'Big Bazaar Street', type: 'STREET' },
+              { name: 'காந்தி சாலை', nameEn: 'Gandhi Road', type: 'STREET' },
+              { name: 'கிழக்கு தெரு', nameEn: 'East Street', type: 'STREET' }
+            ]
+          },
+          {
+            name: 'சுவாமிமலை',
+            nameEn: 'Swamimalai',
+            type: 'AREA',
+            children: [
+              { name: 'கோவில் தெரு', nameEn: 'Temple Street', type: 'STREET' },
+              { name: 'மெயின் ரோடு', nameEn: 'Main Road', type: 'STREET' },
+              { name: 'தெற்கு தெரு', nameEn: 'South Street', type: 'STREET' }
+            ]
+          },
+          {
+            name: 'தாராசுரம்',
+            nameEn: 'Darasuram',
+            type: 'AREA',
+            children: [
+              { name: 'கோவில் தெரு', nameEn: 'Temple Street', type: 'STREET' },
+              { name: 'பஜார் தெரு', nameEn: 'Bazaar Street', type: 'STREET' },
+              { name: 'மேற்கு தெரு', nameEn: 'West Street', type: 'STREET' }
+            ]
+          }
+        ]
+      },
+      {
+        name: 'பாபநாசம் வட்டம்',
+        nameEn: 'Papanasam Taluk',
+        type: 'TALUK',
+        children: [
+          {
+            name: 'பாபநாசம்',
+            nameEn: 'Papanasam',
+            type: 'AREA',
+            children: [
+              { name: 'மெயின் ரோடு', nameEn: 'Main Road', type: 'STREET' },
+              { name: 'தெற்கு தெரு', nameEn: 'South Street', type: 'STREET' },
+              { name: 'கிழக்கு தெரு', nameEn: 'East Street', type: 'STREET' }
+            ]
+          },
+          {
+            name: 'அய்யம்பேட்டை',
+            nameEn: 'Ayyampettai',
+            type: 'AREA',
+            children: [
+              { name: 'பஜார் தெரு', nameEn: 'Bazaar Street', type: 'STREET' },
+              { name: 'கோவில் தெரு', nameEn: 'Temple Street', type: 'STREET' },
+              { name: 'வடக்கு தெரு', nameEn: 'North Street', type: 'STREET' }
+            ]
+          },
+          {
+            name: 'அம்மாப்பேட்டை',
+            nameEn: 'Ammapettai',
+            type: 'AREA',
+            children: [
+              { name: 'மெயின் ரோடு', nameEn: 'Main Road', type: 'STREET' },
+              { name: 'காலனி தெரு', nameEn: 'Colony Street', type: 'STREET' },
               { name: 'மேற்கு தெரு', nameEn: 'West Street', type: 'STREET' }
             ]
           }
@@ -268,33 +231,151 @@ const locationTree = [
     ]
   },
   {
-    name: 'திருச்சிராப்பள்ளி',
-    nameEn: 'Tiruchirappalli',
+    name: 'நாகப்பட்டினம் மாவட்டம்',
+    nameEn: 'Nagapattinam District',
     type: 'DISTRICT',
     children: [
       {
-        name: 'திருச்சி கிழக்கு',
-        nameEn: 'Tiruchirappalli East',
+        name: 'நாகப்பட்டினம் வட்டம்',
+        nameEn: 'Nagapattinam Taluk',
         type: 'TALUK',
         children: [
+          {
+            name: 'நாகப்பட்டினம்',
+            nameEn: 'Nagapattinam',
+            type: 'AREA',
+            children: [
+              { name: 'மெயின் ரோடு', nameEn: 'Main Road', type: 'STREET' },
+              { name: 'கிழக்கு மெயின் தெரு', nameEn: 'East Main Street', type: 'STREET' },
+              { name: 'தெற்கு தெரு', nameEn: 'South Street', type: 'STREET' }
+            ]
+          },
+          {
+            name: 'நாகூர்',
+            nameEn: 'Nagore',
+            type: 'AREA',
+            children: [
+              { name: 'மெயின் ரோடு', nameEn: 'Main Road', type: 'STREET' },
+              { name: 'பள்ளிவாசல் தெரு', nameEn: 'Pallivasal Street', type: 'STREET' },
+              { name: 'கடற்கரை சாலை', nameEn: 'Beach Road', type: 'STREET' }
+            ]
+          },
+          {
+            name: 'அக்கரைப்பேட்டை',
+            nameEn: 'Akkaraipettai',
+            type: 'AREA',
+            children: [
+              { name: 'வடக்கு தெரு', nameEn: 'North Street', type: 'STREET' },
+              { name: 'தெற்கு தெரு', nameEn: 'South Street', type: 'STREET' },
+              { name: 'நடு தெரு', nameEn: 'Middle Street', type: 'STREET' }
+            ]
+          }
+        ]
+      },
+      {
+        name: 'கீழ்வேளூர் வட்டம்',
+        nameEn: 'Kilvelur Taluk',
+        type: 'TALUK',
+        children: [
+          {
+            name: 'கீழ்வேளூர்',
+            nameEn: 'Kilvelur',
+            type: 'AREA',
+            children: [
+              { name: 'மெயின் ரோடு', nameEn: 'Main Road', type: 'STREET' },
+              { name: 'வடக்கு தெரு', nameEn: 'North Street', type: 'STREET' },
+              { name: 'தெற்கு தெரு', nameEn: 'South Street', type: 'STREET' }
+            ]
+          },
+          {
+            name: 'கீழையூர்',
+            nameEn: 'Keezhaiyur',
+            type: 'AREA',
+            children: [
+              { name: 'கிழக்கு தெரு', nameEn: 'East Street', type: 'STREET' },
+              { name: 'மேற்கு தெரு', nameEn: 'West Street', type: 'STREET' },
+              { name: 'காலனி தெரு', nameEn: 'Colony Street', type: 'STREET' }
+            ]
+          },
+          {
+            name: 'வலிவலம்',
+            nameEn: 'Valivalam',
+            type: 'AREA',
+            children: [
+              { name: 'கோவில் தெரு', nameEn: 'Temple Street', type: 'STREET' },
+              { name: 'சந்தை தெரு', nameEn: 'Bazaar Street', type: 'STREET' },
+              { name: 'பள்ளி தெரு', nameEn: 'School Street', type: 'STREET' }
+            ]
+          }
+        ]
+      },
+      {
+        name: 'வேதாரண்யம் வட்டம்',
+        nameEn: 'Vedaranyam Taluk',
+        type: 'TALUK',
+        children: [
+          {
+            name: 'வேதாரண்யம்',
+            nameEn: 'Vedaranyam',
+            type: 'AREA',
+            children: [
+              { name: 'மெயின் ரோடு', nameEn: 'Main Road', type: 'STREET' },
+              { name: 'சந்தை தெரு', nameEn: 'Market Street', type: 'STREET' },
+              { name: 'தெற்கு தெரு', nameEn: 'South Street', type: 'STREET' }
+            ]
+          },
+          {
+            name: 'புஷ்பவனம்',
+            nameEn: 'Pushpavanam',
+            type: 'AREA',
+            children: [
+              { name: 'முத்துக்கவுண்டர் காடு', nameEn: 'Muthukkavundar Kadu', type: 'STREET' },
+              { name: 'மீனவர் தெரு', nameEn: 'Meenavar Street', type: 'STREET' },
+              { name: 'அழகர்கவுண்டர் காடு', nameEn: 'Alagarkavundar Kadu', type: 'STREET' }
+            ]
+          },
+          {
+            name: 'கோவில்பத்து',
+            nameEn: 'Kovilpathu',
+            type: 'AREA',
+            children: [
+              { name: 'துளுக்கத் தெரு', nameEn: 'Thulukka Street', type: 'STREET' },
+              { name: 'மேலக்காடு', nameEn: 'Melakadu', type: 'STREET' },
+              { name: 'கவுண்டர்காடு', nameEn: 'Gounder Kadu', type: 'STREET' }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    name: 'திருச்சிராப்பள்ளி மாவட்டம்',
+    nameEn: 'Tiruchirappalli District',
+    type: 'DISTRICT',
+    children: [
+      {
+        name: 'திருச்சி வட்டம்',
+        nameEn: 'Tiruchirappalli Taluk',
+        type: 'TALUK',
+        children: [
+          {
+            name: 'திருச்சிராப்பள்ளி',
+            nameEn: 'Tiruchirappalli',
+            type: 'AREA',
+            children: [
+              { name: 'சத்திரம் பேருந்து நிலைய சாலை', nameEn: 'Chathiram Bus Stand Road', type: 'STREET' },
+              { name: 'பெரிய பஜார் தெரு', nameEn: 'Big Bazaar Street', type: 'STREET' },
+              { name: 'பாரதிதாசன் சாலை', nameEn: 'Bharathidasan Road', type: 'STREET' }
+            ]
+          },
           {
             name: 'உறையூர்',
             nameEn: 'Uraiyur',
             type: 'AREA',
             children: [
-              { name: 'பெரிய பஜார் தெரு', nameEn: 'Big Bazaar Street', type: 'STREET' },
+              { name: 'பெரிய பஜார் தெரு', nameEn: 'Periya Bazaar Street', type: 'STREET' },
               { name: 'கிழக்கு தெரு', nameEn: 'East Street', type: 'STREET' },
               { name: 'மேற்கு தெரு', nameEn: 'West Street', type: 'STREET' }
-            ]
-          },
-          {
-            name: 'பாலக்கரை',
-            nameEn: 'Palakarai',
-            type: 'AREA',
-            children: [
-              { name: 'மெயின் ரோடு', nameEn: 'Main Road', type: 'STREET' },
-              { name: 'தெற்கு தெரு', nameEn: 'South Street', type: 'STREET' },
-              { name: 'காலனி தெரு', nameEn: 'Colony Street', type: 'STREET' }
             ]
           },
           {
@@ -310,45 +391,8 @@ const locationTree = [
         ]
       },
       {
-        name: 'திருச்சி மேற்கு',
-        nameEn: 'Tiruchirappalli West',
-        type: 'TALUK',
-        children: [
-          {
-            name: 'தில்லை நகர்',
-            nameEn: 'Thillai Nagar',
-            type: 'AREA',
-            children: [
-              { name: 'மெயின் ரோடு', nameEn: 'Main Road', type: 'STREET' },
-              { name: 'முதல் குறுக்கு தெரு', nameEn: '1st Cross Street', type: 'STREET' },
-              { name: 'இரண்டாம் குறுக்கு தெரு', nameEn: '2nd Cross Street', type: 'STREET' }
-            ]
-          },
-          {
-            name: 'கே.கே. நகர்',
-            nameEn: 'K.K. Nagar',
-            type: 'AREA',
-            children: [
-              { name: 'மத்திய அவென்யூ', nameEn: 'Central Avenue', type: 'STREET' },
-              { name: 'வடக்கு தெரு', nameEn: 'North Street', type: 'STREET' },
-              { name: 'தெற்கு தெரு', nameEn: 'South Street', type: 'STREET' }
-            ]
-          },
-          {
-            name: 'எடமலைப்பட்டி புதூர்',
-            nameEn: 'Edamalaipatti Pudur',
-            type: 'AREA',
-            children: [
-              { name: 'காலனி தெரு', nameEn: 'Colony Street', type: 'STREET' },
-              { name: 'பள்ளி தெரு', nameEn: 'School Street', type: 'STREET' },
-              { name: 'கோவில் தெரு', nameEn: 'Kovil Street', type: 'STREET' }
-            ]
-          }
-        ]
-      },
-      {
-        name: 'ஸ்ரீரங்கம்',
-        nameEn: 'Srirangam',
+        name: 'ஸ்ரீரங்கம் வட்டம்',
+        nameEn: 'Srirangam Taluk',
         type: 'TALUK',
         children: [
           {
@@ -357,16 +401,16 @@ const locationTree = [
             type: 'AREA',
             children: [
               { name: 'சித்திரை தெரு', nameEn: 'Chithirai Street', type: 'STREET' },
-              { name: 'கிழக்கு அடையவளஞ்சான் தெரு', nameEn: 'East Adaiyavalanjan Street', type: 'STREET' },
-              { name: 'மேற்கு அடையவளஞ்சான் தெரு', nameEn: 'West Adaiyavalanjan Street', type: 'STREET' }
+              { name: 'கிழக்கு அடையவளஞ்சான் தெரு', nameEn: 'East Adayavalanjan Street', type: 'STREET' },
+              { name: 'மேற்கு அடையவளஞ்சான் தெரு', nameEn: 'West Adayavalanjan Street', type: 'STREET' }
             ]
           },
           {
             name: 'திருவானைக்காவல்',
-            nameEn: 'Thiruanaikoil',
+            nameEn: 'Thiruvanaikaval',
             type: 'AREA',
             children: [
-              { name: 'கோவில் தெரு', nameEn: 'Kovil Street', type: 'STREET' },
+              { name: 'கோவில் தெரு', nameEn: 'Temple Street', type: 'STREET' },
               { name: 'வடக்கு தெரு', nameEn: 'North Street', type: 'STREET' },
               { name: 'தெற்கு தெரு', nameEn: 'South Street', type: 'STREET' }
             ]
@@ -384,8 +428,8 @@ const locationTree = [
         ]
       },
       {
-        name: 'திருவெறும்பூர்',
-        nameEn: 'Thiruverumbur',
+        name: 'திருவெறும்பூர் வட்டம்',
+        nameEn: 'Thiruverumbur Taluk',
         type: 'TALUK',
         children: [
           {
@@ -403,9 +447,9 @@ const locationTree = [
             nameEn: 'BHEL Township',
             type: 'AREA',
             children: [
-              { name: 'முதல் தெரு', nameEn: '1st Street', type: 'STREET' },
-              { name: 'இரண்டாம் தெரு', nameEn: '2nd Street', type: 'STREET' },
-              { name: 'மூன்றாம் தெரு', nameEn: '3rd Street', type: 'STREET' }
+              { name: 'முதல் தெரு', nameEn: 'First Street', type: 'STREET' },
+              { name: 'இரண்டாம் தெரு', nameEn: 'Second Street', type: 'STREET' },
+              { name: 'மூன்றாம் தெரு', nameEn: 'Third Street', type: 'STREET' }
             ]
           },
           {
@@ -416,6 +460,198 @@ const locationTree = [
               { name: 'வடக்கு தெரு', nameEn: 'North Street', type: 'STREET' },
               { name: 'தெற்கு தெரு', nameEn: 'South Street', type: 'STREET' },
               { name: 'சந்தை தெரு', nameEn: 'Market Street', type: 'STREET' }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    name: 'திருவாரூர் மாவட்டம்',
+    nameEn: 'Tiruvarur District',
+    type: 'DISTRICT',
+    children: [
+      {
+        name: 'திருவாரூர் வட்டம்',
+        nameEn: 'Tiruvarur Taluk',
+        type: 'TALUK',
+        children: [
+          {
+            name: 'திருவாரூர்',
+            nameEn: 'Tiruvarur',
+            type: 'AREA',
+            children: [
+              { name: 'தெற்கு தெரு', nameEn: 'South Street', type: 'STREET' },
+              { name: 'கிழக்கு மெயின் தெரு', nameEn: 'East Main Street', type: 'STREET' },
+              { name: 'கமலாலயம் தெற்கு கரை', nameEn: 'Kamalalayam South Bank', type: 'STREET' }
+            ]
+          },
+          {
+            name: 'விஜயபுரம்',
+            nameEn: 'Vijayapuram',
+            type: 'AREA',
+            children: [
+              { name: 'மெயின் ரோடு', nameEn: 'Main Road', type: 'STREET' },
+              { name: 'கோவில் தெரு', nameEn: 'Temple Street', type: 'STREET' },
+              { name: 'வடக்கு தெரு', nameEn: 'North Street', type: 'STREET' }
+            ]
+          },
+          {
+            name: 'கிடாரங்கொண்டான்',
+            nameEn: 'Kidaramkondan',
+            type: 'AREA',
+            children: [
+              { name: 'கிழக்கு தெரு', nameEn: 'East Street', type: 'STREET' },
+              { name: 'மேற்கு தெரு', nameEn: 'West Street', type: 'STREET' },
+              { name: 'காலனி தெரு', nameEn: 'Colony Street', type: 'STREET' }
+            ]
+          }
+        ]
+      },
+      {
+        name: 'நன்னிலம் வட்டம்',
+        nameEn: 'Nannilam Taluk',
+        type: 'TALUK',
+        children: [
+          {
+            name: 'நன்னிலம்',
+            nameEn: 'Nannilam',
+            type: 'AREA',
+            children: [
+              { name: 'மெயின் ரோடு', nameEn: 'Main Road', type: 'STREET' },
+              { name: 'பஜார் தெரு', nameEn: 'Bazaar Street', type: 'STREET' },
+              { name: 'தெற்கு தெரு', nameEn: 'South Street', type: 'STREET' }
+            ]
+          },
+          {
+            name: 'பேரளம்',
+            nameEn: 'Peralam',
+            type: 'AREA',
+            children: [
+              { name: 'ரயில்வே சாலை', nameEn: 'Railway Road', type: 'STREET' },
+              { name: 'கோவில் தெரு', nameEn: 'Temple Street', type: 'STREET' },
+              { name: 'கிழக்கு தெரு', nameEn: 'East Street', type: 'STREET' }
+            ]
+          },
+          {
+            name: 'கொள்ளுமாங்குடி',
+            nameEn: 'Kollumangudi',
+            type: 'AREA',
+            children: [
+              { name: 'வடக்கு தெரு', nameEn: 'North Street', type: 'STREET' },
+              { name: 'பள்ளி தெரு', nameEn: 'School Street', type: 'STREET' },
+              { name: 'மேற்கு தெரு', nameEn: 'West Street', type: 'STREET' }
+            ]
+          }
+        ]
+      },
+      {
+        name: 'மன்னார்குடி வட்டம்',
+        nameEn: 'Mannargudi Taluk',
+        type: 'TALUK',
+        children: [
+          {
+            name: 'மன்னார்குடி',
+            nameEn: 'Mannargudi',
+            type: 'AREA',
+            children: [
+              { name: 'ராஜா தெரு', nameEn: 'Raja Street', type: 'STREET' },
+              { name: 'மெயின் ரோடு', nameEn: 'Main Road', type: 'STREET' },
+              { name: 'தெற்கு தெரு', nameEn: 'South Street', type: 'STREET' }
+            ]
+          },
+          {
+            name: 'கூத்தாநல்லூர்',
+            nameEn: 'Koothanallur',
+            type: 'AREA',
+            children: [
+              { name: 'பள்ளிவாசல் தெரு', nameEn: 'Mosque Street', type: 'STREET' },
+              { name: 'பஜார் தெரு', nameEn: 'Bazaar Street', type: 'STREET' },
+              { name: 'மெயின் ரோடு', nameEn: 'Main Road', type: 'STREET' }
+            ]
+          },
+          {
+            name: 'உள்ளிக்கோட்டை',
+            nameEn: 'Ullikottai',
+            type: 'AREA',
+            children: [
+              { name: 'கோவில் தெரு', nameEn: 'Temple Street', type: 'STREET' },
+              { name: 'கிழக்கு தெரு', nameEn: 'East Street', type: 'STREET' },
+              { name: 'மேற்கு தெரு', nameEn: 'West Street', type: 'STREET' }
+            ]
+          }
+        ]
+      },
+      {
+        name: 'திருத்துறைப்பூண்டி வட்டம்',
+        nameEn: 'Thiruthuraipoondi Taluk',
+        type: 'TALUK',
+        children: [
+          {
+            name: 'திருத்துறைப்பூண்டி',
+            nameEn: 'Thiruthuraipoondi',
+            type: 'AREA',
+            children: [
+              { name: 'மெயின் ரோடு', nameEn: 'Main Road', type: 'STREET' },
+              { name: 'சந்தை தெரு', nameEn: 'Market Street', type: 'STREET' },
+              { name: 'தெற்கு தெரு', nameEn: 'South Street', type: 'STREET' }
+            ]
+          },
+          {
+            name: 'முத்துப்பேட்டை',
+            nameEn: 'Muthupet',
+            type: 'AREA',
+            children: [
+              { name: 'கடற்கரை சாலை', nameEn: 'Beach Road', type: 'STREET' },
+              { name: 'மீனவர் தெரு', nameEn: 'Meenavar Street', type: 'STREET' },
+              { name: 'மெயின் ரோடு', nameEn: 'Main Road', type: 'STREET' }
+            ]
+          },
+          {
+            name: 'கோட்டூர்',
+            nameEn: 'Kottur',
+            type: 'AREA',
+            children: [
+              { name: 'வடக்கு தெரு', nameEn: 'North Street', type: 'STREET' },
+              { name: 'கோவில் தெரு', nameEn: 'Temple Street', type: 'STREET' },
+              { name: 'காலனி தெரு', nameEn: 'Colony Street', type: 'STREET' }
+            ]
+          }
+        ]
+      },
+      {
+        name: 'வலங்கைமான் வட்டம்',
+        nameEn: 'Valangaiman Taluk',
+        type: 'TALUK',
+        children: [
+          {
+            name: 'வலங்கைமான்',
+            nameEn: 'Valangaiman',
+            type: 'AREA',
+            children: [
+              { name: 'மெயின் ரோடு', nameEn: 'Main Road', type: 'STREET' },
+              { name: 'கிழக்கு தெரு', nameEn: 'East Street', type: 'STREET' },
+              { name: 'மேற்கு தெரு', nameEn: 'West Street', type: 'STREET' }
+            ]
+          },
+          {
+            name: 'அலங்குடி',
+            nameEn: 'Alangudi',
+            type: 'AREA',
+            children: [
+              { name: 'கோவில் தெரு', nameEn: 'Temple Street', type: 'STREET' },
+              { name: 'தெற்கு தெரு', nameEn: 'South Street', type: 'STREET' },
+              { name: 'பஜார் தெரு', nameEn: 'Bazaar Street', type: 'STREET' }
+            ]
+          },
+          {
+            name: 'பூந்தோட்டம்',
+            nameEn: 'Poonthottam',
+            type: 'AREA',
+            children: [
+              { name: 'வடக்கு தெரு', nameEn: 'North Street', type: 'STREET' },
+              { name: 'பள்ளி தெரு', nameEn: 'School Street', type: 'STREET' },
+              { name: 'மெயின் ரோடு', nameEn: 'Main Road', type: 'STREET' }
             ]
           }
         ]
@@ -518,23 +754,6 @@ async function main() {
     await prisma.profession.create({ data: { name } });
   }
 
-  console.log('🌱 Seeding default communities...');
-  const defaultCommunities = [
-    { name: 'Lawyers', description: 'Lawyers Community' },
-    { name: 'Police', description: 'Police Assistance Community' },
-    { name: 'Farmers', description: 'Farmers Coordination Community' },
-    { name: 'Students', description: 'Students Community' },
-    { name: 'Doctors', description: 'Doctors & Medical Community' }
-  ];
-  for (const comm of defaultCommunities) {
-    await prisma.community.create({
-      data: {
-        name: comm.name,
-        description: comm.description,
-        image: `https://avatar.iran.liara.run/username?username=${comm.name}`
-      }
-    });
-  }
 
   console.log('🌱 Seeding Single SUPER_ADMIN (Thalaivar Seeman)...');
   await prisma.user.create({
@@ -548,7 +767,7 @@ async function main() {
     }
   });
 
-  console.log('✅ Seeding completed! Only 1 Super Admin and custom locations seeded.');
+  console.log('✅ Seeding completed! Only 1 Super Admin and correct location tree seeded.');
 }
 
 main()
