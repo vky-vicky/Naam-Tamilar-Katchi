@@ -349,6 +349,166 @@ async function getLocationFields(locationId: number | null | undefined) {
   return fields;
 }
 
+export async function getLocationHierarchy(locationId: number | null | undefined) {
+  const ids: {
+    STATE?: number;
+    DISTRICT?: number;
+    TALUK?: number;
+    AREA?: number;
+    STREET?: number;
+  } = {};
+  if (!locationId) return ids;
+
+  let currentId: number | null = locationId;
+  while (currentId) {
+    const loc: any = await (prisma as any).location.findUnique({
+      where: { id: currentId },
+      select: { id: true, type: true, parentId: true }
+    });
+    if (!loc) break;
+    if (loc.type === 'STATE') ids.STATE = loc.id;
+    else if (loc.type === 'DISTRICT') ids.DISTRICT = loc.id;
+    else if (loc.type === 'TALUK') ids.TALUK = loc.id;
+    else if (loc.type === 'AREA') ids.AREA = loc.id;
+    else if (loc.type === 'STREET') ids.STREET = loc.id;
+
+    currentId = loc.parentId;
+  }
+  return ids;
+}
+
+export async function isReviewerAuthorizedForLocation(
+  reviewer: any,
+  requestedRole: string,
+  currentRole: string,
+  targetLocId: number
+): Promise<boolean> {
+  if (reviewer.role === 'SUPER_ADMIN') {
+    return true;
+  }
+
+  const hierarchy = await getLocationHierarchy(targetLocId);
+
+  const reviewerLocIds = new Set<number>();
+  if (reviewer.locationId) reviewerLocIds.add(reviewer.locationId);
+  const userLocs = await (prisma as any).userLocation.findMany({
+    where: { userId: reviewer.id }
+  });
+  for (const ul of userLocs) {
+    reviewerLocIds.add(ul.locationId);
+  }
+
+  if (requestedRole === 'SUPER_ADMIN') {
+    return false;
+  }
+
+  if (requestedRole === 'DISTRICT_INCHARGE') {
+    if (currentRole === 'DISTRICT_INCHARGE') {
+      return false;
+    }
+    const targetDistrictId = hierarchy.DISTRICT;
+    if (!targetDistrictId) return false;
+
+    const existingDistrictIncharges = await (prisma as any).user.findMany({
+      where: {
+        role: 'DISTRICT_INCHARGE',
+        locationId: targetDistrictId,
+        approvalStatus: 'APPROVED',
+        isActive: true
+      }
+    });
+
+    if (existingDistrictIncharges.length > 0) {
+      if (reviewer.role === 'DISTRICT_INCHARGE' && reviewerLocIds.has(targetDistrictId)) {
+        return true;
+      }
+      return false;
+    } else {
+      return false;
+    }
+  }
+
+  if (requestedRole === 'ADMIN') {
+    const targetTalukId = hierarchy.TALUK;
+    if (!targetTalukId) return false;
+
+    const existingAdmins = await (prisma as any).user.findMany({
+      where: {
+        role: 'ADMIN',
+        locationId: targetTalukId,
+        approvalStatus: 'APPROVED',
+        isActive: true
+      }
+    });
+
+    if (existingAdmins.length > 0) {
+      if (reviewer.role === 'ADMIN' && reviewerLocIds.has(targetTalukId)) {
+        return true;
+      }
+      const parentDistrictId = hierarchy.DISTRICT;
+      if (parentDistrictId && reviewer.role === 'DISTRICT_INCHARGE' && reviewerLocIds.has(parentDistrictId)) {
+        return true;
+      }
+      return false;
+    } else {
+      return false;
+    }
+  }
+
+  if (requestedRole === 'SUB_ADMIN') {
+    const targetAreaId = hierarchy.AREA;
+    if (!targetAreaId) return false;
+
+    const existingSubAdmins = await (prisma as any).user.findMany({
+      where: {
+        role: 'SUB_ADMIN',
+        locationId: targetAreaId,
+        approvalStatus: 'APPROVED',
+        isActive: true
+      }
+    });
+
+    if (existingSubAdmins.length > 0) {
+      if (reviewer.role === 'SUB_ADMIN' && reviewerLocIds.has(targetAreaId)) {
+        return true;
+      }
+      const parentTalukId = hierarchy.TALUK;
+      if (parentTalukId && reviewer.role === 'ADMIN' && reviewerLocIds.has(parentTalukId)) {
+        return true;
+      }
+      const parentDistrictId = hierarchy.DISTRICT;
+      if (parentDistrictId && reviewer.role === 'DISTRICT_INCHARGE' && reviewerLocIds.has(parentDistrictId)) {
+        return true;
+      }
+      return false;
+    } else {
+      return false;
+    }
+  }
+
+  return false;
+}
+
+export async function isReviewerAuthorized(reviewer: any, request: any): Promise<boolean> {
+  if (reviewer.role === 'SUPER_ADMIN') return true;
+
+  if (!request.requestedLocations || request.requestedLocations.length === 0) {
+    return false;
+  }
+
+  for (const reqLoc of request.requestedLocations) {
+    const authorized = await isReviewerAuthorizedForLocation(
+      reviewer,
+      request.requestedRole,
+      request.currentRole,
+      reqLoc.locationId
+    );
+    if (!authorized) return false;
+  }
+
+  return true;
+}
+
 async function sendSystemNotification({
   title,
   message,
@@ -4044,10 +4204,9 @@ export const resolvers = {
 
     getPendingLocationAccessRequests: async (_: any, __: any, context: any) => {
       const user = context?.user;
-      if (!user || user.role !== 'SUPER_ADMIN') {
-        throw new Error('Only SUPER_ADMIN can view pending location access requests');
-      }
-      return (prisma as any).locationAccessRequest.findMany({
+      if (!user) throw new Error('Not authenticated');
+
+      const allPending = await (prisma as any).locationAccessRequest.findMany({
         where: { status: 'PENDING' },
         include: {
           user: { include: { location: true } },
@@ -4056,6 +4215,18 @@ export const resolvers = {
         },
         orderBy: { createdAt: 'desc' }
       });
+
+      if (user.role === 'SUPER_ADMIN') {
+        return allPending;
+      }
+
+      const filtered: any[] = [];
+      for (const req of allPending) {
+        if (await isReviewerAuthorized(user, req)) {
+          filtered.push(req);
+        }
+      }
+      return filtered;
     },
 
     getMyLocationAccessRequests: async (_: any, __: any, context: any) => {
@@ -9296,9 +9467,13 @@ export const resolvers = {
       return translateLocationName(name, context?.language || 'en') || "";
     },
     profilePicture: (parent: any) => parent.image,
-    role: (parent: any, _: any, context: any) => {
-      const lang = context?.language || 'en';
-      return getRoleLabel(parent.role, lang);
+    role: (parent: any) => {
+      if (!parent.role) return 'MEMBER';
+      const r = parent.role.toUpperCase().trim();
+      if (r === 'SUPER ADMIN') return 'SUPER_ADMIN';
+      if (r === 'DISTRICT INCHARGE') return 'DISTRICT_INCHARGE';
+      if (r === 'SUB ADMIN') return 'SUB_ADMIN';
+      return r === 'MEMBER' || r === 'MEMBER' ? 'MEMBER' : r;
     },
     roleLabel: (parent: any, _: any, context: any) => {
       const lang = context?.language || 'en';
@@ -10506,8 +10681,8 @@ export const resolvers = {
 
   reviewLocationAccessRequest: async (_: any, { requestId, action, rejectionReason }: any, context: any) => {
     const user = context?.user;
-    if (!user || user.role !== 'SUPER_ADMIN') {
-      throw new Error('Only SUPER_ADMIN can review location access requests');
+    if (!user) {
+      throw new Error('Not authenticated');
     }
 
     const request = await (prisma as any).locationAccessRequest.findUnique({
@@ -10517,6 +10692,11 @@ export const resolvers = {
 
     if (!request) throw new Error('Request not found');
     if (request.status !== 'PENDING') throw new Error('Request is already reviewed');
+
+    const isAuthorized = await isReviewerAuthorized(user, request);
+    if (!isAuthorized) {
+      throw new Error('You are not authorized to review this location access request');
+    }
 
     if (action === 'APPROVE') {
       const hasPrimary = await (prisma as any).userLocation.findFirst({
