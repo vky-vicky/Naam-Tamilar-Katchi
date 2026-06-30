@@ -2304,12 +2304,17 @@ export const resolvers = {
         const memberShape = user ? userToMemberShape(user) : null;
 
         // If communityId is provided, add community-specific context
-        if (communityId && memberShape) {
+        if (communityId && memberShape && user) {
+          const matchingMember = await (prisma as any).member.findFirst({
+            where: { phone: user.phone }
+          });
+          const resolvedMemberId = matchingMember ? matchingMember.id : targetId;
+
           const membership = await (prisma as any).communityMember.findUnique({
             where: {
               communityId_memberId: {
                 communityId: Number(communityId),
-                memberId: targetId
+                memberId: resolvedMemberId
               }
             }
           });
@@ -3662,13 +3667,15 @@ export const resolvers = {
             where.id = { in: joinedIds };
           }
         } else if (user.role === 'SUB_ADMIN') {
-          // Sub Admin (Town Level): Own town + joined + public
+          // Sub Admin (Area Level): Own area + children + ancestor PUBLIC + joined
           if (user.locationId) {
             const childIds = await getChildLocationIds(user.locationId);
+            const ancestorIds = await getAncestorLocationIds(user.locationId);
             where.OR = [
               { id: { in: joinedIds } }, // Joined communities
-              { locationId: { in: [user.locationId, ...childIds] } }, // Own town communities
-              { privacyType: 'PUBLIC', locationId: null } // Public state-level communities
+              { locationId: { in: [user.locationId, ...childIds] } }, // Own area communities
+              { privacyType: 'PUBLIC', locationId: { in: ancestorIds } }, // Public ancestor-level communities
+              { privacyType: 'PUBLIC', locationId: null } // Public state-level communities (no location)
             ];
           } else {
             // Sub Admin without location: all public + joined
@@ -3678,8 +3685,7 @@ export const resolvers = {
             ];
           }
         } else if (user.role === 'ADMIN') {
-          // Admin (Constituency Level): Multiple constituencies they handle
-          // Get all locations this admin has access to (from userLocation table)
+          // Admin (Taluk Level): Multiple taluks + ancestor PUBLIC + joined
           const userLocations = await (prisma as any).userLocation.findMany({
             where: { userId: user.id },
             select: { locationId: true }
@@ -3688,13 +3694,17 @@ export const resolvers = {
 
           if (locationIds.length > 0) {
             const allChildIds: number[] = [];
+            const allAncestorIds: number[] = [];
             for (const locId of locationIds) {
               const childIds = await getChildLocationIds(locId);
+              const ancestorIds = await getAncestorLocationIds(locId);
               allChildIds.push(locId, ...childIds);
+              allAncestorIds.push(...ancestorIds);
             }
             where.OR = [
               { id: { in: joinedIds } }, // Joined communities
-              { locationId: { in: allChildIds } }, // Constituency communities
+              { locationId: { in: allChildIds } }, // Taluk + child communities
+              { privacyType: 'PUBLIC', locationId: { in: allAncestorIds } }, // Public ancestor-level
               { privacyType: 'PUBLIC', locationId: null } // Public state-level communities
             ];
           } else {
@@ -3705,30 +3715,24 @@ export const resolvers = {
             ];
           }
         } else if (user.role === 'DISTRICT_INCHARGE') {
-          // District Incharge: All constituencies in their district
+          // District Incharge: All areas in their district + ancestor PUBLIC + joined
           if (user.locationId) {
-            // Get the district (parent) location
             const userLocation = await (prisma as any).location.findUnique({
               where: { id: user.locationId }
             });
             if (userLocation) {
-              // If user is at district level, get all children (constituencies)
-              // If user is at constituency level, get district first then all constituencies
               let districtId = userLocation.type === 'DISTRICT' ? userLocation.id : userLocation.parentId;
               if (districtId) {
-                const constituencyIds = await getChildLocationIds(districtId);
-                const allChildIds: number[] = [districtId];
-                for (const constId of constituencyIds) {
-                  const townIds = await getChildLocationIds(constId);
-                  allChildIds.push(constId, ...townIds);
-                }
+                const childIds = await getChildLocationIds(districtId);
+                const allChildIds: number[] = [districtId, ...childIds];
+                const ancestorIds = await getAncestorLocationIds(districtId);
                 where.OR = [
                   { id: { in: joinedIds } }, // Joined communities
                   { locationId: { in: allChildIds } }, // All district communities
+                  { privacyType: 'PUBLIC', locationId: { in: ancestorIds } }, // Public ancestor-level
                   { privacyType: 'PUBLIC', locationId: null } // Public state-level communities
                 ];
               } else {
-                // No district found: all public + joined
                 where.OR = [
                   { id: { in: joinedIds } },
                   { privacyType: 'PUBLIC' }
@@ -4232,8 +4236,12 @@ export const resolvers = {
     getMyLocationAccessRequests: async (_: any, __: any, context: any) => {
       const user = context?.user;
       if (!user) throw new Error('Not authenticated');
+      
+      const targetUserId = await getUserIdFromContext(context);
+      if (!targetUserId) return [];
+
       return (prisma as any).locationAccessRequest.findMany({
-        where: { userId: Number(user.id) },
+        where: { userId: targetUserId },
         include: {
           user: { include: { location: true } },
           approvedBy: { include: { location: true } },
@@ -5186,6 +5194,17 @@ export const resolvers = {
           include: { location: true }
         });
 
+        // Sync approval status to matching Member record
+        const matchingMember = await (prisma as any).member.findFirst({
+          where: { phone: updatedUser.phone }
+        });
+        if (matchingMember) {
+          await (prisma as any).member.update({
+            where: { id: matchingMember.id },
+            data: { approvalStatus: status, approvedById: data.approvedById }
+          });
+        }
+
         if (status === 'APPROVED') {
           try {
             const notification = await (prisma as any).notification.create({
@@ -5224,6 +5243,17 @@ export const resolvers = {
         data: data,
         include: { location: true, approvedBy: true }
       });
+
+      // Sync approval status to matching User record (if it exists)
+      const matchingUser = await (prisma as any).user.findFirst({
+        where: { phone: updatedMember.phone }
+      });
+      if (matchingUser) {
+        await (prisma as any).user.update({
+          where: { id: matchingUser.id },
+          data: { approvalStatus: status }
+        });
+      }
 
       if (status === 'APPROVED') {
         try {
@@ -8418,9 +8448,13 @@ export const resolvers = {
         });
       }
 
+      const memberCount = await (prisma as any).communityMember.count({
+        where: { communityId: community.id }
+      });
+
       return {
         ...community,
-        memberCount: 0,
+        memberCount,
         createdAt: toIsoString(community.createdAt)
       };
     },
@@ -10267,6 +10301,11 @@ export const resolvers = {
       });
       return count > 0;
     },
+    memberCount: async (parent: any) => {
+      return (prisma as any).communityMember.count({
+        where: { communityId: Number(parent.id) }
+      });
+    },
     rules: () => {
       return [
         "Be respectful to everyone",
@@ -10649,9 +10688,12 @@ export const resolvers = {
     const user = context?.user;
     if (!user) throw new Error('Not authenticated');
 
+    const targetUserId = await getUserIdFromContext(context);
+    if (!targetUserId) throw new Error('User profile not found / பயனர் விவரங்கள் கண்டறியப்படவில்லை');
+
     const request = await (prisma as any).locationAccessRequest.create({
       data: {
-        userId: Number(user.id),
+        userId: targetUserId,
         currentRole: user.role,
         requestedRole,
         requestType,
@@ -10729,10 +10771,24 @@ export const resolvers = {
         updateData.locationId = firstRequestedLocId;
       }
 
-      await (prisma as any).user.update({
+      const updatedUser = await (prisma as any).user.update({
         where: { id: request.userId },
         data: updateData
       });
+
+      // Sync role/location changes back to Member table record
+      const matchingMember = await (prisma as any).member.findFirst({
+        where: { phone: updatedUser.phone }
+      });
+      if (matchingMember) {
+        await (prisma as any).member.update({
+          where: { id: matchingMember.id },
+          data: {
+            role: request.requestedRole,
+            locationId: updateData.locationId !== undefined ? updateData.locationId : undefined
+          }
+        });
+      }
     }
 
     return (prisma as any).locationAccessRequest.update({
