@@ -1545,7 +1545,7 @@ async function assertCommunityReadAccess(communityId: number, context: any) {
 
   // Only check CommunityMember table for type='member' (Member table users)
   // Users in User table (type='admin') with MEMBER role are NOT in CommunityMember
-  if (!isAdmin && context.user.type === 'member') {
+  if (!isAdmin && context.user.type === 'member' && community.privacyType === 'SECRET') {
     const membership = await (prisma as any).communityMember.findUnique({
       where: {
         communityId_memberId: {
@@ -3655,27 +3655,30 @@ export const resolvers = {
       } else {
         // Role-based visibility rules
         if (user.role === 'MEMBER') {
-          // Member: Joined + Public communities in their location hierarchy
+          // Member: Joined + Public/Private in own & ancestor locations + Public in child locations + Public in state-level
           if (user.locationId) {
             const ancestorIds = await getAncestorLocationIds(user.locationId);
+            const childIds = await getChildLocationIds(user.locationId);
             where.OR = [
               { id: { in: joinedIds } }, // Joined communities
-              { privacyType: 'PUBLIC', locationId: { in: ancestorIds } } // Public in ancestor locations
+              { locationId: { in: ancestorIds } }, // Public & Private in own & ancestor locations
+              { privacyType: 'PUBLIC', locationId: { in: childIds } }, // Public in child locations
+              { privacyType: 'PUBLIC', locationId: null } // Public state-level communities
             ];
           } else {
             // Member without location: only joined communities
             where.id = { in: joinedIds };
           }
         } else if (user.role === 'SUB_ADMIN') {
-          // Sub Admin (Area Level): Own area + children + ancestor PUBLIC + joined
+          // Sub Admin (Area Level): Own/Ancestor (Public & Private) + children (Public & Private) + Public state-level
           if (user.locationId) {
             const childIds = await getChildLocationIds(user.locationId);
             const ancestorIds = await getAncestorLocationIds(user.locationId);
             where.OR = [
               { id: { in: joinedIds } }, // Joined communities
-              { locationId: { in: [user.locationId, ...childIds] } }, // Own area communities
-              { privacyType: 'PUBLIC', locationId: { in: ancestorIds } }, // Public ancestor-level communities
-              { privacyType: 'PUBLIC', locationId: null } // Public state-level communities (no location)
+              { locationId: { in: ancestorIds } }, // Own & ancestor communities (Public & Private)
+              { locationId: { in: childIds } }, // Child communities (Public & Private)
+              { privacyType: 'PUBLIC', locationId: null } // Public state-level communities
             ];
           } else {
             // Sub Admin without location: all public + joined
@@ -3685,7 +3688,7 @@ export const resolvers = {
             ];
           }
         } else if (user.role === 'ADMIN') {
-          // Admin (Taluk Level): Multiple taluks + ancestor PUBLIC + joined
+          // Admin (Taluk Level): Own/Ancestor (Public & Private) + children (Public & Private) + Public state-level
           const userLocations = await (prisma as any).userLocation.findMany({
             where: { userId: user.id },
             select: { locationId: true }
@@ -3703,8 +3706,8 @@ export const resolvers = {
             }
             where.OR = [
               { id: { in: joinedIds } }, // Joined communities
-              { locationId: { in: allChildIds } }, // Taluk + child communities
-              { privacyType: 'PUBLIC', locationId: { in: allAncestorIds } }, // Public ancestor-level
+              { locationId: { in: allChildIds } }, // Taluk + child communities (Public & Private)
+              { locationId: { in: allAncestorIds } }, // Own/Ancestor communities (Public & Private)
               { privacyType: 'PUBLIC', locationId: null } // Public state-level communities
             ];
           } else {
@@ -3715,7 +3718,7 @@ export const resolvers = {
             ];
           }
         } else if (user.role === 'DISTRICT_INCHARGE') {
-          // District Incharge: All areas in their district + ancestor PUBLIC + joined
+          // District Incharge: All district child areas (Public & Private) + Own/Ancestor (Public & Private) + Public state-level
           if (user.locationId) {
             const userLocation = await (prisma as any).location.findUnique({
               where: { id: user.locationId }
@@ -3728,8 +3731,8 @@ export const resolvers = {
                 const ancestorIds = await getAncestorLocationIds(districtId);
                 where.OR = [
                   { id: { in: joinedIds } }, // Joined communities
-                  { locationId: { in: allChildIds } }, // All district communities
-                  { privacyType: 'PUBLIC', locationId: { in: ancestorIds } }, // Public ancestor-level
+                  { locationId: { in: allChildIds } }, // All district communities (Public & Private)
+                  { locationId: { in: ancestorIds } }, // Own/Ancestor communities (Public & Private)
                   { privacyType: 'PUBLIC', locationId: null } // Public state-level communities
                 ];
               } else {
@@ -3816,7 +3819,23 @@ export const resolvers = {
     },
 
     getCommunityMessages: async (_: any, { communityId, limit = 50, beforeMessageId }: any, context: any) => {
-      await assertCommunityReadAccess(Number(communityId), context);
+      const community = await assertCommunityReadAccess(Number(communityId), context);
+
+      const user = context.user;
+      const isAdmin = isCommunityAdmin(user.role);
+      if (!isAdmin && user.type === 'member' && community.privacyType !== 'PUBLIC') {
+        const memberId = await getMemberIdFromContext(context);
+        if (!memberId) throw new Error("Only community members can access this chat");
+        const membership = await (prisma as any).communityMember.findUnique({
+          where: {
+            communityId_memberId: {
+              communityId: Number(communityId),
+              memberId
+            }
+          }
+        });
+        if (!membership) throw new Error("Only community members can access this chat");
+      }
 
       const where: any = { communityId: Number(communityId) };
       if (beforeMessageId) {
