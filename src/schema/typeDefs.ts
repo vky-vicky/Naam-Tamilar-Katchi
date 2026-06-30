@@ -69,6 +69,11 @@ export const typeDefs = gql`
     STREET
   }
 
+  enum JoinRequestAction {
+    APPROVE
+    REJECT
+  }
+
   # Core types
   type Location {
     id: Int!
@@ -980,7 +985,7 @@ export const typeDefs = gql`
     ): Boolean!
     # Community Module Enhancements Mutations
     joinCommunityOrRequest(communityId: Int!, reason: String, inviteCode: String): String!
-    reviewCommunityJoinRequest(requestId: Int!, action: String!, rejectionReason: String): Boolean!
+    reviewCommunityJoinRequest(requestId: Int!, action: JoinRequestAction!, rejectionReason: String): Boolean!
     updateCommunityMemberRole(communityId: Int!, targetUserId: Int!, newRole: CommunityGroupRole!): Boolean!
     createCommunityComplaint(communityId: Int!, title: String!, description: String!): CommunityComplaint!
     updateComplaintStatus(complaintId: Int!, status: String!, assigneeId: Int): CommunityComplaint!

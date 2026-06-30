@@ -243,10 +243,64 @@ async function getCommunityRoleFromContext(context: any, communityId: number): P
   // Treat SUPER_ADMIN as full community admin for moderation flows.
   if (user.role === 'SUPER_ADMIN') return 'OWNER';
 
+  // Check if they are explicitly in the CommunityMember table first
   const memberId = await getMemberIdFromContext(context);
-  if (!memberId) return null;
+  if (memberId) {
+    const explicitRole = await getUserGroupRole(memberId, communityId);
+    if (explicitRole) return explicitRole;
+  }
 
-  return getUserGroupRole(memberId, communityId);
+  // Check location-based admin jurisdiction
+  const community = await (prisma as any).community.findUnique({
+    where: { id: Number(communityId) },
+    select: { locationId: true }
+  });
+  if (!community) return null;
+
+  if (community.locationId && user.locationId) {
+    if (user.role === 'SUB_ADMIN') {
+      if (Number(community.locationId) === Number(user.locationId)) {
+        return 'OWNER';
+      }
+      const childIds = await getChildLocationIds(user.locationId);
+      if (childIds.includes(Number(community.locationId))) {
+        return 'OWNER';
+      }
+    } else if (user.role === 'ADMIN') {
+      const userLocations = await (prisma as any).userLocation.findMany({
+        where: { userId: user.id },
+        select: { locationId: true }
+      });
+      const locationIds = userLocations.map((ul: any) => ul.locationId);
+      if (locationIds.includes(Number(community.locationId))) {
+        return 'OWNER';
+      }
+      for (const locId of locationIds) {
+        const childIds = await getChildLocationIds(locId);
+        if (childIds.includes(Number(community.locationId))) {
+          return 'OWNER';
+        }
+      }
+    } else if (user.role === 'DISTRICT_INCHARGE') {
+      const userLocation = await (prisma as any).location.findUnique({
+        where: { id: user.locationId }
+      });
+      if (userLocation) {
+        const districtId = userLocation.type === 'DISTRICT' ? userLocation.id : userLocation.parentId;
+        if (districtId) {
+          if (Number(community.locationId) === Number(districtId)) {
+            return 'OWNER';
+          }
+          const childIds = await getChildLocationIds(districtId);
+          if (childIds.includes(Number(community.locationId))) {
+            return 'OWNER';
+          }
+        }
+      }
+    }
+  }
+
+  return null;
 }
 
 async function getUniqueRecipientCount(locationId: number): Promise<number> {
