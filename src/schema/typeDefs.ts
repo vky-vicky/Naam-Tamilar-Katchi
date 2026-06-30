@@ -534,6 +534,7 @@ export const typeDefs = gql`
   type DashboardStats {
     locationName: String!
     totalSuperAdmins: Int!
+    totalDistrictIncharges: Int!
     totalAdmins: Int!
     totalSubAdmins: Int!
     totalMembers: Int!

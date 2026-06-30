@@ -478,6 +478,7 @@ export async function isReviewerAuthorizedForLocation(
       }
       return false;
     } else {
+      // When no existing district incharge, only SUPER_ADMIN can approve (handled at function start)
       return false;
     }
   }
@@ -486,58 +487,37 @@ export async function isReviewerAuthorizedForLocation(
     const targetTalukId = hierarchy.TALUK;
     if (!targetTalukId) return false;
 
-    const existingAdmins = await (prisma as any).user.findMany({
-      where: {
-        role: 'ADMIN',
-        locationId: targetTalukId,
-        approvalStatus: 'APPROVED',
-        isActive: true
-      }
-    });
-
-    if (existingAdmins.length > 0) {
-      if (reviewer.role === 'ADMIN' && reviewerLocIds.has(targetTalukId)) {
-        return true;
-      }
-      const parentDistrictId = hierarchy.DISTRICT;
-      if (parentDistrictId && reviewer.role === 'DISTRICT_INCHARGE' && reviewerLocIds.has(parentDistrictId)) {
-        return true;
-      }
-      return false;
-    } else {
-      return false;
+    // ADMIN of the same taluk can approve
+    if (reviewer.role === 'ADMIN' && reviewerLocIds.has(targetTalukId)) {
+      return true;
     }
+    // DISTRICT_INCHARGE of the parent district can always approve ADMIN requests
+    const parentDistrictId = hierarchy.DISTRICT;
+    if (parentDistrictId && reviewer.role === 'DISTRICT_INCHARGE' && reviewerLocIds.has(parentDistrictId)) {
+      return true;
+    }
+    return false;
   }
 
   if (requestedRole === 'SUB_ADMIN') {
     const targetAreaId = hierarchy.AREA;
     if (!targetAreaId) return false;
 
-    const existingSubAdmins = await (prisma as any).user.findMany({
-      where: {
-        role: 'SUB_ADMIN',
-        locationId: targetAreaId,
-        approvalStatus: 'APPROVED',
-        isActive: true
-      }
-    });
-
-    if (existingSubAdmins.length > 0) {
-      if (reviewer.role === 'SUB_ADMIN' && reviewerLocIds.has(targetAreaId)) {
-        return true;
-      }
-      const parentTalukId = hierarchy.TALUK;
-      if (parentTalukId && reviewer.role === 'ADMIN' && reviewerLocIds.has(parentTalukId)) {
-        return true;
-      }
-      const parentDistrictId = hierarchy.DISTRICT;
-      if (parentDistrictId && reviewer.role === 'DISTRICT_INCHARGE' && reviewerLocIds.has(parentDistrictId)) {
-        return true;
-      }
-      return false;
-    } else {
-      return false;
+    // SUB_ADMIN of the same area can approve
+    if (reviewer.role === 'SUB_ADMIN' && reviewerLocIds.has(targetAreaId)) {
+      return true;
     }
+    // ADMIN of the parent taluk can always approve SUB_ADMIN requests
+    const parentTalukId = hierarchy.TALUK;
+    if (parentTalukId && reviewer.role === 'ADMIN' && reviewerLocIds.has(parentTalukId)) {
+      return true;
+    }
+    // DISTRICT_INCHARGE of the parent district can also approve SUB_ADMIN requests
+    const parentDistrictId = hierarchy.DISTRICT;
+    if (parentDistrictId && reviewer.role === 'DISTRICT_INCHARGE' && reviewerLocIds.has(parentDistrictId)) {
+      return true;
+    }
+    return false;
   }
 
   return false;
@@ -2063,6 +2043,7 @@ export const resolvers = {
       const uniquePeople = Array.from(new Map(combined.map(item => [item.phone, item])).values());
 
       const totalSuperAdmins = uniquePeople.filter(p => p.role === 'SUPER_ADMIN').length;
+      const totalDistrictIncharges = uniquePeople.filter(p => p.role === 'DISTRICT_INCHARGE').length;
       const totalAdmins = uniquePeople.filter(p => p.role === 'ADMIN').length;
       const totalSubAdmins = uniquePeople.filter(p => p.role === 'SUB_ADMIN').length;
       const totalMembers = uniquePeople.filter(p => p.role === 'MEMBER').length;
@@ -2098,6 +2079,7 @@ export const resolvers = {
       return {
         locationName,
         totalSuperAdmins,
+        totalDistrictIncharges,
         totalAdmins,
         totalSubAdmins,
         totalMembers,
