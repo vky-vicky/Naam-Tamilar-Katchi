@@ -1782,7 +1782,7 @@ export const resolvers = {
         filter.role = { equals: role, mode: 'insensitive' };
         userFilter.role = role.toUpperCase().trim().replace(/[\s-]+/g, '_');
       } else {
-        userFilter.role = { in: ['ADMIN', 'SUB_ADMIN', 'MEMBER'] };
+        userFilter.role = { in: ['ADMIN', 'SUB_ADMIN', 'MEMBER', 'DISTRICT_INCHARGE'] };
       }
 
       
@@ -9567,6 +9567,44 @@ export const resolvers = {
     roleLabel: (parent: any, _: any, context: any) => {
       const lang = context?.language || 'en';
       return getRoleLabel(parent.role, lang);
+    },
+    userLocations: async (parent: any) => {
+      const userId = await resolveUserRecordId(parent);
+      if (userId != null) {
+        return (prisma as any).userLocation.findMany({
+          where: { userId },
+          include: { location: true },
+          orderBy: [{ isPrimary: 'desc' }, { locationId: 'asc' }]
+        });
+      }
+      if (parent.locationId != null) {
+        const loc = parent.location || await (prisma as any).location.findUnique({ where: { id: parent.locationId } });
+        if (loc) {
+          return [{
+            id: -1,
+            userId: parent.id,
+            locationId: parent.locationId,
+            isPrimary: true,
+            location: loc,
+            createdAt: toIsoString(parent.createdAt || new Date())
+          }];
+        }
+      }
+      return [];
+    },
+    assignedLocationIds: async (parent: any) => {
+      const userId = await resolveUserRecordId(parent);
+      if (userId != null) {
+        const assignments = await (prisma as any).userLocation.findMany({
+          where: { userId },
+          select: { locationId: true },
+          orderBy: [{ isPrimary: 'desc' }, { locationId: 'asc' }]
+        });
+        if (assignments.length > 0) {
+          return assignments.map((a: any) => Number(a.locationId));
+        }
+      }
+      return parent.locationId != null ? [Number(parent.locationId)] : [];
     },
   },
 

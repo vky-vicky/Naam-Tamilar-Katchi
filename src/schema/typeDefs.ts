@@ -161,6 +161,8 @@ export const typeDefs = gql`
     area: String
     street: String
     fcmToken: String
+    userLocations: [UserLocationAssignment!]!
+    assignedLocationIds: [Int!]!
   }
 
 
