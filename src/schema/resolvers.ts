@@ -11407,6 +11407,29 @@ export const resolvers = {
     return true;
   }),
 
+  deleteCommunity: safeResolver(async (_: any, { communityId }: any, context: any) => {
+    const user = context?.user;
+    if (!user) throw new Error('Not authenticated');
+
+    const comId = Number(communityId);
+    const role = await getCommunityRoleFromContext(context, comId);
+    if (!role || !hasGroupPermission(role, 'MANAGE_COMMUNITY')) {
+      throw new Error('Unauthorized');
+    }
+
+    // Delete non-cascade child entries to keep database clean
+    await (prisma as any).communityMessageStar.deleteMany({
+      where: { communityId: comId }
+    });
+
+    // Cascade delete handles CommunityMember, CommunityMessage, CommunityPost, etc.
+    await (prisma as any).community.delete({
+      where: { id: comId }
+    });
+
+    return true;
+  }),
+
   reportCommunityMember: safeResolver(async (_: any, { communityId, reportedUserId, reason }: any, context: any) => {
     const user = context?.user;
     if (!user) throw new Error('Not authenticated');

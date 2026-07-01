@@ -995,6 +995,7 @@ export const typeDefs = gql`
     unbanCommunityUser(communityId: Int!, userId: Int!): Boolean!
     createCommunityAnnouncement(communityId: Int!, title: String!, message: String!, isPinned: Boolean, scheduledFor: String): CommunityAnnouncement!
     archiveCommunity(communityId: Int!, isArchived: Boolean!): Boolean!
+    deleteCommunity(communityId: Int!): Boolean!
     reportCommunityMember(communityId: Int!, reportedUserId: Int!, reason: String!): Boolean!
     # Additional Community Mutations from images
     updateCommunitySettings(communityId: Int!, settings: CommunitySettingsInput!): Community!
