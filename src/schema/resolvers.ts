@@ -3961,39 +3961,7 @@ export const resolvers = {
         };
       });
 
-      // 2. Fetch all admins who are in the same location or parents of the location
-      let adminUsers: any[] = [];
-      if (community.locationId) {
-        const ancestorIds = await getAncestorLocationIds(community.locationId);
-        adminUsers = await (prisma as any).user.findMany({
-          where: {
-            role: { in: ['SUPER_ADMIN', 'ADMIN', 'SUB_ADMIN'] },
-            locationId: { in: ancestorIds }
-          },
-          include: { location: true }
-        });
-      } else {
-        adminUsers = await (prisma as any).user.findMany({
-          where: { role: 'SUPER_ADMIN' },
-          include: { location: true }
-        });
-      }
-
-      const adminDetails = adminUsers.map((u: any) => ({
-        id: -Number(u.id),
-        name: `${u.name} ${u.surname || ''}`.trim(),
-        phone: u.phone,
-        image: u.image,
-        role: u.role,
-        isGroupAdmin: true,
-        isMuted: false,
-        userId: u.id,
-        joinedAt: null,
-        memberSince: null, // Admins don't have joinedAt
-        user: u
-      }));
-
-      let allMembers = [...adminDetails, ...memberDetails];
+      let allMembers = [...memberDetails];
 
       // Filter by role if specified
       if (role) {
@@ -11226,6 +11194,26 @@ export const resolvers = {
       }
     });
 
+    try {
+      const requestedUser = await (prisma as any).user.findUnique({
+        where: { id: Number(req.userId) },
+        select: { fcmToken: true }
+      });
+      const community = await (prisma as any).community.findUnique({
+        where: { id: req.communityId },
+        select: { name: true }
+      });
+      if (requestedUser?.fcmToken && community) {
+        const title = action === 'APPROVE' ? 'Join Request Approved' : 'Join Request Rejected';
+        const body = action === 'APPROVE' 
+          ? `Your request to join ${community.name} has been approved. Welcome to the group!`
+          : `Your request to join ${community.name} has been rejected.`;
+        sendNotificationToToken(requestedUser.fcmToken, title, body, { type: 'COMMUNITY_JOIN_REQUEST', communityId: String(req.communityId) });
+      }
+    } catch (e) {
+      console.error('Error sending join request review notification', e);
+    }
+
     return true;
   }),
 
@@ -11689,6 +11677,27 @@ export const resolvers = {
             },
             skipDuplicates: true
           });
+        }
+
+        try {
+          const requestedUser = await (prisma as any).user.findUnique({
+            where: { id: Number(request.userId) },
+            select: { fcmToken: true }
+          });
+          const community = await (prisma as any).community.findUnique({
+            where: { id: Number(communityId) },
+            select: { name: true }
+          });
+          if (requestedUser?.fcmToken && community) {
+            sendNotificationToToken(
+              requestedUser.fcmToken,
+              'Join Request Approved',
+              `Your request to join ${community.name} has been approved. Welcome to the group!`,
+              { type: 'COMMUNITY_JOIN_REQUEST', communityId: String(communityId) }
+            );
+          }
+        } catch (e) {
+          console.error('Error sending bulk join request review notification', e);
         }
       }
     }
