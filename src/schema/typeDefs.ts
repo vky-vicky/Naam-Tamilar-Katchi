@@ -617,12 +617,18 @@ export const typeDefs = gql`
     getContributionPlanDetails(id: Int!): ContributionPlan
     myContributionPlan: MemberPlanEnrollment
     getPaymentHistory(month: Int, year: Int, status: PaymentStatus): [ContributionPayment!]!
+    viewPaymentHistory(memberId: Int!): [ContributionPayment!]!
     downloadReceipt(paymentId: Int!): ReceiptDetails!
     getContributionProfile(memberId: Int): ContributionProfile!
     getContributionDashboard(state: String, district: String, constituency: String, area: String): ContributionDashboardStats!
+    getDistrictDashboard(district: String!): DistrictDashboard!
+    getConstituencyDashboard(constituency: String!): ConstituencyDashboard!
+    getAreaDashboard(area: String!): AreaDashboard!
+    getStreetDashboards(area: String!): [StreetDashboard!]!
     getContributionAnalytics: ContributionAnalytics!
     getPendingPayments(district: String, constituency: String, area: String): [PendingPayment!]!
     getContributionLeaderboard: ContributionLeaderboard!
+    searchPayments(name: String, phone: String, memberId: Int, street: String, status: PaymentStatus, month: Int, year: Int, limit: Int, offset: Int, sortBy: String, sortOrder: String): PaymentSearchResult!
     getReportedPosts(locationId: Int, status: String): [Post!]!
     getReportedCommunityPosts(status: ReportStatus): [CommunityPostReport!]!
     getReportedPolls(status: ReportStatus): [PollReport!]!
@@ -1090,9 +1096,11 @@ export const typeDefs = gql`
 
   enum PaymentStatus {
     PENDING
+    PROCESSING
     PAID
     FAILED
     REFUNDED
+    CANCELLED
   }
 
   enum ContributionBadge {
@@ -1134,16 +1142,19 @@ export const typeDefs = gql`
   type ContributionPayment {
     id: Int!
     memberId: Int!
-    enrollmentId: Int!
-    planId: Int!
+    enrollmentId: Int
     month: Int!
     year: Int!
     amount: Float!
     status: PaymentStatus!
+    orderId: String
+    transactionId: String
+    paymentMethod: String
     paidAt: String
-    razorpayOrderId: String
-    razorpayPaymentId: String
+    receiptNumber: String
+    failureReason: String
     createdAt: String!
+    updatedAt: String!
   }
 
   type RazorpayOrderResponse {
@@ -1185,10 +1196,52 @@ export const typeDefs = gql`
     totalMembers: Int!
     paidMembers: Int!
     pendingMembers: Int!
+    failedMembers: Int!
     totalCollection: Float!
-    monthlyTarget: Float!
-    monthlyAchieved: Float!
+    expectedCollection: Float!
+    pendingAmount: Float!
+    todaysCollection: Float!
     collectionPercentage: Float!
+  }
+
+  type DistrictDashboard {
+    districtName: String!
+    totalMembers: Int!
+    paidMembers: Int!
+    pendingMembers: Int!
+    totalCollection: Float!
+    pendingAmount: Float!
+    collectionPercentage: Float!
+  }
+
+  type ConstituencyDashboard {
+    constituencyName: String!
+    totalMembers: Int!
+    paidMembers: Int!
+    pendingMembers: Int!
+    todaysCollection: Float!
+    thisMonthCollection: Float!
+    collectionPercentage: Float!
+  }
+
+  type AreaDashboard {
+    areaName: String!
+    totalMembers: Int!
+    paidMembers: Int!
+    pendingMembers: Int!
+    collectionPercentage: Float!
+  }
+
+  type StreetDashboard {
+    streetName: String!
+    paidMembers: Int!
+    pendingMembers: Int!
+    totalCollection: Float!
+  }
+
+  type PaymentSearchResult {
+    payments: [ContributionPayment!]!
+    totalCount: Int!
   }
 
   type MonthlyTrendPoint {
@@ -1224,11 +1277,30 @@ export const typeDefs = gql`
     badge: ContributionBadge!
   }
 
+  type MemberLeaderboardItem {
+    rank: Int!
+    memberId: Int!
+    memberName: String!
+    totalContribution: Float!
+    badge: ContributionBadge!
+  }
+
+  type AreaLeaderboardItem {
+    areaName: String!
+    collectionPercentage: Float!
+    totalCollection: Float!
+  }
+
+  type DistrictLeaderboardItem {
+    districtName: String!
+    totalCollection: Float!
+    collectionPercentage: Float!
+  }
+
   type ContributionLeaderboard {
-    topContributors: [LeaderboardContributor!]!
-    topDistricts: [LocationCollection!]!
-    topConstituencies: [LocationCollection!]!
-    topAreas: [LocationCollection!]!
+    memberLeaderboard: [MemberLeaderboardItem!]!
+    areaLeaderboard: [AreaLeaderboardItem!]!
+    districtLeaderboard: [DistrictLeaderboardItem!]!
     topCollectionAmount: Float!
   }
 
@@ -1236,7 +1308,10 @@ export const typeDefs = gql`
     memberId: Int!
     memberName: String!
     phone: String!
-    location: String!
+    street: String
+    area: String
+    constituency: String
+    district: String
     dueAmount: Float!
     pendingMonths: Int!
   }

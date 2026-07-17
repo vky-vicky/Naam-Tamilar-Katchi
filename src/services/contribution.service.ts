@@ -214,47 +214,72 @@ export class ContributionService {
   }
 
   /**
-   * Collection dashboard statistics.
+   * Collection dashboard statistics — dynamic expected calculation.
    */
+  private static superAdminCache: { data: any; expiry: number } | null = null;
+
   static async getContributionDashboard(
     state?: string | null,
     district?: string | null,
     constituency?: string | null,
     area?: string | null
   ): Promise<any> {
+    const isSuperAdminQuery = !state && !district && !constituency && !area;
+    if (isSuperAdminQuery && this.superAdminCache && Date.now() < this.superAdminCache.expiry) {
+      console.log('[Cache Hit] Returning cached Super Admin Dashboard Metrics');
+      return this.superAdminCache.data;
+    }
+
     const allowedLocationIds = await this.resolveLocationScope(state, district, constituency, area);
     const now = new Date();
     const currentMonth = now.getMonth() + 1;
     const currentYear = now.getFullYear();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
 
     const memberWhere: any = { isActive: true };
-    const paymentWhere: any = { month: currentMonth, year: currentYear };
-
     if (allowedLocationIds.length > 0) {
       memberWhere.locationId = { in: allowedLocationIds };
-      paymentWhere.member = { locationId: { in: allowedLocationIds } };
     }
 
     const totalMembers = await (prisma as any).member.count({ where: memberWhere });
-    
-    // Paid vs Pending
+
+    // Dynamic expectedCollection: sum of plan amounts from active enrollments
+    const enrollmentWhere: any = { status: 'ACTIVE', member: { isActive: true } };
+    if (allowedLocationIds.length > 0) {
+      enrollmentWhere.member = { ...enrollmentWhere.member, locationId: { in: allowedLocationIds } };
+    }
+    const activeEnrollments = await (prisma as any).memberPlanEnrollment.findMany({
+      where: enrollmentWhere,
+      include: { plan: true }
+    });
+    const expectedCollection = activeEnrollments.reduce((sum: number, e: any) => sum + (e.plan?.monthlyAmount || 0), 0);
+
+    const paymentWhere: any = { month: currentMonth, year: currentYear };
+    if (allowedLocationIds.length > 0) {
+      paymentWhere.member = { locationId: { in: allowedLocationIds } };
+    }
+
     const paidPayments = await (prisma as any).contributionPayment.findMany({
       where: { ...paymentWhere, status: 'PAID' },
-      select: { amount: true, memberId: true }
+      select: { amount: true, memberId: true, paidAt: true }
     });
 
-    const paidMemberIds = paidPayments.map((p: any) => p.memberId);
+    const failedCount = await (prisma as any).contributionPayment.count({
+      where: { ...paymentWhere, status: 'FAILED' }
+    });
+
     const totalCollection = paidPayments.reduce((sum: number, p: any) => sum + p.amount, 0);
+    const todaysCollection = paidPayments
+      .filter((p: any) => p.paidAt && new Date(p.paidAt) >= today && new Date(p.paidAt) < tomorrow)
+      .reduce((sum: number, p: any) => sum + p.amount, 0);
 
-    const paidMembers = paidMemberIds.length;
+    const paidMembers = paidPayments.length;
     const pendingMembers = Math.max(0, totalMembers - paidMembers);
+    const pendingAmount = Math.max(0, expectedCollection - totalCollection);
+    const collectionPercentage = expectedCollection > 0 ? (totalCollection / expectedCollection) * 100 : 0;
 
-    // Assume target of ₹100 per member per month
-    const monthlyTarget = totalMembers * 100;
-    const monthlyAchieved = totalCollection;
-    const collectionPercentage = monthlyTarget > 0 ? (monthlyAchieved / monthlyTarget) * 100 : 0;
-
-    // Resolve name of scope
     let locationName = 'All Tamil Nadu';
     if (allowedLocationIds.length > 0) {
       const loc = await (prisma as any).location.findUnique({
@@ -264,20 +289,168 @@ export class ContributionService {
       locationName = loc?.name || locationName;
     }
 
-    return {
+    const result = {
       locationName,
       totalMembers,
       paidMembers,
       pendingMembers,
+      failedMembers: failedCount,
       totalCollection,
-      monthlyTarget,
-      monthlyAchieved,
+      expectedCollection,
+      pendingAmount,
+      todaysCollection,
       collectionPercentage
     };
+
+    if (isSuperAdminQuery) {
+      this.superAdminCache = { data: result, expiry: Date.now() + 5 * 60 * 1000 };
+    }
+
+    return result;
   }
 
   /**
-   * Pending payments list with filters.
+   * District-scoped dashboard.
+   */
+  static async getDistrictDashboard(district: string): Promise<any> {
+    const locationIds = await this.resolveLocationScope(null, district, null, null);
+    const now = new Date();
+    const currentMonth = now.getMonth() + 1;
+    const currentYear = now.getFullYear();
+
+    const memberWhere: any = { isActive: true };
+    if (locationIds.length > 0) memberWhere.locationId = { in: locationIds };
+
+    const totalMembers = await (prisma as any).member.count({ where: memberWhere });
+
+    const enrollWhere: any = { status: 'ACTIVE', member: { isActive: true } };
+    if (locationIds.length > 0) enrollWhere.member = { ...enrollWhere.member, locationId: { in: locationIds } };
+    const enrollments = await (prisma as any).memberPlanEnrollment.findMany({ where: enrollWhere, include: { plan: true } });
+    const expectedCollection = enrollments.reduce((sum: number, e: any) => sum + (e.plan?.monthlyAmount || 0), 0);
+
+    const payWhere: any = { month: currentMonth, year: currentYear };
+    if (locationIds.length > 0) payWhere.member = { locationId: { in: locationIds } };
+
+    const paidPayments = await (prisma as any).contributionPayment.findMany({
+      where: { ...payWhere, status: 'PAID' },
+      select: { amount: true }
+    });
+    const totalCollection = paidPayments.reduce((sum: number, p: any) => sum + p.amount, 0);
+    const paidMembers = paidPayments.length;
+    const pendingMembers = Math.max(0, totalMembers - paidMembers);
+    const pendingAmount = Math.max(0, expectedCollection - totalCollection);
+    const collectionPercentage = expectedCollection > 0 ? (totalCollection / expectedCollection) * 100 : 0;
+
+    return { districtName: district, totalMembers, paidMembers, pendingMembers, totalCollection, pendingAmount, collectionPercentage };
+  }
+
+  /**
+   * Constituency-scoped dashboard.
+   */
+  static async getConstituencyDashboard(constituency: string): Promise<any> {
+    const locationIds = await this.resolveLocationScope(null, null, constituency, null);
+    const now = new Date();
+    const currentMonth = now.getMonth() + 1;
+    const currentYear = now.getFullYear();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    const memberWhere: any = { isActive: true };
+    if (locationIds.length > 0) memberWhere.locationId = { in: locationIds };
+    const totalMembers = await (prisma as any).member.count({ where: memberWhere });
+
+    const enrollWhere: any = { status: 'ACTIVE', member: { isActive: true } };
+    if (locationIds.length > 0) enrollWhere.member = { ...enrollWhere.member, locationId: { in: locationIds } };
+    const enrollments = await (prisma as any).memberPlanEnrollment.findMany({ where: enrollWhere, include: { plan: true } });
+    const expectedCollection = enrollments.reduce((sum: number, e: any) => sum + (e.plan?.monthlyAmount || 0), 0);
+
+    const payWhere: any = { month: currentMonth, year: currentYear };
+    if (locationIds.length > 0) payWhere.member = { locationId: { in: locationIds } };
+
+    const paidPayments = await (prisma as any).contributionPayment.findMany({
+      where: { ...payWhere, status: 'PAID' },
+      select: { amount: true, paidAt: true }
+    });
+    const thisMonthCollection = paidPayments.reduce((sum: number, p: any) => sum + p.amount, 0);
+    const todaysCollection = paidPayments
+      .filter((p: any) => p.paidAt && new Date(p.paidAt) >= today && new Date(p.paidAt) < tomorrow)
+      .reduce((sum: number, p: any) => sum + p.amount, 0);
+    const paidMembers = paidPayments.length;
+    const pendingMembers = Math.max(0, totalMembers - paidMembers);
+    const collectionPercentage = expectedCollection > 0 ? (thisMonthCollection / expectedCollection) * 100 : 0;
+
+    return { constituencyName: constituency, totalMembers, paidMembers, pendingMembers, todaysCollection, thisMonthCollection, collectionPercentage };
+  }
+
+  /**
+   * Area-scoped dashboard.
+   */
+  static async getAreaDashboard(area: string): Promise<any> {
+    const locationIds = await this.resolveLocationScope(null, null, null, area);
+    const now = new Date();
+    const currentMonth = now.getMonth() + 1;
+    const currentYear = now.getFullYear();
+
+    const memberWhere: any = { isActive: true };
+    if (locationIds.length > 0) memberWhere.locationId = { in: locationIds };
+    const totalMembers = await (prisma as any).member.count({ where: memberWhere });
+
+    const enrollWhere: any = { status: 'ACTIVE', member: { isActive: true } };
+    if (locationIds.length > 0) enrollWhere.member = { ...enrollWhere.member, locationId: { in: locationIds } };
+    const enrollments = await (prisma as any).memberPlanEnrollment.findMany({ where: enrollWhere, include: { plan: true } });
+    const expectedCollection = enrollments.reduce((sum: number, e: any) => sum + (e.plan?.monthlyAmount || 0), 0);
+
+    const payWhere: any = { month: currentMonth, year: currentYear };
+    if (locationIds.length > 0) payWhere.member = { locationId: { in: locationIds } };
+    const paidPayments = await (prisma as any).contributionPayment.findMany({
+      where: { ...payWhere, status: 'PAID' },
+      select: { amount: true }
+    });
+    const totalCollection = paidPayments.reduce((sum: number, p: any) => sum + p.amount, 0);
+    const paidMembers = paidPayments.length;
+    const pendingMembers = Math.max(0, totalMembers - paidMembers);
+    const collectionPercentage = expectedCollection > 0 ? (totalCollection / expectedCollection) * 100 : 0;
+
+    return { areaName: area, totalMembers, paidMembers, pendingMembers, collectionPercentage };
+  }
+
+  /**
+   * Per-street breakdown within an area.
+   */
+  static async getStreetDashboards(area: string): Promise<any[]> {
+    const areaLocation = await (prisma as any).location.findFirst({
+      where: { name: { equals: area, mode: 'insensitive' }, type: 'AREA' },
+      select: { id: true }
+    });
+    if (!areaLocation) return [];
+
+    const streetLocations = await (prisma as any).location.findMany({
+      where: { parentId: areaLocation.id },
+      select: { id: true, name: true }
+    });
+
+    const now = new Date();
+    const currentMonth = now.getMonth() + 1;
+    const currentYear = now.getFullYear();
+
+    const results: any[] = [];
+    for (const street of streetLocations) {
+      const totalMembers = await (prisma as any).member.count({ where: { locationId: street.id, isActive: true } });
+      const paidPayments = await (prisma as any).contributionPayment.findMany({
+        where: { status: 'PAID', month: currentMonth, year: currentYear, member: { locationId: street.id } },
+        select: { amount: true }
+      });
+      const totalCollection = paidPayments.reduce((sum: number, p: any) => sum + p.amount, 0);
+      const paidMembers = paidPayments.length;
+      const pendingMembers = Math.max(0, totalMembers - paidMembers);
+      results.push({ streetName: street.name, paidMembers, pendingMembers, totalCollection });
+    }
+    return results;
+  }
+
+  /**
+   * Pending payments list with enhanced location fields.
    */
   static async getPendingPayments(
     district?: string | null,
@@ -285,26 +458,23 @@ export class ContributionService {
     area?: string | null
   ): Promise<any[]> {
     const allowedLocationIds = await this.resolveLocationScope(null, district, constituency, area);
-    
+
     const now = new Date();
     const currentMonth = now.getMonth() + 1;
     const currentYear = now.getFullYear();
 
     const memberWhere: any = {
       isActive: true,
-      enrollments: {
-        some: { status: 'ACTIVE' }
-      }
+      enrollments: { some: { status: 'ACTIVE' } }
     };
     if (allowedLocationIds.length > 0) {
       memberWhere.locationId = { in: allowedLocationIds };
     }
 
-    // Get all active members enrolled in plans
     const members = await (prisma as any).member.findMany({
       where: memberWhere,
       include: {
-        location: true,
+        location: { include: { parent: { include: { parent: { include: { parent: true } } } } } },
         enrollments: { where: { status: 'ACTIVE' }, include: { plan: true } }
       }
     });
@@ -312,22 +482,39 @@ export class ContributionService {
     const pendingList: any[] = [];
 
     for (const member of members) {
-      // Find unpaid payments for this member
       const unpaid = await (prisma as any).contributionPayment.findMany({
         where: {
           memberId: member.id,
-          status: { in: ['PENDING', 'FAILED'] }
-        },
-        include: { enrollment: { include: { plan: true } } }
+          status: { in: ['PENDING', 'PROCESSING', 'FAILED'] }
+        }
       });
 
       if (unpaid.length > 0) {
-        const dueAmount = unpaid.reduce((sum: number, p: any) => sum + (p.amount || p.enrollment?.plan?.monthlyAmount || 100), 0);
+        const dueAmount = unpaid.reduce((sum: number, p: any) => sum + (p.amount || member.enrollments[0]?.plan?.monthlyAmount || 100), 0);
+        // Resolve location hierarchy
+        const loc = member.location;
+        let streetName = '', areaName = '', constituencyName = '', districtName = '';
+        if (loc) {
+          streetName = loc.name || '';
+          const p1 = loc.parent;
+          if (p1) {
+            areaName = p1.name || '';
+            const p2 = p1.parent;
+            if (p2) {
+              constituencyName = p2.name || '';
+              const p3 = p2.parent;
+              if (p3) districtName = p3.name || '';
+            }
+          }
+        }
         pendingList.push({
           memberId: member.id,
           memberName: `${member.name} ${member.surname || ''}`.trim(),
           phone: member.phone,
-          location: member.location.name,
+          street: streetName,
+          area: areaName,
+          constituency: constituencyName,
+          district: districtName,
           dueAmount,
           pendingMonths: unpaid.length
         });
@@ -416,18 +603,14 @@ export class ContributionService {
     constituencies.forEach((amount, name) => constituencyWise.push({ name, amount }));
     areas.forEach((amount, name) => areaWise.push({ name, amount }));
 
-    // Sort descending
     districtWise.sort((a, b) => b.amount - a.amount);
     constituencyWise.sort((a, b) => b.amount - a.amount);
     areaWise.sort((a, b) => b.amount - a.amount);
 
-    // 3. Payment Success Rate
     const totalPayments = await (prisma as any).contributionPayment.count();
     const paidCount = await (prisma as any).contributionPayment.count({ where: { status: 'PAID' } });
-    const failedCount = await (prisma as any).contributionPayment.count({ where: { status: 'FAILED' } });
     const successRate = totalPayments > 0 ? (paidCount / totalPayments) * 100 : 0;
 
-    // 4. Top Contributors
     const topContributors = await (prisma as any).contributionProfile.findMany({
       take: 5,
       orderBy: { totalContribution: 'desc' },
@@ -446,64 +629,146 @@ export class ContributionService {
         totalContribution: c.totalContribution,
         badge: c.badge
       })),
-      topLocations: districtWise.slice(0, 3).map(d => d.name)
+      topLocations: districtWise.slice(0, 3).map((d: any) => d.name)
     };
   }
 
   /**
-   * Leaderboard statistics.
+   * Enhanced Leaderboard: Member, Area, District.
    */
   static async getContributionLeaderboard(): Promise<any> {
-    const topContributors = await (prisma as any).contributionProfile.findMany({
+    // Member Leaderboard
+    const topProfiles = await (prisma as any).contributionProfile.findMany({
       take: 10,
       orderBy: { totalContribution: 'desc' },
       include: { member: true }
     });
+    const memberLeaderboard = topProfiles.map((c: any, index: number) => ({
+      rank: index + 1,
+      memberId: c.memberId,
+      memberName: `${c.member.name} ${c.member.surname || ''}`.trim(),
+      totalContribution: c.totalContribution,
+      badge: c.badge
+    }));
+    const topCollectionAmount = memberLeaderboard.length > 0 ? memberLeaderboard[0].totalContribution : 0;
 
-    const districtSum = await (prisma as any).contributionPayment.groupBy({
-      by: ['memberId'],
-      where: { status: 'PAID' },
-      _sum: { amount: true }
+    // Area Leaderboard — collection % per area
+    const areaLocations = await (prisma as any).location.findMany({
+      where: { type: 'AREA' },
+      select: { id: true, name: true }
     });
-
-    // Map aggregates geographically
-    const districtWise: any[] = [];
-    const constituencyWise: any[] = [];
-    const areaWise: any[] = [];
-
-    const profiles = await (prisma as any).contributionProfile.findMany({
-      include: { member: true }
-    });
-
-    const dMap = new Map<string, number>();
-    const cMap = new Map<string, number>();
-    const aMap = new Map<string, number>();
-
-    for (const profile of profiles) {
-      const m = profile.member;
-      if (m.district) dMap.set(m.district, (dMap.get(m.district) || 0) + profile.totalContribution);
-      if (m.constituency) cMap.set(m.constituency, (cMap.get(m.constituency) || 0) + profile.totalContribution);
-      if (m.area) aMap.set(m.area, (aMap.get(m.area) || 0) + profile.totalContribution);
+    const areaLeaderboard: any[] = [];
+    const now = new Date();
+    for (const areaLoc of areaLocations) {
+      const childIds = await this.getChildLocationIds(areaLoc.id);
+      const locationIds = [areaLoc.id, ...childIds];
+      const totalMem = await (prisma as any).member.count({ where: { isActive: true, locationId: { in: locationIds } } });
+      if (totalMem === 0) continue;
+      const paidPay = await (prisma as any).contributionPayment.count({
+        where: { status: 'PAID', month: now.getMonth() + 1, year: now.getFullYear(), member: { locationId: { in: locationIds } } }
+      });
+      const enrolls = await (prisma as any).memberPlanEnrollment.findMany({
+        where: { status: 'ACTIVE', member: { locationId: { in: locationIds } } },
+        include: { plan: true }
+      });
+      const expected = enrolls.reduce((s: number, e: any) => s + (e.plan?.monthlyAmount || 0), 0);
+      const paidAmtAgg = await (prisma as any).contributionPayment.aggregate({
+        where: { status: 'PAID', month: now.getMonth() + 1, year: now.getFullYear(), member: { locationId: { in: locationIds } } },
+        _sum: { amount: true }
+      });
+      const collected = paidAmtAgg._sum.amount || 0;
+      const pct = expected > 0 ? (collected / expected) * 100 : 0;
+      areaLeaderboard.push({ areaName: areaLoc.name, collectionPercentage: pct, totalCollection: collected });
     }
+    areaLeaderboard.sort((a, b) => b.collectionPercentage - a.collectionPercentage);
 
-    dMap.forEach((amount, name) => districtWise.push({ name, amount }));
-    cMap.forEach((amount, name) => constituencyWise.push({ name, amount }));
-    aMap.forEach((amount, name) => areaWise.push({ name, amount }));
-
-    districtWise.sort((a, b) => b.amount - a.amount);
-    constituencyWise.sort((a, b) => b.amount - a.amount);
-    areaWise.sort((a, b) => b.amount - a.amount);
+    // District Leaderboard
+    const districtLocations = await (prisma as any).location.findMany({
+      where: { type: 'DISTRICT' },
+      select: { id: true, name: true }
+    });
+    const districtLeaderboard: any[] = [];
+    for (const dLoc of districtLocations) {
+      const childIds = await this.getChildLocationIds(dLoc.id);
+      const locationIds = [dLoc.id, ...childIds];
+      const enrolls = await (prisma as any).memberPlanEnrollment.findMany({
+        where: { status: 'ACTIVE', member: { locationId: { in: locationIds } } },
+        include: { plan: true }
+      });
+      const expected = enrolls.reduce((s: number, e: any) => s + (e.plan?.monthlyAmount || 0), 0);
+      const paidAmtAgg = await (prisma as any).contributionPayment.aggregate({
+        where: { status: 'PAID', month: now.getMonth() + 1, year: now.getFullYear(), member: { locationId: { in: locationIds } } },
+        _sum: { amount: true }
+      });
+      const collected = paidAmtAgg._sum.amount || 0;
+      const pct = expected > 0 ? (collected / expected) * 100 : 0;
+      districtLeaderboard.push({ districtName: dLoc.name, totalCollection: collected, collectionPercentage: pct });
+    }
+    districtLeaderboard.sort((a, b) => b.totalCollection - a.totalCollection);
 
     return {
-      topContributors: topContributors.map((c: any) => ({
-        memberName: `${c.member.name} ${c.member.surname || ''}`.trim(),
-        amount: c.totalContribution,
-        badge: c.badge
-      })),
-      topDistricts: districtWise.slice(0, 5),
-      topConstituencies: constituencyWise.slice(0, 5),
-      topAreas: areaWise.slice(0, 5),
-      topCollectionAmount: districtWise.length > 0 ? districtWise[0].amount : 0
+      memberLeaderboard,
+      areaLeaderboard: areaLeaderboard.slice(0, 10),
+      districtLeaderboard: districtLeaderboard.slice(0, 10),
+      topCollectionAmount
     };
+  }
+
+  /**
+   * Admin search: paginated, filtered payment list.
+   */
+  static async searchPayments(args: {
+    name?: string | null;
+    phone?: string | null;
+    memberId?: number | null;
+    street?: string | null;
+    status?: string | null;
+    month?: number | null;
+    year?: number | null;
+    limit?: number | null;
+    offset?: number | null;
+    sortBy?: string | null;
+    sortOrder?: string | null;
+    allowedLocationIds?: number[];
+  }): Promise<{ payments: any[]; totalCount: number }> {
+    const limit = Math.min(args.limit || 20, 100);
+    const offset = args.offset || 0;
+    const sortBy = ['createdAt', 'amount', 'paidAt', 'month', 'year'].includes(args.sortBy || '') ? args.sortBy! : 'createdAt';
+    const sortOrder = args.sortOrder === 'asc' ? 'asc' : 'desc';
+
+    const memberWhere: any = { isActive: true };
+    if (args.name) memberWhere.OR = [
+      { name: { contains: args.name, mode: 'insensitive' } },
+      { surname: { contains: args.name, mode: 'insensitive' } }
+    ];
+    if (args.phone) memberWhere.phone = { contains: args.phone };
+    if (args.memberId) memberWhere.id = Number(args.memberId);
+    if (args.street) {
+      const streetLoc = await (prisma as any).location.findFirst({
+        where: { name: { contains: args.street, mode: 'insensitive' } },
+        select: { id: true }
+      });
+      if (streetLoc) memberWhere.locationId = streetLoc.id;
+    }
+    if ((args.allowedLocationIds || []).length > 0) {
+      memberWhere.locationId = { in: args.allowedLocationIds };
+    }
+
+    const paymentWhere: any = { member: memberWhere };
+    if (args.status) paymentWhere.status = args.status;
+    if (args.month) paymentWhere.month = args.month;
+    if (args.year) paymentWhere.year = args.year;
+
+    const [totalCount, payments] = await Promise.all([
+      (prisma as any).contributionPayment.count({ where: paymentWhere }),
+      (prisma as any).contributionPayment.findMany({
+        where: paymentWhere,
+        orderBy: { [sortBy]: sortOrder },
+        take: limit,
+        skip: offset
+      })
+    ]);
+
+    return { payments, totalCount };
   }
 }

@@ -140,6 +140,8 @@ model User {
   communityAdminLogs             CommunityAdminLog[]
   reportedCommunityComplaints    CommunityComplaint[]   @relation("ReporterRelation")
   assignedCommunityComplaints    CommunityComplaint[]   @relation("AssigneeRelation")
+  createdPayments                ContributionPayment[]  @relation("CreatedPayments")
+  verifiedPayments               ContributionPayment[]  @relation("VerifiedPayments")
   communityBans                  CommunityBan[]         @relation("BannedUserRelation")
   communityBansGiven             CommunityBan[]         @relation("BannedByRelation")
   communityAnnouncements         CommunityAnnouncement[]
@@ -187,11 +189,11 @@ model MessageLog {
 
 model AuditLog {
   id        Int      @id @default(autoincrement())
-  userId    Int
+  userId    Int?
   action    String
   details   String?
   createdAt DateTime @default(now())
-  user      User     @relation(fields: [userId], references: [id])
+  user      User?    @relation(fields: [userId], references: [id])
 }
 
 model Event {
@@ -593,10 +595,15 @@ model ContributionPayment {
   paidAt        DateTime?
   receiptNumber String?               @unique
   receiptUrl    String?
+  failureReason String?
+  createdByAdminId  Int?
+  verifiedByAdminId Int?
   createdAt     DateTime              @default(now())
   updatedAt     DateTime              @updatedAt
   enrollment    MemberPlanEnrollment? @relation(fields: [enrollmentId], references: [id])
   member        Member                @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  createdByAdmin  User?               @relation("CreatedPayments", fields: [createdByAdminId], references: [id])
+  verifiedByAdmin User?               @relation("VerifiedPayments", fields: [verifiedByAdminId], references: [id])
 
   @@unique([memberId, month, year])
   @@index([memberId])
@@ -849,9 +856,12 @@ enum EnrollmentStatus {
 }
 
 enum PaymentStatus {
-  PAID
   PENDING
+  PROCESSING
+  PAID
   FAILED
+  REFUNDED
+  CANCELLED
 }
 
 enum ContributionBadge {

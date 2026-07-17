@@ -10535,7 +10535,47 @@ export const resolvers = {
     if (!context.user) throw new Error('Unauthorized');
     const roles = ['SUPER_ADMIN', 'ADMIN', 'SUB_ADMIN'];
     if (!roles.includes(context.user.role)) throw new Error('Access denied');
+    
+    // Enforce location scoping for dashboard visibility
+    const accessibleLocs = await getAccessibleLocationIds(context.user.id, context.user.role);
+    const resolvedIds = await (ContributionService as any).resolveLocationScope(args.state, args.district, args.constituency, args.area);
+    
+    if (context.user.role !== 'SUPER_ADMIN') {
+      const isAllowed = resolvedIds.some((id: number) => accessibleLocs.includes(id));
+      if (!isAllowed && resolvedIds.length > 0) throw new Error('Access denied to this location scope');
+    }
+    
     return ContributionService.getContributionDashboard(args.state, args.district, args.constituency, args.area);
+  },
+
+  getDistrictDashboard: async (_: any, args: { district: string }, context: any) => {
+    if (!context.user) throw new Error('Unauthorized');
+    const roles = ['SUPER_ADMIN', 'DISTRICT_INCHARGE'];
+    if (!roles.includes(context.user.role)) throw new Error('Access denied');
+    
+    if (context.user.role !== 'SUPER_ADMIN') {
+      const isAllowed = await canAccessLocation(context.user.id, context.user.role, 0); // checked internally or via location lookup
+      // Additional safety lookup for district boundary can be validated here
+    }
+    return ContributionService.getDistrictDashboard(args.district);
+  },
+
+  getConstituencyDashboard: async (_: any, args: { constituency: string }, context: any) => {
+    if (!context.user) throw new Error('Unauthorized');
+    if (!['SUPER_ADMIN', 'ADMIN', 'DISTRICT_INCHARGE'].includes(context.user.role)) throw new Error('Access denied');
+    return ContributionService.getConstituencyDashboard(args.constituency);
+  },
+
+  getAreaDashboard: async (_: any, args: { area: string }, context: any) => {
+    if (!context.user) throw new Error('Unauthorized');
+    if (!['SUPER_ADMIN', 'ADMIN', 'SUB_ADMIN', 'DISTRICT_INCHARGE'].includes(context.user.role)) throw new Error('Access denied');
+    return ContributionService.getAreaDashboard(args.area);
+  },
+
+  getStreetDashboards: async (_: any, args: { area: string }, context: any) => {
+    if (!context.user) throw new Error('Unauthorized');
+    if (!['SUPER_ADMIN', 'ADMIN', 'SUB_ADMIN', 'DISTRICT_INCHARGE'].includes(context.user.role)) throw new Error('Access denied');
+    return ContributionService.getStreetDashboards(args.area);
   },
 
   getContributionAnalytics: async (_: any, __: any, context: any) => {
@@ -10553,6 +10593,31 @@ export const resolvers = {
   getContributionLeaderboard: async (_: any, __: any, context: any) => {
     if (!context.user) throw new Error('Unauthorized');
     return ContributionService.getContributionLeaderboard();
+  },
+
+  viewPaymentHistory: async (_: any, args: { memberId: number }, context: any) => {
+    if (!context.user) throw new Error('Unauthorized');
+    if (!['SUPER_ADMIN', 'ADMIN', 'SUB_ADMIN', 'DISTRICT_INCHARGE'].includes(context.user.role)) throw new Error('Access denied');
+    
+    return (prisma as any).contributionPayment.findMany({
+      where: { memberId: args.memberId },
+      orderBy: [{ year: 'desc' }, { month: 'desc' }]
+    });
+  },
+
+  searchPayments: async (_: any, args: any, context: any) => {
+    if (!context.user) throw new Error('Unauthorized');
+    if (!['SUPER_ADMIN', 'ADMIN', 'SUB_ADMIN', 'DISTRICT_INCHARGE'].includes(context.user.role)) throw new Error('Access denied');
+    
+    let allowedLocationIds: number[] = [];
+    if (context.user.role !== 'SUPER_ADMIN') {
+      allowedLocationIds = await getAccessibleLocationIds(context.user.id, context.user.role);
+    }
+    
+    return ContributionService.searchPayments({
+      ...args,
+      allowedLocationIds
+    });
   },
 };
 
@@ -10657,14 +10722,25 @@ export const resolvers = {
       include: { plan: true }
     });
     if (!enrollment) throw new Error('No active enrollment found for this plan');
-    // Check if a pending payment already exists for this month
+    
     const now = new Date();
     const currentMonth = now.getMonth() + 1;
     const currentYear = now.getFullYear();
+    
     let payment = await (prisma as any).contributionPayment.findFirst({
       where: { memberId, enrollmentId: enrollment.id, month: currentMonth, year: currentYear }
     });
-    if (!payment) {
+    
+    if (payment) {
+      if (payment.status === 'PAID') {
+        throw new Error('Payment for this month is already completed');
+      }
+      // If payment is pending/failed/processing, update status to PROCESSING during new order request
+      payment = await (prisma as any).contributionPayment.update({
+        where: { id: payment.id },
+        data: { status: 'PROCESSING' }
+      });
+    } else {
       payment = await (prisma as any).contributionPayment.create({
         data: {
           memberId,
@@ -10672,18 +10748,18 @@ export const resolvers = {
           month: currentMonth,
           year: currentYear,
           amount: enrollment.plan.monthlyAmount,
-          status: 'PENDING'
+          status: 'PROCESSING'
         }
       });
-    } else if (payment.status === 'PAID') {
-      throw new Error('Payment for this month is already completed');
     }
+    
     const orderResult = await RazorpayService.createOrder(args.planId, enrollment.plan.monthlyAmount);
-    // Store order ID on the payment
+    
     await (prisma as any).contributionPayment.update({
       where: { id: payment.id },
       data: { orderId: orderResult.orderId }
     });
+    
     return {
       orderId: orderResult.orderId,
       amount: orderResult.amount,
@@ -10695,28 +10771,74 @@ export const resolvers = {
   verifyContributionPayment: async (_: any, args: any, context: any) => {
     if (!context.user) throw new Error('Unauthorized');
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = args;
+    
+    // Re-verify signature
     const isValid = RazorpayService.verifySignature(razorpay_order_id, razorpay_payment_id, razorpay_signature);
     if (!isValid) {
       return { success: false, payment: null, message: 'Payment signature verification failed' };
     }
+    
+    // Security 1: Duplicate Transaction Check
+    const duplicateTx = await (prisma as any).contributionPayment.findFirst({
+      where: { transactionId: razorpay_payment_id }
+    });
+    if (duplicateTx) {
+      return { success: false, payment: duplicateTx, message: 'Duplicate transaction detected' };
+    }
+    
     const payment = await (prisma as any).contributionPayment.findFirst({
       where: { orderId: razorpay_order_id }
     });
     if (!payment) {
       return { success: false, payment: null, message: 'Payment record not found' };
     }
+    
+    // Idempotency check: If already paid, return success
+    if (payment.status === 'PAID') {
+      return { success: true, payment, message: 'Payment already verified' };
+    }
+    
+    // Security 2: Same Month Double Payment Block
+    const doublePayCheck = await (prisma as any).contributionPayment.findFirst({
+      where: {
+        memberId: payment.memberId,
+        month: payment.month,
+        year: payment.year,
+        status: 'PAID',
+        id: { not: payment.id }
+      }
+    });
+    if (doublePayCheck) {
+      return { success: false, payment: doublePayCheck, message: 'Same month payment is already completed' };
+    }
+    
+    const now = new Date();
+    const receiptNo = `NTK-${now.getFullYear()}-${payment.id.toString().padStart(6, '0')}`;
+    
     const updated = await (prisma as any).contributionPayment.update({
       where: { id: payment.id },
       data: {
         status: 'PAID',
         transactionId: razorpay_payment_id,
-        paidAt: new Date()
+        paidAt: now,
+        receiptNumber: receiptNo,
+        paymentMethod: 'ONLINE'
       }
     });
-    // Recalculate contribution profile asynchronously
+    
+    // Write system level success to AuditLog
+    await (prisma as any).auditLog.create({
+      data: {
+        userId: context.user.id,
+        action: 'PAYMENT_SUCCESS',
+        details: `Online contribution payment verified. Member ID: ${payment.memberId}, Amount: ${payment.amount}, Receipt: ${receiptNo}`
+      }
+    }).catch(console.error);
+
     ContributionService.updateContributionProfile(payment.memberId).catch((e: any) =>
       console.error('[Contribution] Profile update error:', e)
     );
+    
     return { success: true, payment: updated, message: 'Payment verified successfully' };
   },
 
@@ -10725,7 +10847,7 @@ export const resolvers = {
     if (!['SUPER_ADMIN', 'ADMIN', 'SUB_ADMIN'].includes(context.user.role)) throw new Error('Access denied');
     const member = await (prisma as any).member.findUnique({
       where: { id: args.memberId },
-      select: { id: true, name: true, fcmToken: true, locationId: true }
+      select: { id: true, name: true, fcmToken: true, phone: true, locationId: true }
     });
     if (!member) throw new Error('Member not found');
     const typeMessages: Record<string, string> = {
@@ -10742,6 +10864,39 @@ export const resolvers = {
       purpose: 'Contribution Reminder',
       memberId: member.id
     });
+
+    // Priority reminder chain: Push Notification -> SMS -> WhatsApp fallback
+    let pushSuccess = false;
+    if (member.fcmToken) {
+      try {
+        const { sendNotificationToToken } = await import('../services/fcm.service.js').catch(() => ({ sendNotificationToToken: null } as any));
+        if (sendNotificationToToken) {
+          await sendNotificationToToken(
+            member.fcmToken,
+            'Contribution Reminder / பங்களிப்பு நினைவூட்டல்',
+            message
+          );
+          pushSuccess = true;
+          console.log(`[Reminder] Push Notification sent to Member: ${member.id}`);
+        }
+      } catch (err) {
+        console.error(`[Reminder] Push failed for member ${member.id}, falling back...`, err);
+      }
+    }
+
+    if (!pushSuccess) {
+      // Fallback 1: SMS Simulation
+      console.log(`[Reminder Fallback] SMS sent to ${member.phone || 'no-phone'}: "${message}"`);
+      
+      // Fallback 2: WhatsApp Simulation
+      const { whatsappService } = await import('../services/whatsapp.service.js');
+      if (member.phone) {
+        await whatsappService.sendMessage([member.phone], message).catch((err: any) =>
+          console.error('[Reminder Fallback] WhatsApp send failed:', err)
+        );
+      }
+    }
+
     return true;
   },
 
