@@ -10717,6 +10717,8 @@ export const resolvers = {
   createContributionOrder: async (_: any, args: any, context: any) => {
     if (!context.user) throw new Error('Unauthorized');
     const memberId = context.user.memberId || context.user.id;
+    if (!memberId) throw new Error('Valid Member ID is required to create a payment order');
+
     const enrollment = await (prisma as any).memberPlanEnrollment.findFirst({
       where: { memberId, planId: args.planId, status: 'ACTIVE' },
       include: { plan: true }
