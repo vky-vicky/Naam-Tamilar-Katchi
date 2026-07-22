@@ -1141,6 +1141,18 @@ function toIST(dateInput: any) {
   return istTime.toISOString().replace('Z', '+05:30');
 }
 
+async function getMemberIdFromContext(context: any): Promise<number | null> {
+  if (!context?.user) return null;
+  if (context.user.type === 'member') {
+    return Number(context.user.id);
+  }
+  if (context.user.type === 'admin') {
+    const member = await getOrCreateMemberForUser(context.user);
+    return member ? member.id : null;
+  }
+  return null;
+}
+
 function isCommunityAdmin(role: string | undefined) {
   return !!role && ADMIN_ROLES.includes(role);
 }
@@ -3045,8 +3057,10 @@ export const resolvers = {
       const where: any = {};
 
       if (joinedOnly) {
+        const memberId = await getMemberIdFromContext(context);
+        if (!memberId) return [];
         const memberships = await (prisma as any).communityMember.findMany({
-          where: { memberId: Number(user.id) },
+          where: { memberId },
           select: { communityId: true }
         });
         const joinedIds = memberships.map((m: any) => m.communityId);
@@ -3156,13 +3170,14 @@ export const resolvers = {
     getCommunityUnreadCount: async (_: any, { communityId }: any, context: any) => {
       await assertCommunityReadAccess(Number(communityId), context);
 
-      if (context.user.type !== 'member' && context.user.role !== 'MEMBER') return 0;
+      const memberId = await getMemberIdFromContext(context);
+      if (!memberId) return 0;
 
       const membership = await (prisma as any).communityMember.findUnique({
         where: {
           communityId_memberId: {
             communityId: Number(communityId),
-            memberId: Number(context.user.id)
+            memberId
           }
         },
         select: { unreadCount: true }
@@ -6918,10 +6933,7 @@ export const resolvers = {
       let resolvedMemberId = memberId ? Number(memberId) : null;
 
       if (!resolvedMemberId && context?.user) {
-        if (context.user.type === 'admin') {
-          throw new Error('Admin users cannot join communities as members');
-        }
-        resolvedMemberId = Number(context.user.id);
+        resolvedMemberId = await getMemberIdFromContext(context);
       }
 
       if (!resolvedMemberId || isNaN(resolvedMemberId)) {
@@ -6957,10 +6969,7 @@ export const resolvers = {
       let resolvedMemberId = memberId ? Number(memberId) : null;
 
       if (!resolvedMemberId && context?.user) {
-        if (context.user.type === 'admin') {
-          throw new Error('Admin users cannot leave communities as members');
-        }
-        resolvedMemberId = Number(context.user.id);
+        resolvedMemberId = await getMemberIdFromContext(context);
       }
       if (!resolvedMemberId || isNaN(resolvedMemberId)) {
         throw new Error('Member ID is required to leave community');
@@ -8668,12 +8677,13 @@ export const resolvers = {
       return message ? formatCommunityMessage(message) : null;
     },
     unreadCount: async (parent: any, _: any, context: any) => {
-      if (context?.user?.role !== 'MEMBER') return 0;
+      const memberId = await getMemberIdFromContext(context);
+      if (!memberId) return 0;
       const membership = await (prisma as any).communityMember.findUnique({
         where: {
           communityId_memberId: {
             communityId: Number(parent.id),
-            memberId: Number(context.user.id)
+            memberId
           }
         },
         select: { unreadCount: true }
@@ -8685,12 +8695,12 @@ export const resolvers = {
       return (prisma as any).location.findUnique({ where: { id: parent.locationId } });
     },
     isJoined: async (parent: any, _: any, context: any) => {
-      const user = context?.user;
-      if (!user) return false;
+      const memberId = await getMemberIdFromContext(context);
+      if (!memberId) return false;
       const count = await (prisma as any).communityMember.count({
         where: {
           communityId: Number(parent.id),
-          memberId: Number(user.id)
+          memberId
         }
       });
       return count > 0;
