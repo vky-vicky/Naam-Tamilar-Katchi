@@ -1142,6 +1142,7 @@ export const typeDefs = gql`
   type ContributionPayment {
     id: Int!
     memberId: Int!
+    member: Member
     enrollmentId: Int
     month: Int!
     year: Int!
