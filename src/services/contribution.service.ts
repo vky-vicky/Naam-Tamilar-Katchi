@@ -763,6 +763,7 @@ export class ContributionService {
       (prisma as any).contributionPayment.count({ where: paymentWhere }),
       (prisma as any).contributionPayment.findMany({
         where: paymentWhere,
+        include: { member: true },
         orderBy: { [sortBy]: sortOrder },
         take: limit,
         skip: offset
