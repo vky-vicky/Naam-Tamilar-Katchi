@@ -10716,8 +10716,17 @@ export const resolvers = {
 
   createContributionOrder: async (_: any, args: any, context: any) => {
     if (!context.user) throw new Error('Unauthorized');
-    const memberId = context.user.memberId || context.user.id;
+
+    // Use proper helper to resolve memberId (handles both Member & Admin tokens)
+    const memberId = await getMemberIdFromContext(context);
     if (!memberId) throw new Error('Valid Member ID is required to create a payment order');
+
+    // Validate the member actually exists in DB (avoid FK constraint errors)
+    const memberExists = await (prisma as any).member.findUnique({
+      where: { id: memberId },
+      select: { id: true }
+    });
+    if (!memberExists) throw new Error('Member account not found. Please contact support.');
 
     // Find the plan first
     const plan = await (prisma as any).contributionPlan.findUnique({
