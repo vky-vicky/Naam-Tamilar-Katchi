@@ -10719,11 +10719,32 @@ export const resolvers = {
     const memberId = context.user.memberId || context.user.id;
     if (!memberId) throw new Error('Valid Member ID is required to create a payment order');
 
-    const enrollment = await (prisma as any).memberPlanEnrollment.findFirst({
+    // Find the plan first
+    const plan = await (prisma as any).contributionPlan.findUnique({
+      where: { id: args.planId }
+    });
+    if (!plan) throw new Error('Contribution plan not found');
+
+    // Find existing enrollment, or auto-enroll the member
+    let enrollment = await (prisma as any).memberPlanEnrollment.findFirst({
       where: { memberId, planId: args.planId, status: 'ACTIVE' },
       include: { plan: true }
     });
-    if (!enrollment) throw new Error('No active enrollment found for this plan');
+
+    if (!enrollment) {
+      // Auto-enroll: create an ACTIVE enrollment for this member & plan
+      enrollment = await (prisma as any).memberPlanEnrollment.upsert({
+        where: { memberId_planId: { memberId, planId: args.planId } },
+        update: { status: 'ACTIVE' },
+        create: {
+          memberId,
+          planId: args.planId,
+          status: 'ACTIVE',
+          autoRenew: true
+        },
+        include: { plan: true }
+      });
+    }
     
     const now = new Date();
     const currentMonth = now.getMonth() + 1;
