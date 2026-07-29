@@ -10477,14 +10477,15 @@ export const resolvers = {
 
   getPaymentHistory: async (_: any, args: { month?: number; year?: number; status?: string }, context: any) => {
     if (!context.user) throw new Error('Unauthorized');
-    const memberId = context.user.memberId || context.user.id;
+    const memberId = await getMemberIdFromContext(context);
+    if (!memberId) throw new Error('Member ID is required');
     const where: any = { memberId };
     if (args.month) where.month = args.month;
     if (args.year) where.year = args.year;
-    if (args.status) where.status = args.status;
+    where.status = args.status ? args.status : 'PAID';
     return (prisma as any).contributionPayment.findMany({
       where,
-      orderBy: [{ year: 'desc' }, { month: 'desc' }]
+      orderBy: [{ paidAt: 'desc' }, { year: 'desc' }, { month: 'desc' }]
     });
   },
 
@@ -10529,6 +10530,28 @@ export const resolvers = {
       };
     }
     return profile;
+  },
+
+  getMemberContributionDetails: async (_: any, args: { memberId: number }, context: any) => {
+    if (!context.user) throw new Error('Unauthorized');
+    if (!['SUPER_ADMIN', 'ADMIN', 'SUB_ADMIN', 'DISTRICT_INCHARGE'].includes(context.user.role)) throw new Error('Access denied');
+    return ContributionService.getMemberContributionDetails(args.memberId);
+  },
+
+  getMemberPaymentSummary: async (_: any, args: { memberId: number }, context: any) => {
+    if (!context.user) throw new Error('Unauthorized');
+    if (!['SUPER_ADMIN', 'ADMIN', 'SUB_ADMIN', 'DISTRICT_INCHARGE'].includes(context.user.role)) throw new Error('Access denied');
+    return ContributionService.getMemberPaymentSummary(args.memberId);
+  },
+
+  exportPaymentsCSV: async (_: any, args: { month?: number; year?: number; status?: string }, context: any) => {
+    if (!context.user) throw new Error('Unauthorized');
+    if (!['SUPER_ADMIN', 'ADMIN', 'DISTRICT_INCHARGE'].includes(context.user.role)) throw new Error('Access denied');
+    let allowedLocationIds: number[] = [];
+    if (context.user.role !== 'SUPER_ADMIN') {
+      allowedLocationIds = await getAccessibleLocationIds(context.user.id, context.user.role);
+    }
+    return ContributionService.exportPaymentsCSV(args.month || null, args.year || null, args.status || null, allowedLocationIds);
   },
 
   getContributionDashboard: async (_: any, args: { state?: string; district?: string; constituency?: string; area?: string }, context: any) => {

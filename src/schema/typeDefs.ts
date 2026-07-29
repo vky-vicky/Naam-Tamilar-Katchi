@@ -620,6 +620,9 @@ export const typeDefs = gql`
     viewPaymentHistory(memberId: Int!): [ContributionPayment!]!
     downloadReceipt(paymentId: Int!): ReceiptDetails!
     getContributionProfile(memberId: Int): ContributionProfile!
+    getMemberContributionDetails(memberId: Int!): MemberContributionDetails!
+    getMemberPaymentSummary(memberId: Int!): MemberPaymentSummary!
+    exportPaymentsCSV(month: Int, year: Int, status: PaymentStatus): String!
     getContributionDashboard(state: String, district: String, constituency: String, area: String): ContributionDashboardStats!
     getDistrictDashboard(district: String!): DistrictDashboard!
     getConstituencyDashboard(constituency: String!): ConstituencyDashboard!
@@ -1202,7 +1205,52 @@ export const typeDefs = gql`
     expectedCollection: Float!
     pendingAmount: Float!
     todaysCollection: Float!
+    monthlyCollection: Float!
     collectionPercentage: Float!
+    topContributors: [PaymentDashboardTopContributor!]!
+    recentPayments: [RecentPaymentItem!]!
+  }
+
+  type PaymentDashboardTopContributor {
+    memberId: Int!
+    memberName: String!
+    totalContribution: Float!
+    badge: ContributionBadge!
+    phone: String
+  }
+
+  type RecentPaymentItem {
+    memberId: Int!
+    memberName: String!
+    amount: Float!
+    month: Int!
+    year: Int!
+    paidAt: String
+    status: PaymentStatus!
+  }
+
+  type MemberContributionDetails {
+    member: Member!
+    profile: ContributionProfile
+    totalContribution: Float!
+    totalPaidMonths: Int!
+    pendingMonths: Int!
+    currentStreak: Int!
+    badge: ContributionBadge!
+    payments: [ContributionPayment!]!
+    lastPayment: ContributionPayment
+    currentPlan: MemberPlanEnrollment
+  }
+
+  type MemberPaymentSummary {
+    totalContribution: Float!
+    totalPaidMonths: Int!
+    pendingMonths: Int!
+    failedPayments: Int!
+    currentStreak: Int!
+    badge: ContributionBadge!
+    lastPayment: ContributionPayment
+    currentPlan: MemberPlanEnrollment
   }
 
   type DistrictDashboard {

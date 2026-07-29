@@ -280,6 +280,36 @@ export class ContributionService {
     const pendingAmount = Math.max(0, expectedCollection - totalCollection);
     const collectionPercentage = expectedCollection > 0 ? (totalCollection / expectedCollection) * 100 : 0;
 
+    const topProfiles = await (prisma as any).contributionProfile.findMany({
+      where: allowedLocationIds.length > 0 ? { member: { locationId: { in: allowedLocationIds } } } : {},
+      take: 5,
+      orderBy: { totalContribution: 'desc' },
+      include: { member: true }
+    });
+    const topContributors = topProfiles.map((p: any) => ({
+      memberId: p.memberId,
+      memberName: `${p.member.name} ${p.member.surname || ''}`.trim(),
+      totalContribution: p.totalContribution,
+      badge: p.badge,
+      phone: p.member.phone
+    }));
+
+    const recentDbPayments = await (prisma as any).contributionPayment.findMany({
+      where: { ...paymentWhere, status: 'PAID' },
+      take: 10,
+      orderBy: { paidAt: 'desc' },
+      include: { member: true }
+    });
+    const recentPayments = recentDbPayments.map((p: any) => ({
+      memberId: p.memberId,
+      memberName: p.member ? `${p.member.name} ${p.member.surname || ''}`.trim() : 'Unknown',
+      amount: p.amount,
+      month: p.month,
+      year: p.year,
+      paidAt: p.paidAt ? new Date(p.paidAt).toISOString() : null,
+      status: p.status
+    }));
+
     let locationName = 'All Tamil Nadu';
     if (allowedLocationIds.length > 0) {
       const loc = await (prisma as any).location.findUnique({
@@ -299,7 +329,10 @@ export class ContributionService {
       expectedCollection,
       pendingAmount,
       todaysCollection,
-      collectionPercentage
+      monthlyCollection: totalCollection,
+      collectionPercentage,
+      topContributors,
+      recentPayments
     };
 
     if (isSuperAdminQuery) {
@@ -771,5 +804,120 @@ export class ContributionService {
     ]);
 
     return { payments, totalCount };
+  }
+
+  static async exportPaymentsCSV(month: number | null, year: number | null, status: string | null, allowedLocationIds?: number[]): Promise<string> {
+    const memberWhere: any = { isActive: true };
+    if ((allowedLocationIds || []).length > 0) {
+      memberWhere.locationId = { in: allowedLocationIds };
+    }
+    const paymentWhere: any = { member: memberWhere };
+    if (status) paymentWhere.status = status;
+    if (month) paymentWhere.month = month;
+    if (year) paymentWhere.year = year;
+
+    const payments = await (prisma as any).contributionPayment.findMany({
+      where: paymentWhere,
+      include: { member: { include: { location: true } } },
+      orderBy: [{ year: 'desc' }, { month: 'desc' }, { paidAt: 'desc' }]
+    });
+
+    const header = ['Name', 'Phone', 'Month', 'Year', 'Amount', 'Status', 'Receipt No', 'Transaction ID'].join(',');
+    const rows = payments.map((p: any) => {
+      const name = p.member ? `"${p.member.name} ${p.member.surname || ''}".trim()` : 'Unknown';
+      const phone = p.member ? p.member.phone : '';
+      return `${name},${phone},${p.month},${p.year},${p.amount},${p.status},${p.receiptNumber || ''},${p.transactionId || ''}`;
+    });
+
+    return [header, ...rows].join('\n');
+  }
+
+  static async getMemberContributionDetails(memberId: number): Promise<any> {
+    const member = await (prisma as any).member.findUnique({
+      where: { id: memberId },
+      include: { location: true }
+    });
+    if (!member) throw new Error('Member not found');
+
+    const profile = await (prisma as any).contributionProfile.findUnique({
+      where: { memberId }
+    });
+
+    const enrollments = await (prisma as any).memberPlanEnrollment.findMany({
+      where: { memberId, status: 'ACTIVE' },
+      include: { plan: true },
+      orderBy: { joinedAt: 'desc' }
+    });
+    const currentPlan = enrollments.length > 0 ? enrollments[0] : null;
+
+    const payments = await (prisma as any).contributionPayment.findMany({
+      where: { memberId },
+      orderBy: [{ year: 'desc' }, { month: 'desc' }]
+    });
+
+    let pendingMonths = 0;
+    if (currentPlan) {
+      const joinDate = new Date(currentPlan.joinedAt);
+      const now = new Date();
+      const monthsSinceJoin = (now.getFullYear() - joinDate.getFullYear()) * 12 + (now.getMonth() - joinDate.getMonth()) + 1;
+      const paidMonths = payments.filter((p: any) => p.status === 'PAID').length;
+      pendingMonths = Math.max(0, monthsSinceJoin - paidMonths);
+    }
+
+    const lastPayment = payments.find((p: any) => p.status === 'PAID');
+
+    return {
+      member,
+      profile,
+      totalContribution: profile?.totalContribution || 0,
+      totalPaidMonths: profile?.totalPaidMonths || 0,
+      pendingMonths,
+      currentStreak: profile?.currentStreak || 0,
+      badge: profile?.badge || 'BRONZE',
+      payments,
+      lastPayment,
+      currentPlan
+    };
+  }
+
+  static async getMemberPaymentSummary(memberId: number): Promise<any> {
+    const profile = await (prisma as any).contributionProfile.findUnique({
+      where: { memberId }
+    });
+
+    const enrollments = await (prisma as any).memberPlanEnrollment.findMany({
+      where: { memberId, status: 'ACTIVE' },
+      include: { plan: true },
+      orderBy: { joinedAt: 'desc' }
+    });
+    const currentPlan = enrollments.length > 0 ? enrollments[0] : null;
+
+    const payments = await (prisma as any).contributionPayment.findMany({
+      where: { memberId },
+      orderBy: [{ year: 'desc' }, { month: 'desc' }]
+    });
+    
+    let pendingMonths = 0;
+    if (currentPlan) {
+      const joinDate = new Date(currentPlan.joinedAt);
+      const now = new Date();
+      const monthsSinceJoin = (now.getFullYear() - joinDate.getFullYear()) * 12 + (now.getMonth() - joinDate.getMonth()) + 1;
+      const paidMonths = payments.filter((p: any) => p.status === 'PAID').length;
+      pendingMonths = Math.max(0, monthsSinceJoin - paidMonths);
+    }
+
+    const failedPayments = payments.filter((p: any) => p.status === 'FAILED').length;
+    const lastPayment = payments.find((p: any) => p.status === 'PAID');
+
+    return {
+      totalContribution: profile?.totalContribution || 0,
+      totalPaidMonths: profile?.totalPaidMonths || 0,
+      pendingMonths,
+      failedPayments,
+      currentStreak: profile?.currentStreak || 0,
+      badge: profile?.badge || 'BRONZE',
+      lastPayment,
+      currentPlan
+    };
   }
 }
