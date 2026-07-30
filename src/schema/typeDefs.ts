@@ -630,7 +630,9 @@ export const typeDefs = gql`
     getStreetDashboards(area: String!): [StreetDashboard!]!
     getContributionAnalytics: ContributionAnalytics!
     getPendingPayments(district: String, constituency: String, area: String): [PendingPayment!]!
-    getContributionLeaderboard: ContributionLeaderboard!
+    getContributionLeaderboard(scope: String, locationId: Int, limit: Int): ContributionLeaderboard!
+    getContributionCampaigns(locationId: Int, status: ContributionCampaignStatus, category: ContributionCategory): [ContributionCampaign!]!
+    getContributionCampaignDetails(id: Int!): ContributionCampaign
     searchPayments(name: String, phone: String, memberId: Int, street: String, status: PaymentStatus, month: Int, year: Int, limit: Int, offset: Int, sortBy: String, sortOrder: String): PaymentSearchResult!
     getReportedPosts(locationId: Int, status: String): [Post!]!
     getReportedCommunityPosts(status: ReportStatus): [CommunityPostReport!]!
@@ -963,8 +965,23 @@ export const typeDefs = gql`
       planId: Int!
     ): MemberPlanEnrollment!
     createContributionOrder(
-      planId: Int!
+      planId: Int
+      amount: Float
+      type: ContributionType
+      category: ContributionCategory
+      campaignId: Int
+      month: Int
+      year: Int
     ): RazorpayOrderResponse!
+    createContributionCampaign(
+      title: String!
+      description: String
+      targetAmount: Float!
+      startDate: String!
+      endDate: String
+      locationId: Int
+      category: ContributionCategory
+    ): ContributionCampaign!
     verifyContributionPayment(
       razorpay_order_id: String!
       razorpay_payment_id: String!
@@ -1106,6 +1123,33 @@ export const typeDefs = gql`
     CANCELLED
   }
 
+  enum ContributionType {
+    MONTHLY
+    ONE_TIME
+    DAILY
+    FUND
+    CAMPAIGN
+    EMERGENCY
+  }
+
+  enum ContributionCategory {
+    MONTHLY
+    ONE_TIME
+    MEETING
+    ELECTION
+    FLOOD_RELIEF
+    TEMPLE
+    EDUCATION
+    EMERGENCY
+    WELFARE
+  }
+
+  enum ContributionCampaignStatus {
+    ACTIVE
+    COMPLETED
+    CANCELLED
+  }
+
   enum ContributionBadge {
     BRONZE
     SILVER
@@ -1113,33 +1157,20 @@ export const typeDefs = gql`
     PLATINUM
   }
 
-  enum ReminderNotificationType {
-    SEVEN_DAYS
-    THREE_DAYS
-    ONE_DAY
-    OVERDUE
-  }
-
-  type ContributionPlan {
+  type ContributionCampaign {
     id: Int!
-    name: String!
+    title: String!
     description: String
-    monthlyAmount: Float!
+    targetAmount: Float!
+    collectedAmount: Float!
     startDate: String!
-    isActive: Boolean!
-    autoRenewEnabled: Boolean!
+    endDate: String
+    locationId: Int
+    status: ContributionCampaignStatus!
+    category: ContributionCategory!
     createdAt: String!
-    enrolledCount: Int
-  }
-
-  type MemberPlanEnrollment {
-    id: Int!
-    memberId: Int!
-    planId: Int!
-    joinedAt: String!
-    autoRenew: Boolean!
-    status: EnrollmentStatus!
-    plan: ContributionPlan
+    updatedAt: String!
+    location: Location
   }
 
   type ContributionPayment {
@@ -1151,6 +1182,10 @@ export const typeDefs = gql`
     year: Int!
     amount: Float!
     status: PaymentStatus!
+    type: ContributionType!
+    category: ContributionCategory!
+    campaignId: Int
+    campaign: ContributionCampaign
     orderId: String
     transactionId: String
     paymentMethod: String

@@ -29,6 +29,7 @@ model Location {
   users         User[]
   userLocations UserLocation[]
   requestLocations RequestLocation[]
+  contributionCampaigns ContributionCampaign[]
 
   @@index([parentId])
   @@index([type])
@@ -589,6 +590,9 @@ model ContributionPayment {
   month         Int
   year          Int
   status        PaymentStatus         @default(PENDING)
+  type          ContributionType      @default(MONTHLY)
+  category      ContributionCategory  @default(MONTHLY)
+  campaignId    Int?
   orderId       String?               @unique
   transactionId String?               @unique
   paymentMethod String?
@@ -602,13 +606,38 @@ model ContributionPayment {
   updatedAt     DateTime              @updatedAt
   enrollment    MemberPlanEnrollment? @relation(fields: [enrollmentId], references: [id])
   member        Member                @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  campaign      ContributionCampaign? @relation(fields: [campaignId], references: [id])
   createdByAdmin  User?               @relation("CreatedPayments", fields: [createdByAdminId], references: [id])
   verifiedByAdmin User?               @relation("VerifiedPayments", fields: [verifiedByAdminId], references: [id])
 
-  @@unique([memberId, month, year])
   @@index([memberId])
   @@index([status])
+  @@index([type])
+  @@index([category])
+  @@index([campaignId])
   @@index([month, year])
+}
+
+model ContributionCampaign {
+  id              Int                  @id @default(autoincrement())
+  title           String
+  description     String?
+  targetAmount    Float
+  collectedAmount Float                @default(0)
+  startDate       DateTime
+  endDate         DateTime?
+  locationId      Int?
+  status          ContributionCampaignStatus @default(ACTIVE)
+  category        ContributionCategory @default(MEETING)
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  location        Location?            @relation(fields: [locationId], references: [id])
+  payments        ContributionPayment[]
+
+  @@index([locationId])
+  @@index([status])
+  @@index([category])
 }
 
 model ContributionProfile {
@@ -869,6 +898,33 @@ enum ContributionBadge {
   SILVER
   GOLD
   PLATINUM
+}
+
+enum ContributionType {
+  MONTHLY
+  ONE_TIME
+  DAILY
+  FUND
+  CAMPAIGN
+  EMERGENCY
+}
+
+enum ContributionCategory {
+  MONTHLY
+  ONE_TIME
+  MEETING
+  ELECTION
+  FLOOD_RELIEF
+  TEMPLE
+  EDUCATION
+  EMERGENCY
+  WELFARE
+}
+
+enum ContributionCampaignStatus {
+  ACTIVE
+  COMPLETED
+  CANCELLED
 }
 
 enum ReportStatus {

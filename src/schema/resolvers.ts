@@ -10740,87 +10740,101 @@ export const resolvers = {
   createContributionOrder: async (_: any, args: any, context: any) => {
     if (!context.user) throw new Error('Unauthorized');
 
-    // Use proper helper to resolve memberId (handles both Member & Admin tokens)
     const memberId = await getMemberIdFromContext(context);
     if (!memberId) throw new Error('Valid Member ID is required to create a payment order');
 
-    // Validate the member actually exists in DB (avoid FK constraint errors)
-    const memberExists = await (prisma as any).member.findUnique({
-      where: { id: memberId },
-      select: { id: true }
-    });
+    const memberExists = await (prisma as any).member.findUnique({ where: { id: memberId }, select: { id: true } });
     if (!memberExists) throw new Error('Member account not found. Please contact support.');
 
-    // Find the plan first
-    const plan = await (prisma as any).contributionPlan.findUnique({
-      where: { id: args.planId }
-    });
-    if (!plan) throw new Error('Contribution plan not found');
+    const now = new Date();
+    const currentMonth = args.month || (now.getMonth() + 1);
+    const currentYear = args.year || now.getFullYear();
+    const contributionType: string = args.type || 'MONTHLY';
+    const contributionCategory: string = args.category || 'MONTHLY';
+    const campaignId: number | null = args.campaignId || null;
 
-    // Find existing enrollment, or auto-enroll the member
-    let enrollment = await (prisma as any).memberPlanEnrollment.findFirst({
-      where: { memberId, planId: args.planId, status: 'ACTIVE' },
-      include: { plan: true }
-    });
+    let finalAmount: number;
+    let enrollmentId: number | null = null;
 
-    if (!enrollment) {
-      // Auto-enroll: create an ACTIVE enrollment for this member & plan
-      enrollment = await (prisma as any).memberPlanEnrollment.upsert({
-        where: { memberId_planId: { memberId, planId: args.planId } },
-        update: { status: 'ACTIVE' },
-        create: {
-          memberId,
-          planId: args.planId,
-          status: 'ACTIVE',
-          autoRenew: true
-        },
+    if (args.planId) {
+      // Plan-based (MONTHLY): auto-enroll if needed
+      const plan = await (prisma as any).contributionPlan.findUnique({ where: { id: args.planId } });
+      if (!plan) throw new Error('Contribution plan not found');
+
+      let enrollment = await (prisma as any).memberPlanEnrollment.findFirst({
+        where: { memberId, planId: args.planId, status: 'ACTIVE' },
         include: { plan: true }
       });
-    }
-    
-    const now = new Date();
-    const currentMonth = now.getMonth() + 1;
-    const currentYear = now.getFullYear();
-    
-    let payment = await (prisma as any).contributionPayment.findFirst({
-      where: { memberId, enrollmentId: enrollment.id, month: currentMonth, year: currentYear }
-    });
-    
-    if (payment) {
-      if (payment.status === 'PAID') {
-        throw new Error('Payment for this month is already completed');
+      if (!enrollment) {
+        enrollment = await (prisma as any).memberPlanEnrollment.upsert({
+          where: { memberId_planId: { memberId, planId: args.planId } },
+          update: { status: 'ACTIVE' },
+          create: { memberId, planId: args.planId, status: 'ACTIVE', autoRenew: true },
+          include: { plan: true }
+        });
       }
-      // If payment is pending/failed/processing, update status to PROCESSING during new order request
+      enrollmentId = enrollment.id;
+      finalAmount = args.amount ? Math.max(Number(args.amount), 100) : enrollment.plan.monthlyAmount;
+    } else {
+      // Flexible amount (ONE_TIME / DAILY / FUND / CAMPAIGN / EMERGENCY)
+      if (!args.amount || Number(args.amount) < 1) throw new Error('amount is required and must be ≥ ₹1 for this contribution type');
+      finalAmount = Number(args.amount);
+    }
+
+    // Find or create payment record
+    const paymentWhere: any = { memberId, month: currentMonth, year: currentYear, type: contributionType };
+    if (enrollmentId) paymentWhere.enrollmentId = enrollmentId;
+
+    let payment = await (prisma as any).contributionPayment.findFirst({ where: paymentWhere });
+    if (payment) {
+      if (payment.status === 'PAID') throw new Error('Payment for this period is already completed');
       payment = await (prisma as any).contributionPayment.update({
         where: { id: payment.id },
-        data: { status: 'PROCESSING' }
+        data: { status: 'PROCESSING', amount: finalAmount }
       });
     } else {
       payment = await (prisma as any).contributionPayment.create({
         data: {
           memberId,
-          enrollmentId: enrollment.id,
+          ...(enrollmentId ? { enrollmentId } : {}),
           month: currentMonth,
           year: currentYear,
-          amount: enrollment.plan.monthlyAmount,
-          status: 'PROCESSING'
+          amount: finalAmount,
+          status: 'PROCESSING',
+          type: contributionType,
+          category: contributionCategory,
+          ...(campaignId ? { campaignId } : {})
         }
       });
     }
-    
-    const orderResult = await RazorpayService.createOrder(args.planId, enrollment.plan.monthlyAmount);
-    
-    await (prisma as any).contributionPayment.update({
-      where: { id: payment.id },
-      data: { orderId: orderResult.orderId }
-    });
-    
+
+    const orderResult = await RazorpayService.createOrder(args.planId || 0, finalAmount);
+    await (prisma as any).contributionPayment.update({ where: { id: payment.id }, data: { orderId: orderResult.orderId } });
+
     return {
       orderId: orderResult.orderId,
       amount: orderResult.amount,
       currency: orderResult.currency,
       keyId: process.env.RAZORPAY_KEY_ID || 'rzp_test_mock'
     };
+  },
+
+  createContributionCampaign: async (_: any, args: any, context: any) => {
+    if (!context.user) throw new Error('Unauthorized');
+    if (!['SUPER_ADMIN', 'ADMIN', 'SUB_ADMIN', 'DISTRICT_INCHARGE'].includes(context.user.role)) throw new Error('Access denied');
+    return (prisma as any).contributionCampaign.create({
+      data: {
+        title: args.title,
+        description: args.description || null,
+        targetAmount: args.targetAmount,
+        startDate: new Date(args.startDate),
+        endDate: args.endDate ? new Date(args.endDate) : null,
+        locationId: args.locationId || null,
+        category: args.category || 'MEETING',
+        status: 'ACTIVE'
+      },
+      include: { location: true }
+    });
   },
 
   verifyContributionPayment: async (_: any, args: any, context: any) => {
