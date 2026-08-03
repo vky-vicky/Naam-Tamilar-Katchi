@@ -1157,6 +1157,37 @@ export const typeDefs = gql`
     PLATINUM
   }
 
+  enum ReminderNotificationType {
+    PAYMENT_DUE
+    PAYMENT_OVERDUE
+    PLAN_EXPIRING
+  }
+
+  type ContributionPlan {
+    id: Int!
+    name: String!
+    description: String
+    monthlyAmount: Float!
+    startDate: String!
+    isActive: Boolean!
+    autoRenewEnabled: Boolean!
+    createdAt: String!
+    updatedAt: String!
+    enrolledCount: Int
+  }
+
+  type MemberPlanEnrollment {
+    id: Int!
+    memberId: Int!
+    planId: Int!
+    joinedAt: String!
+    autoRenew: Boolean!
+    status: EnrollmentStatus!
+    updatedAt: String!
+    member: Member
+    plan: ContributionPlan
+  }
+
   type ContributionCampaign {
     id: Int!
     title: String!
